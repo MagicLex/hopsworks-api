@@ -479,7 +479,7 @@ class ChartsTools:
             result = _client._send_request(
                 "GET", ["project", _client._project_id, "charts"]
             )
-            return result.get("items", []) if result else []
+            return result or []
         except Exception as e:
             await ctx.info(f"Failed to list charts: {e}")
             return []
