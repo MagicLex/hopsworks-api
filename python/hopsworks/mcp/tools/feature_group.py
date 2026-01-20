@@ -145,6 +145,9 @@ class FeatureGroupTools:
         The tool can be useful to figure out the actual schema of the feature group in case the feature metadata is incomplete or confusing.
         """
         # TODO: the function is partially complete, we should add a method to list data in columnar format to the API and use it here instead.
+        # KNOWN ISSUE: fg.show() fails when MCP SDK version (4.7.0.dev1) doesn't match
+        # backend version (e.g., 4.6.0). The SDK expects hqs_payload from Query Service
+        # but older backends don't return it. Fix: ensure SDK and backend versions match.
         await ctx.info(
             f"Retrieving preview of {name}{f' v{version}' if version else ''} feature group..."
         )
