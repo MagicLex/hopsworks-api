@@ -26,13 +26,16 @@ from hopsworks_common.core import dataset, inode
 class DatasetTools:
     """Tools for managing datasets in Hopsworks."""
 
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
         """Initialize the DatasetTools with the MCP server instance.
 
         Args:
             mcp: The MCP server instance
+            readonly: If True, only register read-only tools
         """
         self.mcp = mcp
+
+        # READ tools - always registered
         self.mcp.tool(tags=[TAGS.DATASET, TAGS.READ, TAGS.STATEFUL])(
             self.get_datasets_in_current_project
         )
@@ -41,10 +44,13 @@ class DatasetTools:
             self.list_files_in_current_project
         )
         self.mcp.tool(tags=[TAGS.DATASET, TAGS.READ, TAGS.STATELESS])(self.list_files)
-        self.mcp.tool(tags=[TAGS.DATASET, TAGS.WRITE, TAGS.STATEFUL])(
-            self.mkdir_in_current_project
-        )
-        self.mcp.tool(tags=[TAGS.DATASET, TAGS.WRITE, TAGS.STATELESS])(self.mkdir)
+
+        # WRITE tools - only in readwrite mode
+        if not readonly:
+            self.mcp.tool(tags=[TAGS.DATASET, TAGS.WRITE, TAGS.STATEFUL])(
+                self.mkdir_in_current_project
+            )
+            self.mcp.tool(tags=[TAGS.DATASET, TAGS.WRITE, TAGS.STATELESS])(self.mkdir)
 
     async def get_datasets_in_current_project(
         self,

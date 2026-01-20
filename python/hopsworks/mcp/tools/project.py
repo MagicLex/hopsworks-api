@@ -27,17 +27,17 @@ from hopsworks_common import client
 class ProjectTools:
     """Tools for Hopsworks projects."""
 
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
         """Initialize project tools.
 
         Args:
             mcp: The MCP server instance
+            readonly: If True, only register read-only tools
         """
         self.mcp = mcp
+
+        # READ tools - always registered
         self.mcp.tool(tags=[TAGS.PROJECT, TAGS.READ, TAGS.STATEFUL])(self.use_project)
-        self.mcp.tool(tags=[TAGS.PROJECT, TAGS.WRITE, TAGS.STATELESS])(
-            self.create_project
-        )
         self.mcp.tool(tags=[TAGS.PROJECT, TAGS.READ, TAGS.STATELESS])(
             self.list_projects
         )
@@ -47,6 +47,12 @@ class ProjectTools:
         self.mcp.tool(tags=[TAGS.PROJECT, TAGS.READ, TAGS.STATELESS])(
             self.get_project_details
         )
+
+        # WRITE tools - only in readwrite mode
+        if not readonly:
+            self.mcp.tool(tags=[TAGS.PROJECT, TAGS.WRITE, TAGS.STATELESS])(
+                self.create_project
+            )
 
     async def _create_project(
         self, conn, name: str = None, description: str = None

@@ -1,84 +1,197 @@
-# Hopsworks MCP
+# Hopsworks Feature Store MCP
 
-The Hopsworks Model Context Protocol (MCP) Server
+Model Context Protocol (MCP) server for the Hopsworks Feature Store. Enables AI agents to interact with feature groups, feature views, datasets, and jobs.
 
-## Available tools
+## Quick Start
 
-Hopsworks MCP Server provides the following tools for hopsworks-related functionalities.
+```bash
+# Install
+pip install hopsworks[mcp]
 
-| Tool | Description | Args | Response |
-| --- | --- | --- | --- |
-| login | Connect to a Hopsworks instance. | host: The hostname of the Hopsworks instance port: The port on which the Hopsworks instance can be reached project: Name of the project to access api_key_value: Value of the API Key (should have scopes: featurestore, project, job, kafka) engine: The engine to use for data processing (python, spark, or hive) | The project details or an error message. |
-| use_project | Use a specific project by its name. | name (str): The name of the project to use. | The project details or an error message. |
-| create_project | Create a new project. | name (str): The name of the project. description (str): A description of the project. | The newly created project details or an error message. |
-| list_projects | List all projects. | | The list of projects accessible by the user or an error message. |
-| get_current_project_details | Get details of the current project. | | The current project details or an error message. |
-| get_project_details | Get project details. | name (str): The name of the project. | The project details or an error message. |
-| get_feature_store | Get the feature store for the current project. | | The feature store information for the current project or an error message. |
-| get_feature_store_by_name | Get the feature store by its name. | name (str): The name of the feature store. | The feature store information or an error message. |
+# Run (read-write mode)
+hopsworks-mcp --host 0.0.0.0 --port 8000
 
-## Usage
-
-``` pip install hopsworks[python,mcp] ```
-
-Then start the MCP server
-
-```hopsworks-mcp --host 127.0.0.1 --port 8000 --transport sse```
-
-or create the server yourself
-
-```python
-import os
-from hopsworks.mcp.server import mcp
-
-HOST = os.getenv("HOPSWORKS_MCP_HOST", "0.0.0.0")
-PORT = int(os.getenv("HOPSWORKS_MCP_PORT", 8001))
-TRANSPORT = os.getenv("HOPSWORKS_MCP_TRANSPORT", "sse")
-
-if __name__ == "__main__":
-    if transport == "stdio":
-        mcp.run(transport=TRANSPORT)
-    else:
-        mcp.run(transport=TRANSPORT, host=HOST, port=PORT)
+# Run (read-only mode for safer exploration)
+hopsworks-mcp-readonly --host 0.0.0.0 --port 8000
 ```
 
-```plaintext
-[07/25/25 17:36:59] INFO     Starting MCP server 'Hopsworks MCP' with transport 'stdio' server.py:1371
-User: What is the current project?
-================================ Human Message =================================
+## Server Modes
 
-What is the current project?
-================================== Ai Message ==================================
+| Entry Point | Mode | Description |
+|-------------|------|-------------|
+| `hopsworks-mcp` | readwrite | Full access (default) |
+| `hopsworks-mcp-readonly` | readonly | Read-only access, no mutations |
+| `hopsworks-mcp-readwrite` | readwrite | Explicit full access |
 
-", "parameters": {}}
-Tool Calls:
-  get_current_project_details (d43fb478-c927-48bc-b2fd-f40249b7829c)
- Call ID: d43fb478-c927-48bc-b2fd-f40249b7829c
-  Args:
-[07/25/25 17:37:15] INFO     Starting MCP server 'Hopsworks MCP' with transport 'stdio' server.py:1371
-================================= Tool Message =================================
-Name: get_current_project_details
+Use `--mode readonly` or `--mode readwrite` with the base command for explicit control.
 
-{"name":"project1","id":120,"owner":"admin@hopsworks.ai","description":"project one","created":"2025-07-22T07:02:04.000Z"}
-================================== Ai Message ==================================
+## Available Tools
 
-The current project is project1, with an ID of 120, owned by admin@hopsworks.ai, and created on July 22, 2025.
-User: change to project2
-================================ Human Message =================================
+### Authentication
 
-change to project2
-================================== Ai Message ==================================
-Tool Calls:
-  use_project (f5c3b87c-c48f-421d-888e-431416eb5135)
- Call ID: f5c3b87c-c48f-421d-888e-431416eb5135
-  Args:
-    name: project2
-[07/25/25 17:37:25] INFO     Starting MCP server 'Hopsworks MCP' with transport 'stdio' server.py:1371
-================================= Tool Message =================================
-Name: use_project
+| Tool | Description |
+|------|-------------|
+| `login` | Connect to a Hopsworks instance |
 
-{"name":"project2","id":121,"owner":"admin@hopsworks.ai","description":"Test project2","created":"2025-07-25T14:52:32.000Z"}
-================================== Ai Message ==================================
+### Projects (Read)
 
-You have switched to project2, which is a test project with an ID of 121, owned by admin@hopsworks.ai, and created on July 25, 2025.
+| Tool | Description |
+|------|-------------|
+| `use_project` | Switch to a specific project |
+| `list_projects` | List all accessible projects |
+| `get_current_project_details` | Get current project info |
+| `get_project_details` | Get specific project info |
+
+### Projects (Write)
+
+| Tool | Description |
+|------|-------------|
+| `create_project` | Create a new project |
+
+### Feature Groups (Read)
+
+| Tool | Description |
+|------|-------------|
+| `get_feature_groups` | List all feature groups (latest versions) |
+| `get_feature_group_versions` | Get all versions of a feature group |
+| `get_feature_group_details` | Get feature group metadata |
+| `preview_feature_group` | Preview first N rows of data |
+| `get_features` | List features in a feature group |
+
+### Feature Groups (Write)
+
+| Tool | Description |
+|------|-------------|
+| `create_feature_group` | Create a new feature group |
+
+### Feature Views (Read)
+
+| Tool | Description |
+|------|-------------|
+| `get_feature_views` | List all feature views |
+| `get_feature_view_versions` | Get all versions of a feature view |
+| `get_feature_view_details` | Get feature view metadata |
+| `preview_feature_view` | Preview batch data from feature view |
+
+### Feature Views (Write)
+
+| Tool | Description |
+|------|-------------|
+| `create_feature_view` | Create a feature view from feature groups |
+
+### Datasets (Read)
+
+| Tool | Description |
+|------|-------------|
+| `get_datasets` | List datasets in a project |
+| `get_datasets_in_current_project` | List datasets in current project |
+| `list_files` | List files at a path |
+| `list_files_in_current_project` | List files in current project |
+
+### Datasets (Write)
+
+| Tool | Description |
+|------|-------------|
+| `mkdir` | Create a directory |
+| `mkdir_in_current_project` | Create directory in current project |
+
+### Jobs (Read)
+
+| Tool | Description |
+|------|-------------|
+| `get_jobs` | List jobs in a project |
+| `get_jobs_in_current_project` | List jobs in current project |
+
+### Terminal (Write only, readwrite mode)
+
+| Tool | Description |
+|------|-------------|
+| `start_session` | Start a bash terminal session |
+| `add_input` | Send input to terminal |
+| `get_output` | Get terminal output |
+
+### Brewer (Write only, readwrite mode)
+
+| Tool | Description |
+|------|-------------|
+| `execute` | Execute Python script in conda environment |
+
+## Configuration
+
+### CLI Options
+
+```bash
+hopsworks-mcp \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --transport http \
+  --mode readwrite \
+  --hopsworks_host app.hopsworks.ai \
+  --project my_project \
+  --api_key_value "your_api_key"
 ```
+
+### Environment Variables
+
+- `HOPSWORKS_HOST` - Hopsworks instance hostname
+- `HOPSWORKS_PORT` - Hopsworks port (default: 443)
+- `HOPSWORKS_PROJECT` - Default project name
+- `HOPSWORKS_API_KEY` - API key for authentication
+
+## Transport Methods
+
+- `http` - HTTP transport (default)
+- `sse` - Server-Sent Events
+- `streamable-http` - Streamable HTTP
+- `stdio` - Standard I/O (for CLI integrations)
+
+## Example: Claude Desktop Integration
+
+```json
+{
+  "mcpServers": {
+    "hopsworks": {
+      "command": "hopsworks-mcp-readonly",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "HOPSWORKS_HOST": "app.hopsworks.ai",
+        "HOPSWORKS_API_KEY": "your_api_key"
+      }
+    }
+  }
+}
+```
+
+## Claude Code Integration
+
+For development with Claude Code, run the MCP server locally and connect via HTTP:
+
+```bash
+# Terminal 1: Start MCP server
+cd hopsworks-api/python
+uv sync --extra dev --extra mcp --all-groups
+
+uv run hopsworks-mcp \
+  --hopsworks_host app.hopsworks.ai \
+  --api_key_value YOUR_API_KEY \
+  --project your_project
+# Server runs on localhost:8000
+
+# Terminal 2: Add MCP to Claude Code and start
+claude mcp add --transport http hopsworks http://localhost:8000/mcp
+claude
+```
+
+The MCP server must be running before starting Claude Code.
+
+## Documentation
+
+- [Philosophy](./PHILOSOPHY.md) - Design principles
+- [Read Operations](./docs/01-read-operations.md) - Exploration and data access
+- [Write Operations](./docs/02-write-operations.md) - Creating and modifying resources
+- [Server Modes](./docs/03-server-modes.md) - Readonly vs readwrite modes
+- [Charts](./docs/04-charts.md) - Chart creation and visualization
+
+## License
+
+Apache License 2.0

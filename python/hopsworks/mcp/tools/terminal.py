@@ -35,18 +35,21 @@ def enqueue_output(out, queue):
 class TerminalTools:
     """Tools implementing shell and terminal access to Hopsworks."""
 
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
         """Initialize the TerminalTools with the MCP server instance.
 
         Parameters:
             mcp: The MCP server instance
+            readonly: If True, do not register any tools (terminal is dangerous)
         """
         self.mcp = mcp
-        self.mcp.tool(tags=[TAGS.TERMINAL])(self.start_session)
-        self.mcp.tool(tags=[TAGS.TERMINAL])(self.add_input)
-        self.mcp.tool(tags=[TAGS.TERMINAL])(self.get_output)
-
         self.sessions: dict[int, tuple[subprocess.Popen, Queue, str, str]] = {}
+
+        # Terminal tools are dangerous - only in readwrite mode
+        if not readonly:
+            self.mcp.tool(tags=[TAGS.TERMINAL])(self.start_session)
+            self.mcp.tool(tags=[TAGS.TERMINAL])(self.add_input)
+            self.mcp.tool(tags=[TAGS.TERMINAL])(self.get_output)
 
     def start_session(self, cwd: str) -> int:
         """Start a terminal session in the specified directory.

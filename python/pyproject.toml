@@ -60,6 +60,9 @@ dependencies = [
 
 [project.scripts]
 hopsworks-mcp = "hopsworks.mcp:run_server_command"
+hopsworks-mcp-readonly = "hopsworks.mcp:run_readonly_command"
+hopsworks-mcp-readwrite = "hopsworks.mcp:run_readwrite_command"
+hopsworks-mcp-charts = "hopsworks.mcp:run_charts_command"
 
 [project.optional-dependencies]
 python = [

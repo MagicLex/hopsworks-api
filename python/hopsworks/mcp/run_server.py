@@ -1,5 +1,5 @@
 #
-#   Copyright 2025 Hopsworks AB
+#   Copyright 2026 Hopsworks AB
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -25,8 +25,16 @@ import click
 import hopsworks
 import uvicorn
 
-from .server import mcp
 from .utils.auth import login
+
+
+def get_mcp(mode: str):
+    """Get the appropriate MCP server based on mode."""
+    if mode == "readonly":
+        from .server_readonly import mcp
+    else:
+        from .server_readwrite import mcp
+    return mcp
 
 
 # Configure logging to handle closed streams gracefully
@@ -91,6 +99,12 @@ def handle_shutdown(signum, frame):
     default="python",
     help="Engine to use (python, spark, training, spark-no-metastore, spark-delta) (default: python)",
 )
+@click.option(
+    "--mode",
+    default="readwrite",
+    type=click.Choice(["readonly", "readwrite"]),
+    help="Server mode: 'readonly' for read-only access, 'readwrite' for full access (default: readwrite)",
+)
 def run_server(
     host: str = "0.0.0.0",
     port: int | None = None,
@@ -106,6 +120,7 @@ def run_server(
     engine: Literal[
         "spark", "python", "training", "spark-no-metastore", "spark-delta"
     ] = "python",
+    mode: Literal["readonly", "readwrite"] = "readwrite",
 ):
     """Run the Hopsworks MCP server."""
     if transport not in {"stdio", "http", "sse", "streamable-http"}:
@@ -131,6 +146,10 @@ def run_server(
 
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
+
+    # Get the appropriate MCP server based on mode
+    mcp = get_mcp(mode)
+    log.info(f"Starting Hopsworks MCP server in {mode} mode...")
 
     if transport == "stdio":
         # For stdio transport, suppress all logging from imported libraries
@@ -163,3 +182,142 @@ run_server_command = click.command(
         HOPSWORKS_HOST, HOPSWORKS_PORT, HOPSWORKS_PROJECT, HOPSWORKS_API_KEY, \
             HOPSWORKS_HOSTNAME_VERIFICATION, HOPSWORKS_TRUST_STORE_PATH and HOPSWORKS_ENGINE.",
 )(run_server)
+
+
+# Convenience entry points with explicit modes for AI agents
+def _run_readonly(**kwargs):
+    """Run the Hopsworks MCP server in READ-ONLY mode."""
+    kwargs["mode"] = "readonly"
+    return run_server(**kwargs)
+
+
+def _run_readwrite(**kwargs):
+    """Run the Hopsworks MCP server in READ-WRITE mode."""
+    kwargs["mode"] = "readwrite"
+    return run_server(**kwargs)
+
+
+# Create decorated commands for readonly and readwrite
+_readonly_options = [
+    click.option("--host", default="0.0.0.0", help="Host to run the server on."),
+    click.option("--port", default=8000, help="Port to run the server on."),
+    click.option("--transport", default="http", help="Transport method to use."),
+    click.option("--create_session", default=True, help="Create a Hopsworks session."),
+    click.option("--hopsworks_host", default=None, help="Hopsworks host URL"),
+    click.option("--hopsworks_port", default=443, help="Hopsworks port"),
+    click.option("--project", default=None, help="Project name to access"),
+    click.option("--api_key_value", default=None, help="API key value"),
+    click.option("--api_key_file", default=None, help="Path to API key file"),
+    click.option("--hostname_verification", default=False, help="Enable hostname verification"),
+    click.option("--trust_store_path", default=None, help="Path to trust store"),
+    click.option("--engine", default="python", help="Engine to use"),
+]
+
+
+def _apply_options(options, func):
+    for option in reversed(options):
+        func = option(func)
+    return func
+
+
+run_readonly_command = click.command(
+    "hopsworks-mcp-readonly",
+    short_help="Run the Hopsworks MCP server in READ-ONLY mode.",
+    help="Read-only mode: AI agents can explore and preview data but cannot create or modify anything.",
+)(_apply_options(_readonly_options, _run_readonly))
+
+
+run_readwrite_command = click.command(
+    "hopsworks-mcp-readwrite",
+    short_help="Run the Hopsworks MCP server in READ-WRITE mode.",
+    help="Read-write mode: AI agents have full access to create and modify feature groups, feature views, etc.",
+)(_apply_options(_readonly_options, _run_readwrite))
+
+
+# Charts MCP server - separate server for chart creation
+def _run_charts(
+    host: str = "0.0.0.0",
+    port: int | None = None,
+    transport: Literal["stdio", "http", "sse", "streamable-http"] = "http",
+    create_session: bool = True,
+    hopsworks_host: str | None = None,
+    hopsworks_port: int = 443,
+    project: str | None = None,
+    api_key_value: str | None = None,
+    api_key_file: str | None = None,
+    hostname_verification: bool = False,
+    trust_store_path: str | None = None,
+    engine: Literal[
+        "spark", "python", "training", "spark-no-metastore", "spark-delta"
+    ] = "python",
+):
+    """Run the Hopsworks Charts MCP server."""
+    from .server_charts import mcp
+
+    if transport not in {"stdio", "http", "sse", "streamable-http"}:
+        raise ValueError(
+            "Invalid transport type. Choose from 'stdio', 'http', 'sse', or 'streamable-http'."
+        )
+
+    # Default port for charts is 8001 to avoid conflict with main server
+    if port is None:
+        port = int(os.getenv("UVICORN_PORT", "8001"))
+
+    if create_session:
+        login(
+            host=hopsworks_host,
+            port=hopsworks_port,
+            project=project,
+            api_key_value=api_key_value,
+            api_key_file=api_key_file,
+            hostname_verification=hostname_verification,
+            trust_store_path=trust_store_path,
+            engine=engine,
+        )
+
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
+    log.info("Starting Hopsworks Charts MCP server...")
+
+    if transport == "stdio":
+        logging.getLogger().handlers.clear()
+        logging.getLogger().addHandler(SafeStreamHandler(sys.stdout))
+        mcp.run(transport=transport, show_banner=False)
+    else:
+        app = mcp.http_app(transport=transport)
+        try:
+            import uvloop as uvloop
+
+            has_uvloop = True
+        except ImportError:
+            has_uvloop = False
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            loop="uvloop" if has_uvloop else "auto",
+            http="httptools",
+        )
+
+
+_charts_options = [
+    click.option("--host", default="0.0.0.0", help="Host to run the server on."),
+    click.option("--port", default=8001, help="Port to run the server on (default: 8001)."),
+    click.option("--transport", default="http", help="Transport method to use."),
+    click.option("--create_session", default=True, help="Create a Hopsworks session."),
+    click.option("--hopsworks_host", default=None, help="Hopsworks host URL"),
+    click.option("--hopsworks_port", default=443, help="Hopsworks port"),
+    click.option("--project", default=None, help="Project name to access"),
+    click.option("--api_key_value", default=None, help="API key value"),
+    click.option("--api_key_file", default=None, help="Path to API key file"),
+    click.option("--hostname_verification", default=False, help="Enable hostname verification"),
+    click.option("--trust_store_path", default=None, help="Path to trust store"),
+    click.option("--engine", default="python", help="Engine to use"),
+]
+
+run_charts_command = click.command(
+    "hopsworks-mcp-charts",
+    short_help="Run the Hopsworks Charts MCP server.",
+    help="Charts MCP: AI agents can create data visualizations with Chart.js.",
+)(_apply_options(_charts_options, _run_charts))

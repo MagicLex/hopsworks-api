@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hopsworks
 from fastmcp import Context  # noqa: TC002
+from hsfs import feature as hsfs_feature
 from hopsworks.mcp.models.feature_group import Feature, FeatureGroup
 from hopsworks.mcp.utils.tags import TAGS
 
@@ -24,8 +25,16 @@ from hopsworks.mcp.utils.tags import TAGS
 class FeatureGroupTools:
     """Tools for managing feature groups in Hopsworks MCP."""
 
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
+        """Initialize the FeatureGroupTools with the MCP server instance.
+
+        Args:
+            mcp: The MCP server instance
+            readonly: If True, only register read-only tools
+        """
         self.mcp = mcp
+
+        # READ tools - always registered
         self.mcp.tool(tags=[TAGS.FEATURE_GROUP, TAGS.READ, TAGS.STATEFUL])(
             self.get_feature_groups
         )
@@ -36,14 +45,17 @@ class FeatureGroupTools:
             self.get_feature_group_details
         )
         self.mcp.tool(tags=[TAGS.FEATURE_GROUP, TAGS.READ, TAGS.STATEFUL])(
-            self.get_feature_group_details
-        )
-        self.mcp.tool(tags=[TAGS.FEATURE_GROUP, TAGS.READ, TAGS.STATEFUL])(
             self.preview_feature_group
         )
         self.mcp.tool(tags=[TAGS.FEATURE_GROUP, TAGS.READ, TAGS.STATEFUL])(
             self.get_features
         )
+
+        # WRITE tools - only in readwrite mode
+        if not readonly:
+            self.mcp.tool(tags=[TAGS.FEATURE_GROUP, TAGS.WRITE, TAGS.STATEFUL])(
+                self.create_feature_group
+            )
 
     def _get_feature_group_versions(self, name: str | None = None):
         # Get the current project and its feature groups
@@ -190,4 +202,73 @@ class FeatureGroupTools:
                 for f in fg.features
             ],
             key=lambda feature: feature.name,
+        )
+
+    async def create_feature_group(
+        self,
+        ctx: Context,
+        name: str,
+        version: int,
+        primary_key: list[str],
+        event_time: str | None = None,
+        description: str | None = None,
+        online_enabled: bool = False,
+        partition_key: list[str] | None = None,
+        features: list[dict] | None = None,
+    ) -> FeatureGroup:
+        """Create a new feature group in the current project's feature store.
+
+        Args:
+            name: Name of the feature group.
+            version: Version number for the feature group.
+            primary_key: List of feature names that form the primary key.
+            event_time: Name of the feature containing the event timestamp (optional).
+            description: Description of the feature group (optional).
+            online_enabled: Whether to enable online storage for real-time serving (default: False).
+            partition_key: List of feature names for partitioning (optional).
+            features: List of feature definitions, each with 'name' and 'type' keys,
+                      optionally 'description'. Example: [{"name": "user_id", "type": "int"}, {"name": "amount", "type": "float"}]
+        """
+        await ctx.info(f"Creating feature group {name} v{version}...")
+
+        try:
+            project = hopsworks.get_current_project()
+        except hopsworks.ProjectException:
+            raise RuntimeError(
+                "No active Hopsworks project found, use login tool."
+            ) from None
+
+        fs = project.get_feature_store()
+
+        # Convert feature dicts to Feature objects if provided
+        hsfs_features = None
+        if features:
+            hsfs_features = [
+                hsfs_feature.Feature(
+                    name=f["name"],
+                    type=f.get("type", "string"),
+                    description=f.get("description"),
+                )
+                for f in features
+            ]
+
+        fg = fs.get_or_create_feature_group(
+            name=name,
+            version=version,
+            primary_key=primary_key,
+            event_time=event_time,
+            description=description or "",
+            online_enabled=online_enabled,
+            partition_key=partition_key,
+            features=hsfs_features,
+        )
+
+        return FeatureGroup(
+            id=fg.id,
+            name=fg.name,
+            version=fg.version,
+            description=fg.description,
+            location=fg.location,
+            event_time=fg.event_time,
+            online_enabled=fg.online_enabled,
         )

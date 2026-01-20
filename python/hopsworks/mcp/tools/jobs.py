@@ -25,13 +25,16 @@ from hopsworks_common import client
 class JobTools:
     """Tools for managing jobs in Hopsworks."""
 
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
         """Initialize the JobTools with the MCP server instance.
 
         Args:
             mcp: The MCP server instance
+            readonly: If True, only register read-only tools (all tools are read-only here)
         """
         self.mcp = mcp
+
+        # All tools are READ - always registered
         self.mcp.tool(tags=[TAGS.JOB, TAGS.READ, TAGS.STATEFUL])(
             self.get_jobs_in_current_project
         )

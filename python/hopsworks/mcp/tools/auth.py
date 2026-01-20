@@ -25,15 +25,16 @@ from hopsworks.mcp.utils.tags import TAGS
 class AuthTools:
     """Tools for authenticating with Hopsworks."""
 
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
         """Initialize auth tools.
 
         Args:
             mcp: The MCP server instance
+            readonly: If True, only register read-only tools
         """
         self.mcp = mcp
 
-        # Register tools
+        # Auth is always needed
         self.mcp.tool(tags=[TAGS.AUTH, TAGS.STATEFUL])(self.login)
 
     async def login(

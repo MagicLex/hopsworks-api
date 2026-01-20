@@ -13,12 +13,16 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 #
+from __future__ import annotations
 
-"""
-Backwards compatibility alias for server_readwrite.
+from pydantic import BaseModel
 
-Use server_readonly or server_readwrite directly for explicit mode selection.
-"""
 
-from .server_readwrite import app as app
-from .server_readwrite import mcp as mcp
+class FeatureView(BaseModel):
+    id: int
+    name: str
+    version: int
+    description: str | None = None
+    labels: list[str] | None = None
+    inference_helper_columns: list[str] | None = None
+    training_helper_columns: list[str] | None = None

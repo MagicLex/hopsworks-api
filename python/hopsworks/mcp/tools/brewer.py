@@ -34,14 +34,18 @@ class ExecutionResult(BaseModel):
 
 
 class BrewerTools:
-    def __init__(self, mcp):
+    def __init__(self, mcp, readonly: bool = False):
         """Initialize the BrewerTools with the MCP server instance.
 
         Parameters:
             mcp: The MCP server instance
+            readonly: If True, do not register any tools (script execution is dangerous)
         """
         self.mcp = mcp
-        self.mcp.tool(tags=[TAGS.BREWER])(self.execute)
+
+        # Script execution is dangerous - only in readwrite mode
+        if not readonly:
+            self.mcp.tool(tags=[TAGS.BREWER])(self.execute)
 
     # TODO: Use on_notification Middleware to handle cancellation requests, add process manager
 
