@@ -45,20 +45,23 @@ CHART_HTML_TEMPLATE = """<!DOCTYPE html>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     {plugins}
     <style>
+      html, body {{
+        height: 100%;
+        margin: 0;
+      }}
       body {{
         font-family: Arial, sans-serif;
-        margin: 0;
         padding: 1em;
         background: #fff;
+        box-sizing: border-box;
       }}
       #chart-container {{
+        position: relative;
         width: 100%;
-        max-width: 800px;
-        margin: 0 auto;
+        height: 80vh;
         min-height: 400px;
-        height: 100%;
-        display: flex;
-        justify-content: center;
+        padding: 1em;
+        box-sizing: border-box;
       }}
       canvas {{
         background: #fff;
@@ -353,7 +356,8 @@ class ChartsTools:
             visualization_script: JavaScript code for Chart.js initialization.
                 This code receives a 'chartData' variable containing the loaded data.json.
                 The canvas element ID is 'myChart' - use document.getElementById('myChart').
-                Example: "new Chart(document.getElementById('myChart'), { type: 'bar', data: chartData });"
+                For responsive charts, use options: { maintainAspectRatio: false }.
+                Example: "new Chart(document.getElementById('myChart'), { type: 'bar', data: chartData, options: { maintainAspectRatio: false } });"
             plugins: Optional Chart.js plugin to include (boxplot, matrix, treemap).
             job_id: Optional job ID from aggregation step (for re-running).
 
