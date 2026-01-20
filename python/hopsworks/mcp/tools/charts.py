@@ -179,7 +179,7 @@ class ChartsTools:
     def _upload_content(self, content: str, upload_path: str, filename: str) -> str:
         """Upload string content to Hopsworks.
 
-        Creates a temp file, uploads it, and returns the full path.
+        Creates a temp file with the exact filename, uploads it, and returns the full path.
         """
         project = self._get_project()
         dataset_api = project.get_dataset_api()
@@ -190,17 +190,13 @@ class ChartsTools:
         except Exception:
             pass  # Directory might already exist
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=f"_{filename}", delete=False
-        ) as f:
-            f.write(content)
-            temp_path = f.name
-
-        try:
-            uploaded = dataset_api.upload(temp_path, upload_path, overwrite=True)
+        # Create temp directory and file with exact filename
+        # (dataset_api.upload uses the local file's basename)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / filename
+            temp_path.write_text(content)
+            uploaded = dataset_api.upload(str(temp_path), upload_path, overwrite=True)
             return uploaded
-        finally:
-            Path(temp_path).unlink(missing_ok=True)
 
     def _download_content(self, hopsworks_path: str) -> str:
         """Download file content from Hopsworks."""
