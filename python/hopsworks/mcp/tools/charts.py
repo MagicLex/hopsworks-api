@@ -19,10 +19,11 @@ import json
 import tempfile
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import hopsworks
 import jsonschema
+from fastmcp import Context
 from hopsworks_common import client
 
 from hopsworks.mcp.models.chart import (
@@ -32,10 +33,6 @@ from hopsworks.mcp.models.chart import (
     ChartVisualizationResult,
     PluginType,
 )
-
-
-if TYPE_CHECKING:
-    from fastmcp import Context
 
 
 # HTML template for Chart.js visualizations
