@@ -5,14 +5,20 @@ Model Context Protocol (MCP) server for the Hopsworks Feature Store. Enables AI 
 ## Quick Start
 
 ```bash
-# Install
-pip install hopsworks[mcp]
+# Install (requires both mcp and python extras)
+pip install "hopsworks[mcp,python]"
+
+# Or with uv
+uv sync --extra mcp --extra python
 
 # Run (read-write mode)
 hopsworks-mcp --host 0.0.0.0 --port 8000
 
 # Run (read-only mode for safer exploration)
 hopsworks-mcp-readonly --host 0.0.0.0 --port 8000
+
+# Run (charts server on port 8001)
+hopsworks-mcp-charts --host 0.0.0.0 --port 8001
 ```
 
 ## Server Modes
@@ -167,9 +173,9 @@ hopsworks-mcp \
 For development with Claude Code, run the MCP server locally and connect via HTTP:
 
 ```bash
-# Terminal 1: Start MCP server
+# Terminal 1: Install and start Feature Store MCP
 cd hopsworks-api/python
-uv sync --extra dev --extra mcp --all-groups
+uv sync --extra mcp --extra python
 
 uv run hopsworks-mcp \
   --hopsworks_host app.hopsworks.ai \
@@ -177,12 +183,20 @@ uv run hopsworks-mcp \
   --project your_project
 # Server runs on localhost:8000
 
-# Terminal 2: Add MCP to Claude Code and start
+# Terminal 2 (optional): Start Charts MCP
+uv run hopsworks-mcp-charts \
+  --hopsworks_host app.hopsworks.ai \
+  --api_key_value YOUR_API_KEY \
+  --project your_project
+# Server runs on localhost:8001
+
+# Terminal 3: Add MCPs to Claude Code and start
 claude mcp add --transport http hopsworks http://localhost:8000/mcp
+claude mcp add --transport http hopsworks-charts http://localhost:8001/mcp
 claude
 ```
 
-The MCP server must be running before starting Claude Code.
+The MCP servers must be running before starting Claude Code.
 
 ## Documentation
 
