@@ -150,7 +150,7 @@ class FeatureGroupTools:
         )
 
         fg = self._get_feature_group_version(name, version)
-        preview = fg.read(dataframe_type="pandas").head(n)
+        preview = fg.show(n)
 
         try:
             import pandas as pd
