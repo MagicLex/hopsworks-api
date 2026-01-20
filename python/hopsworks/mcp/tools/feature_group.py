@@ -1,5 +1,5 @@
 #
-#   Copyright 2025 Hopsworks AB
+#   Copyright 2026 Hopsworks AB
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -150,7 +150,7 @@ class FeatureGroupTools:
         )
 
         fg = self._get_feature_group_version(name, version)
-        preview = fg.show(n, fg.online_enabled)
+        preview = fg.show(n)
 
         try:
             import pandas as pd
