@@ -148,6 +148,7 @@ class FeatureGroupTools:
         # KNOWN ISSUE: fg.show() fails when MCP SDK version (4.7.0.dev1) doesn't match
         # backend version (e.g., 4.6.0). The SDK expects hqs_payload from Query Service
         # but older backends don't return it. Fix: ensure SDK and backend versions match.
+        # Workaround: use Python SDK directly (system python) which has matching version.
         await ctx.info(
             f"Retrieving preview of {name}{f' v{version}' if version else ''} feature group..."
         )
