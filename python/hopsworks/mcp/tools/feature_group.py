@@ -150,7 +150,17 @@ class FeatureGroupTools:
         )
 
         fg = self._get_feature_group_version(name, version)
-        preview = fg.show(n)
+
+        # Try show() first, fallback to read().head() for backend compatibility
+        try:
+            preview = fg.show(n)
+        except (AttributeError, Exception) as e:
+            # Fallback for older backends where hqs_payload is None
+            if "hqs_payload" in str(e) or "encode" in str(e):
+                await ctx.info("Query Service unavailable, using read() fallback...")
+                preview = fg.read(dataframe_type="pandas").head(n)
+            else:
+                raise
 
         try:
             import pandas as pd
