@@ -352,6 +352,7 @@ class ChartsTools:
             description: Chart description.
             visualization_script: JavaScript code for Chart.js initialization.
                 This code receives a 'chartData' variable containing the loaded data.json.
+                The canvas element ID is 'myChart' - use document.getElementById('myChart').
                 Example: "new Chart(document.getElementById('myChart'), { type: 'bar', data: chartData });"
             plugins: Optional Chart.js plugin to include (boxplot, matrix, treemap).
             job_id: Optional job ID from aggregation step (for re-running).
@@ -419,6 +420,7 @@ class ChartsTools:
             description: Chart description.
             aggregation_script: Python script that generates data.json output.
             visualization_script: JavaScript code for Chart.js initialization.
+                Receives 'chartData' variable. Canvas ID is 'myChart'.
             json_schema: JSON Schema to validate the output data.json.
             plugins: Optional Chart.js plugin (boxplot, matrix, treemap).
             create_job: Whether to create a Hopsworks job for re-running (default: True).
