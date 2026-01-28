@@ -42,7 +42,7 @@ dependencies = [
     "furl",
     "boto3",
     "pandas[mysql]<2.4.0",
-    "numpy<2",
+    "numpy>=1.26.3,<2.5.0",
     "pyjks",
     "mock",
     "avro==1.12.0",
@@ -110,7 +110,10 @@ mcp=[
     "filelock",
     "httpx",
     "httptools",
+<<<<<<< HEAD
     "jsonschema>=4.0.0",
+=======
+>>>>>>> origin/main
     "uvicorn",
     "uvloop; sys_platform != 'win32'",
     "pydantic>=2.11.7",

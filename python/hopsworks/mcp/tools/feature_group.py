@@ -154,7 +154,7 @@ class FeatureGroupTools:
         )
 
         fg = self._get_feature_group_version(name, version)
-        preview = fg.show(n)
+        preview = fg.show(n, fg.online_enabled)
 
         try:
             import pandas as pd
