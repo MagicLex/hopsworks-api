@@ -302,6 +302,18 @@ class DeltaEngine:
             project_username = f"{_client.project_name}__{user_name}"
             _logger.debug(f"Setting LIBHDFS_DEFAULT_USER to {project_username}")
             os.environ["LIBHDFS_DEFAULT_USER"] = project_username
+        else:
+            # Internal client (e.g. terminal pods): certs exist at
+            # MATERIAL_DIRECTORY but delta-rs needs PEMS_DIR and
+            # LIBHDFS_DEFAULT_USER to be set explicitly.
+            material_dir = os.environ.get("MATERIAL_DIRECTORY", "")
+            hadoop_user = os.environ.get("HADOOP_USER_NAME", "")
+            if material_dir and "PEMS_DIR" not in os.environ:
+                os.environ["PEMS_DIR"] = material_dir
+                _logger.debug(f"Internal client: PEMS_DIR set to {material_dir}")
+            if hadoop_user and "LIBHDFS_DEFAULT_USER" not in os.environ:
+                os.environ["LIBHDFS_DEFAULT_USER"] = hadoop_user
+                _logger.debug(f"Internal client: LIBHDFS_DEFAULT_USER set to {hadoop_user}")
 
     def _get_delta_rs_location(self):
         _client = client.get_instance()

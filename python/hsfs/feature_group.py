@@ -3251,12 +3251,13 @@ class FeatureGroup(FeatureGroupBase):
         if self.statistics_config.enabled and engine.get_type().startswith("spark"):
             self._statistics_engine.compute_and_save_statistics(self, feature_dataframe)
         elif engine.get_type() == "python" and not self.stream:
-            commit_id = list(self.commit_details(limit=1))[0]
-            self._statistics_engine.compute_and_save_statistics(
-                metadata_instance=self,
-                feature_dataframe=feature_dataframe,
-                feature_group_commit_id=commit_id,
-            )
+            commits = list(self.commit_details(limit=1))
+            if commits:
+                self._statistics_engine.compute_and_save_statistics(
+                    metadata_instance=self,
+                    feature_dataframe=feature_dataframe,
+                    feature_group_commit_id=commits[0],
+                )
 
         if user_version is None:
             warnings.warn(
@@ -3454,12 +3455,13 @@ class FeatureGroup(FeatureGroupBase):
         if engine.get_type().startswith("spark") and not self.stream:
             self.compute_statistics()
         elif engine.get_type() == "python" and not self.stream:
-            commit_id = list(self.commit_details(limit=1))[0]
-            self._statistics_engine.compute_and_save_statistics(
-                metadata_instance=self,
-                feature_dataframe=feature_dataframe,
-                feature_group_commit_id=commit_id,
-            )
+            commits = list(self.commit_details(limit=1))
+            if commits:
+                self._statistics_engine.compute_and_save_statistics(
+                    metadata_instance=self,
+                    feature_dataframe=feature_dataframe,
+                    feature_group_commit_id=commits[0],
+                )
 
         return (
             job,
