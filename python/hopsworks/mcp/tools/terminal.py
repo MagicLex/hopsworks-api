@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -72,7 +73,7 @@ class TerminalTools:
             cwd=cwd,
             text=True,
             bufsize=1,
-            env={"PROMPT_COMMAND": f'python -c "import json, os; print(json.dumps(dict(os.environ)))" > {envdir}/env.json'},
+            env={**os.environ, "PROMPT_COMMAND": f'python -c "import json, os; print(json.dumps(dict(os.environ)))" > {envdir}/env.json'},
         )
 
         output_queue = Queue()
