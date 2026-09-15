@@ -30,6 +30,7 @@ from hopsworks_common.client.exceptions import (
 )
 from hsml.core import huggingface_api, model_api
 from hsml.llm import signature as llm_signature  # noqa: F401
+from hsml.onnx import signature as onnx_signature  # noqa: F401
 from hsml.python import signature as python_signature  # noqa: F401
 from hsml.sklearn import signature as sklearn_signature  # noqa: F401
 from hsml.tensorflow import signature as tensorflow_signature  # noqa: F401
@@ -67,12 +68,14 @@ class ModelRegistry:
         self._sklearn = sklearn_signature
         self._torch = torch_signature
         self._llm = llm_signature
+        self._onnx = onnx_signature
 
         tensorflow_signature._mr = self
         python_signature._mr = self
         sklearn_signature._mr = self
         torch_signature._mr = self
         llm_signature._mr = self
+        onnx_signature._mr = self
 
     @classmethod
     def from_response_json(cls, json_dict):
@@ -461,6 +464,12 @@ class ModelRegistry:
     def llm(self):
         """Module for exporting a Large Language Model."""
         return llm_signature
+
+    @public
+    @property
+    def onnx(self):
+        """Module for exporting an ONNX model (served by Triton)."""
+        return onnx_signature
 
     def __repr__(self):
         project_name = (

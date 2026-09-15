@@ -264,6 +264,8 @@ class Predictor(DeployableComponent):
             return PREDICTOR.MODEL_SERVER_TF_SERVING
         if model_framework == MODEL.FRAMEWORK_LLM:
             return PREDICTOR.MODEL_SERVER_VLLM
+        if model_framework == MODEL.FRAMEWORK_ONNX:
+            return PREDICTOR.MODEL_SERVER_TRITON
         return PREDICTOR.MODEL_SERVER_PYTHON
 
     @classmethod

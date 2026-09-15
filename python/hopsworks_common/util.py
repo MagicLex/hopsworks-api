@@ -629,6 +629,7 @@ def _is_interactive():
 def _set_model_class(model):
     from hsml.llm.model import Model as LLMModel
     from hsml.model import Model as BaseModel
+    from hsml.onnx.model import Model as ONNXModel
     from hsml.python.model import Model as PyModel
     from hsml.sklearn.model import Model as SkLearnModel
     from hsml.tensorflow.model import Model as TFModel
@@ -655,6 +656,8 @@ def _set_model_class(model):
         return PyModel(**model)
     if framework == MODEL.FRAMEWORK_LLM:
         return LLMModel(**model)
+    if framework == MODEL.FRAMEWORK_ONNX:
+        return ONNXModel(**model)
     raise ValueError(f"framework {str(framework)} is not a supported framework")
 
 
@@ -780,6 +783,8 @@ def _get_predictor_for_model(model, **kwargs):
     from hsml.sklearn.predictor import Predictor as SkLearnPredictor
     from hsml.tensorflow.model import Model as TFModel
     from hsml.tensorflow.predictor import Predictor as TFPredictor
+    from hsml.onnx.model import Model as ONNXModel
+    from hsml.onnx.predictor import Predictor as ONNXPredictor
     from hsml.torch.model import Model as TorchModel
     from hsml.torch.predictor import Predictor as TorchPredictor
 
@@ -798,6 +803,8 @@ def _get_predictor_for_model(model, **kwargs):
         return PyPredictor(**kwargs)
     if type(model) is LLMModel:
         return vLLMPredictor(**kwargs)
+    if type(model) is ONNXModel:
+        return ONNXPredictor(**kwargs)
     if type(model) is BaseModel:
         return BasePredictor(  # python as default framework and model server
             model_framework=MODEL.FRAMEWORK_PYTHON,
