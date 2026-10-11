@@ -15,6 +15,7 @@
 #
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import warnings
@@ -375,6 +376,10 @@ class Query:
                 raise ValueError(
                     "Pandas types casting only supported for feature_group.read()/query.select_all()"
                 )
+        elif online:
+            # Only the booleans: the online store returns them as TINYINT 0 or 1,
+            # while an offline read of the same query returns True or False.
+            schema = [f for f in self._output_features() if f.type == "boolean"]
 
         return engine._get_instance()._sql(
             sql_query,
@@ -384,6 +389,17 @@ class Query:
             read_options,
             schema,
         )
+
+    def _output_features(self) -> list[Feature]:
+        """The query's features named as the columns of its SQL output, join prefixes included."""
+        features = list(self._left_features)
+        for join_obj in self.joins:
+            for feat in join_obj.query._left_features:
+                if join_obj.prefix:
+                    feat = copy.copy(feat)
+                    feat.name = join_obj.prefix + feat.name
+                features.append(feat)
+        return features
 
     def _read_with_time_filter(
         self,
