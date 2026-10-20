@@ -41,7 +41,12 @@ def read_job_conf(path: str) -> dict[Any, Any]:
 
 
 def setup_spark() -> SparkSession:
-    return SparkSession.builder.enableHiveSupport().getOrCreate()
+    builder = SparkSession.builder.enableHiveSupport()
+    # In cluster mode spark-submit passes --master k8s://, so local mode has to be set here.
+    master = os.environ.get("HOPSWORKS_SPARK_MASTER")
+    if master:
+        builder = builder.master(master)
+    return builder.getOrCreate()
 
 
 def get_feature_store_handle(feature_store: str = "") -> hopsworks.hsfs.feature_store:
