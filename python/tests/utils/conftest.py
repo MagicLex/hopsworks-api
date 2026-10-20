@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import pathlib
+import sys
 from unittest import mock
 
 import pytest
@@ -36,6 +37,11 @@ def hsfs_utils():
     os.environ.setdefault("HADOOP_USER_NAME", "test_user")
     spec = importlib.util.spec_from_file_location("hsfs_utils_under_test", HSFS_UTILS)
     module = importlib.util.module_from_spec(spec)
-    with mock.patch("fsspec.implementations.arrow.HadoopFileSystem"):
-        spec.loader.exec_module(module)
+    # The job imports materialization_offsets from its own directory, as it does where it ships.
+    sys.path.insert(0, str(HSFS_UTILS.parent))
+    try:
+        with mock.patch("fsspec.implementations.arrow.HadoopFileSystem"):
+            spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(HSFS_UTILS.parent))
     return module

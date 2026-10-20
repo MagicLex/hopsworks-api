@@ -60,6 +60,8 @@ pipeline {
                     'java/spark/target/*-jar-with-dependencies.jar',
                     'utils/java/target/*-jar-with-dependencies.jar',
                     'utils/python/hsfs_utils.py',
+                    'utils/python/materialization_offsets.py',
+                    'utils/python/offline_fg_materialization.py',
                 ].join(',')
             }
         }
@@ -84,6 +86,9 @@ pipeline {
                     cp "utils/java/target/hsfs-utils-$POM_VERSION-jar-with-dependencies.jar" \
                        "$DEST/hsfs_utils/hsfs-utils-$POM_VERSION.jar"
                     cp utils/python/hsfs_utils.py "$DEST/hsfs_utils/hsfs_utils-$POM_VERSION.py"
+                    cp utils/python/materialization_offsets.py "$DEST/hsfs_utils/materialization_offsets-$POM_VERSION.py"
+                    cp utils/python/offline_fg_materialization.py \
+                       "$DEST/hsfs_utils/offline_fg_materialization-$POM_VERSION.py"
                 '''
             }
         }
