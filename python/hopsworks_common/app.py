@@ -155,6 +155,12 @@ class App:
 
     @public
     @property
+    def job_id(self) -> int | None:
+        """ID of the job that runs the app, the app's ID."""
+        return self._job_id
+
+    @public
+    @property
     def name(self) -> str:
         """Name of the app."""
         return self._name

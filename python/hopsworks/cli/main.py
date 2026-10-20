@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import re
 import sys
 from typing import TYPE_CHECKING, Any
 
 import click
-from hopsworks.cli import config, output
+from hopsworks.cli import config, deprecations, output, scaffold
 
 
 if TYPE_CHECKING:
@@ -44,6 +45,7 @@ _LAZY_SUBCOMMANDS: dict[str, str] = {
     "job": "hopsworks.cli.commands.job:job_group",
     "alert": "hopsworks.cli.commands.alert:alert_group",
     "app": "hopsworks.cli.commands.app:app_group",
+    "notebook": "hopsworks.cli.commands.notebook:notebook_group",
     "agent": "hopsworks.cli.commands.agent:agent_group",
     "transformation": "hopsworks.cli.commands.transformation:transformation_group",
     "superset": "hopsworks.cli.commands.superset:superset_group",
@@ -60,17 +62,51 @@ _LAZY_SUBCOMMANDS: dict[str, str] = {
 }
 
 
+_HELP_OPTION_NAMES = ["-h", "--help"]
+_JSON_HELP = "Output as JSON."
+_VERIFY_HELP = (
+    "Verify the TLS hostname; --no-verify for self-signed certificates. "
+    "HOPSWORKS_HOSTNAME_VERIFICATION overrides it."
+)
+
 # RESTCodes.ApiKeyErrorCode: the key carries none of the scopes the endpoint accepts.
 _NO_VALID_SCOPE = 320004
+# RESTCodes.SchematizedTagErrorCode: the tag's schema is not defined on the cluster.
+_TAG_SCHEMA_NOT_DEFINED = 370000
+# RESTCodes.ProjectErrorCode: the caller's project role does not allow the action.
+_PROJECT_ROLE_FORBIDDEN = 150068
 
 
-def _explain_rest_error(exc: BaseException | None) -> str | None:
+def _project_owner(ctx: click.Context) -> str | None:
+    """The project owner's full name, else their email; None when the project cannot be read.
+
+    The owner is an email in the project info; its member list carries the names.
+    """
+    from hopsworks.cli import session  # noqa: PLC0415 - loaded once a call was refused
+
+    try:
+        project = session.get_project(ctx)
+        email = project.owner
+        for member in project.project_team or []:
+            user = member.get("user") or {}
+            if user.get("email") == email:
+                name = f"{user.get('fname') or ''} {user.get('lname') or ''}".strip()
+                return name or email
+        return email or None
+    except Exception:  # noqa: BLE001 - the refusal is reported either way
+        return None
+
+
+def _explain_rest_error(
+    exc: BaseException | None, ctx: click.Context | None = None
+) -> str | None:
     """Reduce a REST failure to the one line a user can act on.
 
     Returns None for anything that is not the SDK's ``RestAPIError``, so callers
     can re-raise unrelated exceptions untouched. A missing API key scope names
-    the scope the endpoint wanted and how to grant it; every other REST error
-    keeps the status, the error code and the server's own user message and
+    the scope the endpoint wanted and how to grant it; a project role refusal
+    names the project owner to ask, read from ``ctx``'s project; every other REST
+    error keeps the status, the error code and the server's own user message and
     drops the URL and raw body that ``str(exc)`` carries.
     """
     from hopsworks_common.client import (
@@ -107,6 +143,11 @@ def _explain_rest_error(exc: BaseException | None) -> str | None:
             "Settings > API keys, or run `hops setup --force` to create a key "
             "with every scope the CLI uses."
         )
+    if code == _PROJECT_ROLE_FORBIDDEN:
+        owner = _project_owner(ctx) if ctx is not None else None
+        return "Only the project's Data owner can do this: ask " + (
+            owner or "the project's Data owner"
+        )
     status = getattr(response, "status_code", None)
     where = f"HTTP {status}" + (f", error {code}" if code else "")
     hint = ""
@@ -115,6 +156,13 @@ def _explain_rest_error(exc: BaseException | None) -> str | None:
             f" Check the key in {config.CONFIG_PATH}, or run `hops setup --force` "
             "to create a new one."
         )
+    elif code == _TAG_SCHEMA_NOT_DEFINED:
+        hint = (
+            " This cluster has no such tag schema, and only a Hopsworks admin can "
+            "define one; nothing was tagged."
+        )
+    if hint and not detail.endswith("."):
+        detail += "."
     return f"Hopsworks refused the request ({where}): {detail}{hint}"
 
 
@@ -166,6 +214,9 @@ def _inject_global_options(cmd: click.Command) -> None:
     run before the leaf, flipping JSON mode and the resolved hostname-verification
     setting respectively.
     """
+    # Click caches each command's help option the first time a context asks for
+    # it, so a command invoked without the root's context would lose -h for good.
+    cmd.context_settings.setdefault("help_option_names", _HELP_OPTION_NAMES)
     if not any("--json" in (getattr(p, "opts", None) or []) for p in cmd.params):
         cmd.params.append(
             click.Option(
@@ -174,7 +225,7 @@ def _inject_global_options(cmd: click.Command) -> None:
                 expose_value=False,
                 is_eager=True,
                 callback=_json_eager_callback,
-                help="Output as JSON (machine-readable; for LLMs and scripts).",
+                help=_JSON_HELP,
             )
         )
     if not any("--verify" in (getattr(p, "opts", None) or []) for p in cmd.params):
@@ -185,10 +236,7 @@ def _inject_global_options(cmd: click.Command) -> None:
                 expose_value=False,
                 is_eager=True,
                 callback=_verify_eager_callback,
-                help=(
-                    "Verify the Hopsworks TLS certificate; --no-verify skips "
-                    "verification for self-signed / IP-SAN-mismatched certs."
-                ),
+                help=_VERIFY_HELP,
             )
         )
     # ``LazyGroup`` does its own injection on demand — recursing into it would
@@ -240,7 +288,7 @@ class LazyGroup(click.Group):
             return super().invoke(ctx)
         except click.ClickException as exc:
             cause = exc.__cause__ or exc.__context__
-            friendly = _explain_rest_error(cause)
+            friendly = _explain_rest_error(cause, ctx)
             if friendly:
                 raw = str(cause)
                 exc.message = (
@@ -250,10 +298,31 @@ class LazyGroup(click.Group):
                 )
             raise
         except Exception as exc:  # noqa: BLE001 - narrowed by _explain_rest_error
-            friendly = _explain_rest_error(exc)
+            friendly = _explain_rest_error(exc, ctx)
             if friendly is None:
                 raise
             raise click.ClickException(friendly) from exc
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Rewrite deprecated command names before parsing, at the root only.
+
+        Args:
+            ctx: Click context.
+            args: Arguments after the program name.
+
+        Returns:
+            The arguments Click still has to parse.
+        """
+        if ctx.parent is None:
+
+            def subcommands(path: tuple[str, ...]) -> set[str]:
+                group: Any = self
+                for name in path:
+                    group = group.get_command(ctx, name)
+                return set(group.commands)
+
+            args = deprecations.rewrite(args, subcommands)
+        return super().parse_args(ctx, args)
 
     def list_commands(self, ctx: click.Context) -> Iterable[str]:
         return sorted({*self.commands.keys(), *self.lazy_subcommands.keys()})
@@ -279,41 +348,36 @@ class LazyGroup(click.Group):
     cls=LazyGroup,
     lazy_subcommands=_LAZY_SUBCOMMANDS,
     help=(
-        "Hopsworks CLI — for humans and LLMs.\n\n"
-        "Run `hops setup` to authenticate on a new machine."
+        "Hopsworks CLI for humans and agents.\n\n"
+        "Run `hops setup` to authenticate on a new machine.\n\n"
+        "Run `hops COMMAND -h` for the commands and options of a group.\n\n"
+        f"Docs: {scaffold.DOCS_URL}, also served to agents by the MCP "
+        f"server {scaffold.DOCS_MCP_URL}."
     ),
-    context_settings={"help_option_names": ["-h", "--help"]},
+    context_settings={"help_option_names": _HELP_OPTION_NAMES},
 )
 @click.version_option(_VERSION, "-v", "--version", prog_name="hops")
 @click.option("--host", "host_flag", help="Hopsworks host URL (overrides config).")
 @click.option(
     "--api-key",
     "api_key_flag",
-    help="API key (overrides config). Avoid in shared shells — a key in argv "
-    "is visible in the process list and shell history. Prefer the "
-    "HOPSWORKS_API_KEY env var or --api-key-stdin.",
+    help="API key (overrides config); visible in shell history, prefer "
+    "HOPSWORKS_API_KEY or --api-key-stdin.",
 )
 @click.option(
     "--api-key-stdin",
     "api_key_stdin",
     is_flag=True,
-    help="Read the API key from the first line of stdin instead of argv "
-    "(keeps the secret out of the process list and shell history).",
+    help="Read the API key from the first line of stdin.",
 )
 @click.option("--project", "project_flag", help="Project name (overrides config).")
 @click.option(
     "--verify/--no-verify",
     "verify_flag",
     default=None,
-    help=(
-        "Verify the Hopsworks TLS certificate (hostname verification). Use "
-        "--no-verify to skip verification when a cluster serves a self-signed "
-        "or IP-SAN-mismatched certificate. Maps to the SDK's "
-        "hopsworks.login(hostname_verification=...); overridden by "
-        "HOPSWORKS_HOSTNAME_VERIFICATION when that env var is set."
-    ),
+    help=_VERIFY_HELP,
 )
-@click.option("--json", "json_flag", is_flag=True, help="Output as JSON (for LLMs).")
+@click.option("--json", "json_flag", is_flag=True, help=_JSON_HELP)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -324,15 +388,16 @@ def cli(
     verify_flag: bool | None,
     json_flag: bool,
 ) -> None:
-    """Root ``hops`` command; child commands pull the resolved config via ``ctx.obj``.
+    """Root `hops` command; child commands pull the resolved config via `ctx.obj`.
 
+    \f
     Args:
-        ctx: Click context; we stash the resolved ``HopsConfig`` on ``ctx.obj``.
-        host_flag: Value of ``--host`` if provided.
-        api_key_flag: Value of ``--api-key`` if provided.
+        ctx: Click context; we stash the resolved `HopsConfig` on `ctx.obj`.
+        host_flag: Value of `--host` if provided.
+        api_key_flag: Value of `--api-key` if provided.
         api_key_stdin: When True, read the API key from stdin.
-        project_flag: Value of ``--project`` if provided.
-        verify_flag: True for ``--verify``, False for ``--no-verify``, None if neither was passed.
+        project_flag: Value of `--project` if provided.
+        verify_flag: True for `--verify`, False for `--no-verify`, None if neither was passed.
         json_flag: When True, every output helper switches to JSON mode.
     """
     # The SDK's package import already ran logging.basicConfig(level=INFO), so
@@ -355,6 +420,9 @@ def cli(
 
 def main() -> None:
     """Console-script entry point referenced by ``pyproject.toml``."""
+    # Off a terminal, a progress bar redraw is one more line in a log or an agent's context.
+    if not sys.stdout.isatty():
+        os.environ.setdefault("TQDM_DISABLE", "1")
     cli.main(prog_name="hops")
 
 

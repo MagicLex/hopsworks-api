@@ -115,6 +115,23 @@ class TestPredictor:
         assert d["predictorEnvironment"] == {"name": "my-inference-pipeline"}
         assert d["environmentDTO"] == {"name": "my-inference-pipeline"}
 
+    def test_from_response_json_reports_the_default_predictor(
+        self, mocker, backend_fixtures
+    ):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+        json = copy.deepcopy(
+            backend_fixtures["predictor"]["get_deployments_singleton"]["response"]
+        )
+        item = json["items"][0]
+
+        item["predictor"] = (
+            "/Projects/p/Deployments/d/resources/predictor/default_predictor.py"
+        )
+        assert predictor.Predictor.from_response_json(json)[0].default_predictor
+
+        item["predictor"] = "/Projects/p/Resources/my_predictor.py"
+        assert not predictor.Predictor.from_response_json(json)[0].default_predictor
+
     def test_from_response_json_singleton(self, mocker, backend_fixtures):
         # Arrange
         self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
@@ -1556,6 +1573,30 @@ class TestPredictor:
         # Assert
         assert serialized["vllmVariant"] == PREDICTOR.VLLM_VARIANT_VLLM
         assert serialized["vllmImageTag"] is None
+
+    def test_to_dict_omits_unset_resources(self, mocker):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+
+        serialized = predictor.Predictor(
+            name="n", model_name="m", model_path="p", model_server="PYTHON"
+        ).to_dict()
+
+        assert serialized["predictorResources"] == {}
+
+    def test_to_dict_sends_explicit_resources(self, mocker):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+
+        serialized = predictor.Predictor(
+            name="n",
+            model_name="m",
+            model_path="p",
+            model_server="PYTHON",
+            resources={"limits": {"cores": 2, "memory": 1024, "gpus": 0}},
+        ).to_dict()
+
+        assert serialized["predictorResources"] == {
+            "limits": {"cores": 2, "memory": 1024, "gpus": 0}
+        }
 
     def test_non_vllm_to_dict_does_not_emit_vllm_keys(self, mocker):
         # Arrange

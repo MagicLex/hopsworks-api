@@ -22,7 +22,7 @@ schedule are batch inference: the job embeds the model and needs no deployment (
 
 ## Smoke-test (cheap pre/post-flight)
 
-`hops deployment list` / `hops deployment info <name>` / `hops deployment logs <name>` exist, but `list`/`info` currently render a blank Status even for a RUNNING deployment — confirm state with `hops deployment status <name>` (its own command) or the Python `deployment.is_running()` instead. `hops deployment delete <name>` prompts; pass `--yes` for non-interactive cleanup. The CLI `hops deployment predict --data` wants the KServe v2 shape `{"instances": [[...]]}`, not the Python `inputs=[{...}]` dict.
+`hops deployment list`, `hops deployment info <name>` and `hops deployment logs <name>` read the live state; `info` also shows the predictor's container restarts. `hops deployment info <name> --stable 60` exits non-zero unless the deployment stays Running with no restart for 60 s: a deployment that answered one predict and then crashes is flapping, not served. `hops deployment delete <name>` prompts; pass `--yes` for non-interactive cleanup. The CLI `hops deployment predict --data` wants the KServe v2 shape `{"instances": [[...]]}`, not the Python `inputs=[{...}]` dict.
 
 The whole deploy→serve→smoke loop runs from the CLI — this is what the terminal
 kickoff flow uses. The model must already be registered (`hops model list`):
@@ -31,8 +31,8 @@ kickoff flow uses. The model must already be registered (`hops model list`):
 hops deployment create <model_name> --name <name> --version 1 --env pandas-inference-pipeline \
   [--cores 2] [--memory 2048]                                  # limits per instance; default 1 core, 1024 MB
 hops deployment start <name>
-hops deployment status <name>                                   # poll until READY
 hops deployment predict <name> --data '{"instances": [{ <one known-good row> }]}'
+hops deployment info <name> --stable 60                       # Running, no restart while watched
 hops deployment delete <name> --yes --force                    # delete prompts; --force skips the running check
 ```
 
@@ -381,9 +381,11 @@ model.deploy(name="telcochurnrt", script_file="src/telco_churn/predictor.py", de
 
 The predictor container defaults to a 1 GiB limit, which the default predictor
 outgrows even for a small scikit-learn model: an `OOMKilled` restart shows up
-as 502 `connection refused` from `predict`. Raise
-`deployment.resources.limits.memory` within `budget.inference.max_memory_mb`,
-`deployment.save(await_update=...)`, and measure again.
+as 502 `connection refused` from `predict`. Raise the memory limit within
+`budget.inference.max_memory_mb`: `limits` is None before the first save and
+memory -1 (no limit set) after it; set `deployment.resources.limits =
+Resources(memory=<MB>)` in either case (`from hsml.resources import Resources`).
+Then `deployment.save(await_update=...)`, and measure again.
 
 ### The benchmark contract
 

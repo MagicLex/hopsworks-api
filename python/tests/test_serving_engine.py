@@ -920,6 +920,34 @@ class TestStartWithoutWaiting:
 
         eng._serving_api._post.assert_called_once()
 
+    def test_refused_start_is_not_rolled_back(self, mocker):
+        from hopsworks_common.client.exceptions import RestAPIError
+        from hopsworks_common.constants import PREDICTOR_STATE
+        from hsml.engine import serving_engine
+
+        error = RestAPIError.__new__(RestAPIError)
+        error.response = mocker.Mock(status_code=403)
+        error.error_code = 150068
+        error.args = ("refused",)
+        eng = serving_engine.ServingEngine()
+        eng._serving_api = mocker.Mock()
+        eng._serving_api._post.side_effect = error
+        eng._check_status = mocker.Mock(
+            return_value=(False, mocker.Mock(status=PREDICTOR_STATE.STATUS_STOPPED))
+        )
+        eng._get_available_instances = mocker.Mock(return_value=1)
+        eng._get_starting_progress = mocker.Mock(return_value=(0, ""))
+        eng._stop = mocker.Mock()
+        deployment = mocker.Mock(
+            name="dep", model_server="PYTHON", has_model=True, requested_instances=1
+        )
+
+        with pytest.raises(RestAPIError) as info:
+            eng._start(deployment, await_status=0)
+
+        assert info.value is error
+        eng._stop.assert_not_called()
+
 
 class TestStartAndSaveAwaitTheRoute:
     """start() and save() wait for the ingress gateway to route a deployment that just reported Running."""

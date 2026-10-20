@@ -204,15 +204,6 @@ class MODEL_SERVING:
     DEFAULT_MAX_BATCH_ROWS = 512
 
 
-class RESOURCES:
-    # default values, not hard limits
-    MIN_CORES = 0.2
-    MIN_MEMORY = 32
-    GPUS = 0
-    MAX_CORES = 2
-    MAX_MEMORY = 1024
-
-
 class KAFKA_TOPIC:
     NONE = "NONE"
     CREATE = "CREATE"
