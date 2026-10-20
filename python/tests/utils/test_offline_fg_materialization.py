@@ -46,6 +46,8 @@ def job():
         "offline_fg_materialization_under_test", UTILS / "offline_fg_materialization.py"
     )
     module = importlib.util.module_from_spec(spec)
+    # Registered as imported modules are: its dataclasses look their module up by name.
+    sys.modules[spec.name] = module
     sys.path.insert(0, str(UTILS))
     try:
         # The job opens a HopsFS client as it is imported; the local filesystem stands in for it.
@@ -141,7 +143,7 @@ class TestChunk:
             {"id": 2, "ts": TS, "p": "a", "v": [2]},
             {"id": 1, "ts": TS, "p": "a", "v": [3]},
         ]:
-            chunk.add(encode(row))
+            chunk.add(job._Decoder(FeatureGroup()).decode(encode(row)))
         table = chunk.table()
         assert table.to_pylist() == [
             {"id": 2, "ts": datetime.datetime(2026, 1, 1), "p": "a", "v": [2]},
@@ -190,13 +192,234 @@ class TestDeltaTable:
         from deltalake import write_deltalake
 
         chunk = job._Chunk(job._Decoder(FeatureGroup()))
-        chunk.add(encode({"id": 1, "ts": TS, "p": "a", "v": [1]}))
+        chunk.add(
+            job._Decoder(FeatureGroup()).decode(
+                encode({"id": 1, "ts": TS, "p": "a", "v": [1]})
+            )
+        )
         table = chunk.table()
         uri = str(tmp_path / "table")
-        assert job._merge_target_bytes(uri, None, FeatureGroup(), table) == 0
+        assert job._merge_target_bytes(uri, None, ["p"], table) == 0
         write_deltalake(uri, table, partition_by=["p"])
         other = pa.Table.from_pylist(
             [{"id": 2, "ts": TS, "p": "b", "v": [1]}], schema=table.schema
         )
-        assert job._merge_target_bytes(uri, None, FeatureGroup(), table) > 0
-        assert job._merge_target_bytes(uri, None, FeatureGroup(), other) == 0
+        assert job._merge_target_bytes(uri, None, ["p"], table) > 0
+        assert job._merge_target_bytes(uri, None, ["p"], other) == 0
+
+    def test_merge_pruning_compares_boolean_and_timestamp_partitions_as_values(
+        self, job, tmp_path
+    ):
+        from deltalake import write_deltalake
+
+        # As in a table Spark created: its timestamps carry the UTC zone, the chunk's do not.
+        stored = pa.table(
+            {
+                "id": [1, 2, 3],
+                "flag": [True, False, True],
+                "day": pa.array(
+                    [
+                        TS,
+                        TS + datetime.timedelta(days=1),
+                        TS + datetime.timedelta(days=1),
+                    ],
+                    pa.timestamp("us", tz="UTC"),
+                ),
+            }
+        )
+        uri = str(tmp_path / "table")
+        write_deltalake(uri, stored, partition_by=["flag", "day"])
+        chunk = pa.table(
+            {
+                "id": [4],
+                "flag": [True],
+                "day": pa.array([datetime.datetime(2026, 1, 2)], pa.timestamp("us")),
+            }
+        )
+        everything = job._merge_target_bytes(uri, None, [], chunk)
+        touched = job._merge_target_bytes(uri, None, ["flag", "day"], chunk)
+        assert 0 < touched < everything
+        nothing = pa.table(
+            {
+                "id": [5],
+                "flag": [False],
+                "day": pa.array([datetime.datetime(2026, 1, 1)], pa.timestamp("us")),
+            }
+        )
+        assert job._merge_target_bytes(uri, None, ["flag", "day"], nothing) == 0
+
+
+class TestRowBytes:
+    def test_row_sizes_add_up_to_the_arrow_table(self, job):
+        decoder = job._Decoder(FeatureGroup())
+        rows = [
+            decoder.decode(
+                encode({"id": i, "ts": TS, "p": "x" * i, "v": list(range(i))})
+            )
+            for i in range(200)
+        ]
+        table = pa.Table.from_pylist(rows, schema=decoder.schema)
+        sized = sum(decoder.row_bytes(row) for row in rows)
+        # Arrow adds one offset per variable-width column and validity bitmaps on top of the row sizes.
+        assert table.nbytes - 64 <= sized <= table.nbytes
+
+
+class Log(FeatureGroup):
+    """A feature group without a primary key: every record is a row."""
+
+    primary_key = []
+
+
+TOPIC = "t"
+
+
+def log_records(partitions=3, per_partition=6):
+    return {
+        partition: [
+            (
+                offset,
+                [("featureGroupId", b"9"), ("subjectId", b"3")],
+                encode(
+                    {"id": partition * 100 + offset, "ts": TS, "p": "a", "v": [offset]}
+                ),
+            )
+            for offset in range(per_partition)
+        ]
+        for partition in range(partitions)
+    }
+
+
+class ListRange:
+    """A topic range read from records in memory, in the partition order a test picks."""
+
+    def __init__(self, records, order, start, end):
+        self._queue = [
+            (partition, offset, headers, value)
+            for partition, offset, headers, value in self._interleave(records, order)
+            if int(start.get(str(partition), 0))
+            <= offset
+            < int(end.get(str(partition), 0))
+        ]
+        self._returned = None
+
+    @staticmethod
+    def _interleave(records, order):
+        cursors = dict.fromkeys(records, 0)
+        while any(cursors[p] < len(records[p]) for p in records):
+            for partition in order:
+                if cursors[partition] < len(records[partition]):
+                    offset, headers, value = records[partition][cursors[partition]]
+                    cursors[partition] += 1
+                    yield partition, offset, headers, value
+
+    @property
+    def done(self):
+        return not self._queue and self._returned is None
+
+    def unread(self, record):
+        self._returned = record
+
+    def records(self):
+        while self._queue or self._returned is not None:
+            if self._returned is not None:
+                record, self._returned = self._returned, None
+                yield record
+            else:
+                yield self._queue.pop(0)
+
+    def close(self):
+        pass
+
+
+class Killed(Exception):
+    pass
+
+
+class TestAppendReplay:
+    def _target(self, job, tmp_path, kill_after=None):
+        from deltalake import CommitProperties, Transaction, write_deltalake
+
+        location = str(tmp_path / "fg_1")
+        commits = []
+
+        def insert(table, options):
+            fence = options["commit_properties"]
+            write_deltalake(
+                location,
+                table,
+                mode="append",
+                commit_properties=CommitProperties(
+                    app_transactions=[
+                        Transaction(app_id=fence["app_id"], version=fence["version"])
+                    ]
+                ),
+            )
+            commits.append(fence["version"])
+            # Dies between the commit and the offsets save.
+            if kill_after is not None and len(commits) == kill_after:
+                raise Killed
+
+        target = job._Target(
+            location=location,
+            table_uri=location,
+            storage_options=None,
+            pending_location=location + "_kafka_offsets_pending_1",
+            app_id="hopsworks_feature_log_materialization_1",
+            partition_key=[],
+            insert=insert,
+        )
+        return target, commits
+
+    def _run(self, job, target, records, order, chunk_bytes):
+        saved = job._read_json_dir(target.offset_location)
+        pending = job._read_json_dir(target.pending_location)
+        offsets = json.loads(saved) if saved else {TOPIC: {str(p): 0 for p in records}}
+        ending = {TOPIC: {str(p): len(rows) for p, rows in records.items()}}
+        return job._materialize(
+            TOPIC,
+            offsets,
+            ending,
+            json.loads(pending) if pending else None,
+            lambda start, end: ListRange(records, order, start, end),
+            job._Decoder(Log()),
+            lambda headers: job._keeps(headers, "9", "3"),
+            target,
+            {"operation": "insert"},
+            chunk_bytes,
+            0,
+        )
+
+    @staticmethod
+    def _ids(location):
+        from deltalake import DeltaTable
+
+        return sorted(DeltaTable(location).to_pyarrow_table().column("id").to_pylist())
+
+    def test_a_rerun_in_another_partition_order_repeats_the_committed_chunk(
+        self, job, tmp_path
+    ):
+        records = log_records()
+        row_bytes = job._Decoder(Log()).row_bytes(
+            job._Decoder(Log()).decode(records[0][0][2])
+        )
+        chunk_bytes = row_bytes * 4
+
+        clean, _ = self._target(job, tmp_path / "clean")
+        assert self._run(job, clean, records, [0, 1, 2], chunk_bytes)
+        expected = self._ids(clean.location)
+        assert len(expected) == 18
+
+        target, commits = self._target(job, tmp_path / "killed", kill_after=2)
+        with pytest.raises(Killed):
+            self._run(job, target, records, [0, 1, 2], chunk_bytes)
+        assert len(commits) == 2
+
+        rerun, rerun_commits = self._target(job, tmp_path / "killed")
+        assert self._run(job, rerun, records, [2, 1, 0], chunk_bytes)
+        assert self._ids(rerun.location) == expected
+        # The repeated chunk was found committed, not appended again.
+        assert commits[1] not in rerun_commits
+        assert not os.path.exists(rerun.pending_location)
+        assert json.loads(job._read_json_dir(rerun.offset_location)) == {
+            TOPIC: {"0": 6, "1": 6, "2": 6}
+        }
