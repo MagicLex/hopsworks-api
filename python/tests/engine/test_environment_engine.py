@@ -247,6 +247,39 @@ class TestEnvironmentEngine:
         assert mock_client._send_request.call_args.kwargs["timeout"] == 30
 
 
+    def test_a_timed_out_poll_through_the_client_is_not_retried_by_it(self, mocker):
+        """Each poll carries its own timeout, so the client sends it once and the loop's deadline decides."""
+        from hsfs.client.base import Client
+
+        # One time module: the loop's sleeps and any client backoff land on the same mock.
+        sleep = mocker.patch.object(environment_engine.time, "sleep")
+        mocker.patch("requests.sessions.Session.prepare_request")
+        done = requests.Response()
+        done.status_code = 200
+        done._content = (
+            b'{"channel": "pip", "packageSource": "PIP", "library": "matplotlib", "version": "3.1.3"}'
+        )
+        done.headers["Content-Type"] = "application/json"
+        send = mocker.patch(
+            "requests.sessions.Session.send",
+            side_effect=[requests.exceptions.ReadTimeout(), done],
+        )
+        real_client = Client()
+        real_client._connected = True
+        real_client._base_url = "https://hopsworks.example:443"
+        real_client._auth = None
+        real_client._verify = False
+        real_client._session = requests.session()
+        real_client._project_id = 1
+        mocker.patch("hopsworks_common.client._get_instance", return_value=real_client)
+
+        engine = environment_engine.EnvironmentEngine()
+        engine._await_library_command("myenv", "matplotlib")
+
+        assert send.call_count == 2
+        assert [c.args for c in sleep.call_args_list] == [(engine.POLL_INTERVAL,)] * 2
+
+
 class TestPollCommandsLibrary:
     def test_names_the_ecosystem_and_splits_a_scoped_name(self, mocker):
         # Arrange

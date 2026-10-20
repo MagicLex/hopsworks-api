@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import pytest
+from hopsworks_common.client.exceptions import BackendUnavailableError
 from hopsworks_common.core.execution_api import ExecutionApi
 from hopsworks_common.core.job_api import JobApi
 
@@ -89,6 +90,34 @@ class TestExecutionApiStart:
         }
         assert body["logicalDate"] == logical_date.isoformat()
         assert body["dataIntervalEnd"] == end_time.isoformat()
+
+    def test_start_reads_back_the_execution_when_the_backend_was_unavailable(
+        self, mock_client, mock_from_response, job
+    ):
+        unavailable = BackendUnavailableError("POST", "/executions")
+        mock_client._send_request.side_effect = [
+            unavailable,
+            {"count": 1, "items": [{"id": 7}]},
+        ]
+
+        ExecutionApi()._start(job, args="--flag value")
+
+        read = mock_client._send_request.call_args
+        assert read.args == ("GET", ["project", 42, "jobs", "my_job", "executions"])
+        assert read.kwargs["query_params"]["filter_by"].startswith("submissiontime_gt:")
+        mock_from_response.assert_called_once_with({"id": 7}, job)
+
+    def test_start_raises_when_no_execution_was_started(
+        self, mock_client, mock_from_response, job
+    ):
+        unavailable = BackendUnavailableError("POST", "/executions")
+        mock_client._send_request.side_effect = [unavailable, {"count": 0}]
+
+        with pytest.raises(BackendUnavailableError) as e:
+            ExecutionApi()._start(job, args="--flag value")
+
+        assert e.value is unavailable
+        mock_from_response.assert_not_called()
 
 
 class TestJobApiLaunch:

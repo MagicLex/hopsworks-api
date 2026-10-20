@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     )
 
 from hopsworks_apigen import public
+from hopsworks_common.core import execution_api
 
 
 @public(
@@ -294,7 +295,7 @@ class JobApi:
         # args and application/json for logical-time params); without an explicit
         # Content-Type Jersey can't dispatch and returns 415.
         headers = {"content-type": "text/plain"}
-        _client._send_request("POST", path_params, headers=headers, data=args)
+        execution_api.ExecutionApi()._post_start(name, path_params, headers, args)
 
     @public
     @usage._method_logger

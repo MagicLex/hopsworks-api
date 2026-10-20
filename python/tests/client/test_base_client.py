@@ -14,13 +14,17 @@
 #   limitations under the License.
 #
 
+import itertools
+import logging
 import os
 import stat
 import threading
 
 import pytest
 import requests
+import urllib3
 from hopsworks_common.client import auth
+from hopsworks_common.client.exceptions import BackendUnavailableError
 from hsfs.client.base import Client
 from hsfs.client.exceptions import RestAPIError
 
@@ -243,3 +247,275 @@ class TestBaseClient:
             Client._replace_file(str(path), "content")
 
         assert list(tmp_path.iterdir()) == []
+
+
+def _response(status, content=b"", content_type="application/json"):
+    response = requests.Response()
+    response.status_code = status
+    response._content = content
+    response.headers["Content-Type"] = content_type
+    return response
+
+
+def _refused():
+    return requests.exceptions.ConnectionError(
+        urllib3.exceptions.MaxRetryError(
+            None,
+            "/hopsworks-api/api/project",
+            urllib3.exceptions.NewConnectionError(
+                "HTTPSConnection(host='hopsworks.example', port=443)",
+                "Failed to establish a new connection: [Errno 111] Connection refused",
+            ),
+        )
+    )
+
+
+_PAYARA_404 = (
+    b"<!DOCTYPE html><html><head><title>Payara Server  6.2025.4 #badassfish - Error report</title>"
+    b"</head><body><h1>HTTP Status 404 - Not Found</h1></body></html>"
+)
+
+
+class TestRetryWhileBackendUnavailable:
+    @pytest.fixture
+    def client(self, mocker):
+        mocker.patch("requests.sessions.Session.prepare_request")
+        mocker.patch("hopsworks_common.client.base.time.sleep")
+        client = Client()
+        client._connected = True
+        client._base_url = "https://hopsworks.example:443"
+        client._auth = auth.ApiKeyAuth("prefix.secret")
+        client._verify = False
+        client._session = requests.session()
+        return client
+
+    def _send(self, mocker, *outcomes):
+        return mocker.patch("requests.sessions.Session.send", side_effect=outcomes)
+
+    def test_connection_error_then_success(self, client, mocker):
+        send = self._send(mocker, _refused(), _response(200, b'{"id": 1}'))
+
+        # Refused before anything was sent, so even a non-idempotent POST is retried.
+        assert client._send_request(
+            "POST", ["project", 119, "jobs", "j", "executions"]
+        ) == {"id": 1}
+        assert send.call_count == 2
+
+    def test_503_on_get_is_retried(self, client, mocker):
+        send = self._send(mocker, _response(503), _response(503), _response(200, b"{}"))
+
+        assert client._send_request("GET", ["project", 119]) == {}
+        assert send.call_count == 3
+
+    def test_503_on_non_idempotent_post_is_not_resent(self, client, mocker):
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        with pytest.raises(BackendUnavailableError) as e:
+            client._send_request(
+                "POST", ["project", 119, "featurestores", 67, "featuregroups"]
+            )
+
+        assert send.call_count == 1
+        assert str(e.value) == (
+            "Backend unavailable during POST /hopsworks-api/api/project/119/featurestores/67/featuregroups; "
+            "the request may or may not have been applied."
+        )
+        assert e.value.response.status_code == 503
+
+    def test_503_on_idempotent_post_is_retried(self, client, mocker):
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        client._send_request(
+            "POST",
+            [
+                "project",
+                119,
+                "featurestores",
+                67,
+                "storageconnectors",
+                "s3",
+                "credentials",
+                "validate",
+            ],
+        )
+
+        assert send.call_count == 2
+
+    def test_payara_html_404_on_get_is_retried(self, client, mocker):
+        send = self._send(
+            mocker, _response(404, _PAYARA_404, "text/html"), _response(200, b"{}")
+        )
+
+        assert client._send_request("GET", ["project", 119]) == {}
+        assert send.call_count == 2
+
+    def test_json_404_is_not_retried(self, client, mocker):
+        send = self._send(
+            mocker,
+            _response(404, b'{"errorCode": 130009, "errorMsg": "Job not found"}'),
+            _response(200, b"{}"),
+        )
+
+        with pytest.raises(RestAPIError) as e:
+            client._send_request("GET", ["project", 119, "jobs", "missing"])
+
+        assert send.call_count == 1
+        assert e.value.error_code == 130009
+
+    @changes_environ
+    def test_exhausted_budget_gives_a_clear_error(self, client, mocker, caplog):
+        os.environ[Client.RETRY_BUDGET_ENV] = "120"
+        mocker.patch(
+            "hopsworks_common.client.base.time.monotonic",
+            side_effect=itertools.count(0, 50),
+        )
+        send = mocker.patch(
+            "requests.sessions.Session.send", return_value=_response(503)
+        )
+
+        with (
+            caplog.at_level(logging.WARNING, logger="hopsworks_common.client.base"),
+            pytest.raises(BackendUnavailableError) as e,
+        ):
+            client._send_request("GET", ["project", 119])
+
+        assert send.call_count == 3
+        assert str(e.value) == (
+            "Backend unavailable during GET /hopsworks-api/api/project/119; "
+            "gave up after 3 tries in 120 s (HTTP 503)."
+        )
+        assert [r.getMessage() for r in caplog.records] == [
+            "Backend unavailable during GET /hopsworks-api/api/project/119 (HTTP 503); retrying for up to 120 s.",
+            "Hopsworks still unavailable, 20s left",
+            "Backend unavailable during GET /hopsworks-api/api/project/119: gave up after 3 tries in 120 s (HTTP 503).",
+        ]
+
+    @changes_environ
+    def test_one_still_unavailable_line_per_minute(self, client, mocker, caplog):
+        os.environ[Client.RETRY_BUDGET_ENV] = "150"
+        mocker.patch(
+            "hopsworks_common.client.base.time.monotonic",
+            side_effect=itertools.count(0, 25),
+        )
+        mocker.patch("requests.sessions.Session.send", return_value=_response(503))
+
+        with (
+            caplog.at_level(logging.WARNING, logger="hopsworks_common.client.base"),
+            pytest.raises(BackendUnavailableError),
+        ):
+            client._send_request("GET", ["project", 119])
+
+        assert [
+            r.getMessage()
+            for r in caplog.records
+            if r.getMessage().startswith("Hopsworks still unavailable")
+        ] == [
+            "Hopsworks still unavailable, 75s left",
+            "Hopsworks still unavailable, 25s left",
+        ]
+
+    def test_a_long_stall_gives_one_still_unavailable_line(
+        self, client, mocker, caplog
+    ):
+        mocker.patch(
+            "hopsworks_common.client.base.time.monotonic",
+            side_effect=[0, 5, 200, 201, 202, 250],
+        )
+        self._send(mocker, *[_response(503)] * 5, _response(200, b"{}"))
+
+        with caplog.at_level(logging.WARNING, logger="hopsworks_common.client.base"):
+            client._send_request("GET", ["project", 119])
+
+        assert [
+            r.getMessage()
+            for r in caplog.records
+            if r.getMessage().startswith("Hopsworks still unavailable")
+        ] == [
+            "Hopsworks still unavailable, 400s left",
+            "Hopsworks still unavailable, 350s left",
+        ]
+
+    def test_a_call_with_its_own_timeout_is_sent_once(self, client, mocker):
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        with pytest.raises(RestAPIError) as e:
+            client._send_request("GET", ["project", 119], timeout=5)
+
+        assert send.call_count == 1
+        assert e.value.response.status_code == 503
+
+    def test_a_read_timeout_with_its_own_timeout_is_raised_as_it_is(self, client, mocker):
+        send = self._send(
+            mocker, requests.exceptions.ReadTimeout(), _response(200, b"{}")
+        )
+
+        with pytest.raises(requests.exceptions.ReadTimeout):
+            client._send_request("POST", ["project", 119, "metastoresync"], timeout=60)
+
+        assert send.call_count == 1
+
+    def test_read_timeout_on_get_is_retried(self, client, mocker):
+        send = self._send(
+            mocker, requests.exceptions.ReadTimeout(), _response(200, b"{}")
+        )
+
+        assert client._send_request("GET", ["project", 119]) == {}
+        assert send.call_count == 2
+
+    def test_read_timeout_on_non_idempotent_post_is_not_resent(self, client, mocker):
+        send = self._send(
+            mocker, requests.exceptions.ReadTimeout(), _response(200, b"{}")
+        )
+
+        with pytest.raises(BackendUnavailableError) as e:
+            client._send_request(
+                "POST", ["project", 119, "featurestores", 67, "featuregroups"]
+            )
+
+        assert send.call_count == 1
+        assert isinstance(e.value.__cause__, requests.exceptions.ReadTimeout)
+
+    @changes_environ
+    def test_bad_budget_names_the_variable_and_the_value(self, client, mocker):
+        os.environ[Client.RETRY_BUDGET_ENV] = "2m"
+        send = self._send(mocker, _response(200, b"{}"))
+
+        with pytest.raises(ValueError) as e:
+            client._send_request("GET", ["project", 119])
+
+        assert str(e.value) == (
+            "HOPSWORKS_REQUEST_RETRY_SECONDS must be a whole number of seconds, got '2m'."
+        )
+        assert send.call_count == 0
+
+    def test_one_log_line_when_a_series_starts_and_one_when_it_ends(
+        self, client, mocker, caplog
+    ):
+        self._send(
+            mocker,
+            _refused(),
+            _response(502),
+            _response(504),
+            _response(503),
+            _response(200, b"{}"),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="hopsworks_common.client.base"):
+            client._send_request("GET", ["project", 119])
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Backend unavailable during GET /hopsworks-api/api/project/119 "
+            "(NewConnectionError: HTTPSConnection(host='hopsworks.example', port=443): "
+            "Failed to establish a new connection: [Errno 111] Connection refused); retrying for up to 600 s.",
+            "Backend unavailable during GET /hopsworks-api/api/project/119: the backend answered after 5 tries.",
+        ]
+
+    @changes_environ
+    def test_zero_budget_turns_retrying_off(self, client, mocker):
+        os.environ[Client.RETRY_BUDGET_ENV] = "0"
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        with pytest.raises(RestAPIError):
+            client._send_request("GET", ["project", 119])
+
+        assert send.call_count == 1

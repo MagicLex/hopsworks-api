@@ -15,10 +15,11 @@
 #
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from hopsworks_apigen import also_available_as
 from hopsworks_common import client, execution
+from hopsworks_common.client.exceptions import BackendUnavailableError
 from hopsworks_common.core import execution_pod_log
 
 
@@ -55,8 +56,7 @@ class ExecutionApi:
             # Content-Type Jersey can't dispatch and returns 415.
             headers = {"content-type": "text/plain"}
             return execution.Execution.from_response_json(
-                _client._send_request("POST", path_params, headers=headers, data=args),
-                job,
+                self._post_start(job.name, path_params, headers, args), job
             )
 
         # Merge start/end_time into envVars if supplied separately; the backend treats the
@@ -80,11 +80,37 @@ class ExecutionApi:
 
         headers = {"content-type": "application/json"}
         return execution.Execution.from_response_json(
-            _client._send_request(
-                "POST", path_params, headers=headers, data=json.dumps(body)
-            ),
-            job,
+            self._post_start(job.name, path_params, headers, json.dumps(body)), job
         )
+
+    def _post_start(self, job_name, path_params, headers, data):
+        """POST an execution start. If the backend was unavailable, find the execution the start may have created."""
+        _client = client._get_instance()
+        sent_at = datetime.now(timezone.utc)
+        try:
+            return _client._send_request(
+                "POST", path_params, headers=headers, data=data
+            )
+        except BackendUnavailableError:
+            started = self._started_since(job_name, sent_at)
+            if len(started) != 1:
+                raise
+            return started[0]
+
+    def _started_since(self, job_name: str, since: datetime) -> list:
+        """The executions of the job submitted after `since`, as the backend returns them."""
+        _client = client._get_instance()
+        path_params = ["project", _client._project_id, "jobs", job_name, "executions"]
+        # The backend stamps submission time with its own clock; the margin covers a small skew.
+        since = since - timedelta(seconds=10)
+        query_params = {
+            "sort_by": "submissiontime:desc",
+            "filter_by": "submissiontime_gt:"
+            + since.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            + "Z",
+        }
+        response = _client._send_request("GET", path_params, query_params=query_params)
+        return (response or {}).get("items") or []
 
     def _get(self, job, id):
         _client = client._get_instance()
