@@ -28,6 +28,10 @@ from datetime import datetime, timezone
 from hsfs.core import kafka_engine
 
 
+# Records a run materializes at most, unless write_options job_limit says otherwise.
+DEFAULT_JOB_LIMIT = 5000000
+
+
 def write_options_of(job_conf) -> dict:
     return job_conf.get("write_options", {}) or {}
 

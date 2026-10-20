@@ -24,6 +24,7 @@ from hsfs.core import (
 )
 from hsfs.statistics_config import StatisticsConfig
 from materialization_offsets import (
+    DEFAULT_JOB_LIMIT,
     _build_offsets,
     _offsets_since_creation,
     _reconcile_offsets,
@@ -466,10 +467,8 @@ def offline_fg_materialization(
     )
 
     # limit the number of records ingested
-    # default limit is 5M
-    limit = 5000000
     write_options = write_options_of(job_conf)
-    limit = int(write_options.get("job_limit", limit))
+    limit = int(write_options.get("job_limit", DEFAULT_JOB_LIMIT))
     filtered_df = filtered_df.limit(limit)
 
     # deserialize dataframe so that it can be properly saved
