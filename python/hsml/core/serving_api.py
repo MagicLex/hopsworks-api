@@ -304,6 +304,8 @@ class ServingApi:
                 query_params=query_params,
                 headers=headers,
                 data=deployment_instance.json(),
+                # newVersion stores a new deployment version on each PUT, so it is sent once.
+                retry_while_unavailable=not new_version,
             )
         )
         deployment_instance.model_registry_id = _client._project_id

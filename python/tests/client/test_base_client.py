@@ -25,8 +25,12 @@ import requests
 import urllib3
 from hopsworks_common.client import auth
 from hopsworks_common.client.exceptions import BackendUnavailableError
+from hopsworks_common.core import factory_api
+from hopsworks_common.core.users_api import UsersApi
 from hsfs.client.base import Client
 from hsfs.client.exceptions import RestAPIError
+from hsfs.core.validation_report_api import ValidationReportApi
+from hsml.core import serving_api
 
 from tests.util import changes_environ
 
@@ -444,7 +448,9 @@ class TestRetryWhileBackendUnavailable:
         assert send.call_count == 1
         assert e.value.response.status_code == 503
 
-    def test_a_read_timeout_with_its_own_timeout_is_raised_as_it_is(self, client, mocker):
+    def test_a_read_timeout_with_its_own_timeout_is_raised_as_it_is(
+        self, client, mocker
+    ):
         send = self._send(
             mocker, requests.exceptions.ReadTimeout(), _response(200, b"{}")
         )
@@ -519,3 +525,68 @@ class TestRetryWhileBackendUnavailable:
             client._send_request("GET", ["project", 119])
 
         assert send.call_count == 1
+
+    @pytest.fixture
+    def project_client(self, client, mocker):
+        client._project_id = 119
+        client._project_name = "proj"
+        mocker.patch("hopsworks_common.client._get_instance", return_value=client)
+        mocker.patch("hsml.core.serving_api.client._get_instance", return_value=client)
+        return client
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            pytest.param(
+                lambda: UsersApi().resend_confirmation_email(42), id="resend-email"
+            ),
+            pytest.param(lambda: UsersApi().activate_user(42), id="activate-user"),
+            pytest.param(lambda: UsersApi().reject_user(42), id="reject-user"),
+            pytest.param(
+                lambda: factory_api._update("etl", "name: etl\n"),
+                id="factory-new-version",
+            ),
+        ],
+    )
+    def test_a_503_on_a_put_with_side_effects_is_sent_once(
+        self, project_client, mocker, call
+    ):
+        """These PUTs send an email or store a new version, so a resend would repeat it."""
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        with pytest.raises(RestAPIError) as e:
+            call()
+
+        assert e.value.response.status_code == 503
+        assert send.call_count == 1
+
+    def test_a_503_on_a_validation_report_is_sent_once(self, project_client, mocker):
+        """Each PUT stores a new report and triggers its alerts."""
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+        api = ValidationReportApi(feature_store_id=67, feature_group_id=13)
+        mocker.patch.object(api._variable_api, "_get_version", return_value="4.2.0")
+
+        with pytest.raises(RestAPIError):
+            api._create(mocker.Mock(json=lambda: "{}"))
+
+        assert send.call_count == 1
+
+    def test_a_503_on_a_new_deployment_version_is_sent_once(
+        self, project_client, mocker
+    ):
+        """A PUT with newVersion stores a new deployment version each time."""
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        with pytest.raises(RestAPIError):
+            serving_api.ServingApi()._put(
+                mocker.Mock(json=lambda: "{}"), new_version=True
+            )
+
+        assert send.call_count == 1
+
+    def test_a_503_on_a_deployment_edit_is_retried(self, project_client, mocker):
+        send = self._send(mocker, _response(503), _response(200, b"{}"))
+
+        serving_api.ServingApi()._put(mocker.Mock(json=lambda: "{}"))
+
+        assert send.call_count == 2
