@@ -2171,7 +2171,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        mocker.patch.dict(sys.modules, {"deltalake": fake_deltalake})
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2198,7 +2198,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        mocker.patch.dict(sys.modules, {"deltalake": fake_deltalake})
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2224,7 +2224,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        mocker.patch.dict(sys.modules, {"deltalake": fake_deltalake})
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2257,7 +2257,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        mocker.patch.dict(sys.modules, {"deltalake": fake_deltalake})
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
