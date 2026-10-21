@@ -246,7 +246,6 @@ class TestEnvironmentEngine:
 
         assert mock_client._send_request.call_args.kwargs["timeout"] == 30
 
-
     def test_a_timed_out_poll_through_the_client_is_not_retried_by_it(self, mocker):
         """Each poll carries its own timeout, so the client sends it once and the loop's deadline decides."""
         from hsfs.client.base import Client
@@ -256,9 +255,7 @@ class TestEnvironmentEngine:
         mocker.patch("requests.sessions.Session.prepare_request")
         done = requests.Response()
         done.status_code = 200
-        done._content = (
-            b'{"channel": "pip", "packageSource": "PIP", "library": "matplotlib", "version": "3.1.3"}'
-        )
+        done._content = b'{"channel": "pip", "packageSource": "PIP", "library": "matplotlib", "version": "3.1.3"}'
         done.headers["Content-Type"] = "application/json"
         send = mocker.patch(
             "requests.sessions.Session.send",
