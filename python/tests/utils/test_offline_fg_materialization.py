@@ -248,6 +248,44 @@ class TestDeltaTable:
         )
         assert job._merge_target_bytes(uri, None, ["flag", "day"], nothing) == 0
 
+    def test_merge_counts_the_decoded_size_of_its_files(self, job, tmp_path):
+        import pyarrow.parquet as pq
+        from deltalake import DeltaTable, write_deltalake
+
+        # A column that compresses well: the files are much smaller on disk than in memory.
+        stored = pa.table(
+            {
+                "id": list(range(20000)),
+                "p": [f"{i:08d}" + "a" * 120 for i in range(20000)],
+            }
+        )
+        uri = str(tmp_path / "table")
+        write_deltalake(uri, stored)
+        on_disk = sum(
+            pa.record_batch(DeltaTable(uri).get_add_actions(flatten=True))
+            .column("size_bytes")
+            .to_pylist()
+        )
+        decoded = sum(
+            pq.ParquetFile(path).metadata.row_group(i).column(j).total_uncompressed_size
+            for path in (tmp_path / "table").glob("*.parquet")
+            for i in range(pq.ParquetFile(path).metadata.num_row_groups)
+            for j in range(pq.ParquetFile(path).metadata.num_columns)
+        )
+        assert decoded > 4 * on_disk
+        assert job._merge_target_bytes(uri, None, [], stored.slice(0, 1)) == decoded
+
+    def test_the_merge_size_is_left_in_the_termination_message(
+        self, job, tmp_path, monkeypatch
+    ):
+        message = tmp_path / "termination-log"
+        monkeypatch.setattr(job, "TERMINATION_LOG", str(message))
+        job._report_merge_bytes(9, 123)
+        assert not message.exists(), "written only where Kubernetes provides the file"
+        message.write_text("")
+        job._report_merge_bytes(9, 123)
+        assert message.read_text() == "feature group 9, merge of 123 bytes uncompressed"
+
 
 class TestRowBytes:
     def test_row_sizes_add_up_to_the_arrow_table(self, job):

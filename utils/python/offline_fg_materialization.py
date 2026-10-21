@@ -43,13 +43,14 @@ import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import hopsworks
 import polars as pl
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.fs as pafs
+import pyarrow.parquet as pq
 from confluent_kafka import (
     OFFSET_BEGINNING,
     Consumer,
@@ -75,6 +76,8 @@ ROWS_PER_BATCH = 10000
 POLL_SECONDS = 1.0
 # A range whose partitions all stay silent this long has a broker problem, not a slow topic.
 STALL_SECONDS = 300
+# Where Kubernetes reads a container's termination message by default.
+TERMINATION_LOG = "/dev/termination-log"
 
 hopsfs = pafs.HadoopFileSystem("default", user=os.environ["HADOOP_USER_NAME"])
 
@@ -396,7 +399,11 @@ def _committed_version(table_uri: str, storage_options, app_id: str) -> int | No
 def _merge_target_bytes(
     table_uri: str, storage_options, partition_key, table: pa.Table
 ) -> int:
-    """Bytes of the files a merge of `table` reads, from the table's add actions pruned as the merge prunes."""
+    """Decoded bytes of the files a merge of `table` reads, from the table's add actions pruned as the merge prunes.
+
+    delta-rs decodes those files in memory, so they are counted by the uncompressed sizes in their Parquet
+    footers, not by their size on disk.
+    """
     try:
         delta_table = DeltaTable(table_uri, storage_options=storage_options)
     except TableNotFoundError:
@@ -411,7 +418,36 @@ def _merge_target_bytes(
         # which may differ from the chunk's, such as a timestamp with a time zone in a table Spark created.
         values = pc.unique(table.column(column)).cast(files.type)
         keep = pc.and_(keep, pc.is_in(files, value_set=values))
-    return pc.sum(actions.column("size_bytes").filter(keep)).as_py() or 0
+    root = _path(table_uri).rstrip("/")
+    # Add action paths are relative URIs, with the partition values percent-encoded.
+    return sum(
+        _uncompressed_bytes(f"{root}/{unquote(path)}")
+        for path in actions.column("path").filter(keep).to_pylist()
+    )
+
+
+def _uncompressed_bytes(path: str) -> int:
+    """The uncompressed size of a Parquet file's column chunks, read from its footer alone."""
+    with hopsfs.open_input_file(path) as f:
+        metadata = pq.read_metadata(f)
+    return sum(
+        metadata.row_group(i).column(j).total_uncompressed_size
+        for i in range(metadata.num_row_groups)
+        for j in range(metadata.num_columns)
+    )
+
+
+def _report_merge_bytes(feature_group_id, target_bytes: int) -> None:
+    """Leave the size of the merge about to run in the container's termination message.
+
+    Kubernetes reads that file whatever ends the container, an OOM kill included, and the jobs monitor
+    reports it when the merges of a feature group are OOM killed twice in a row.
+    """
+    if os.path.exists(TERMINATION_LOG):
+        with open(TERMINATION_LOG, "w") as f:
+            f.write(
+                f"feature group {feature_group_id}, merge of {target_bytes} bytes uncompressed"
+            )
 
 
 @dataclass
@@ -425,6 +461,7 @@ class _Target:
     app_id: str
     partition_key: list
     insert: Callable[[pa.Table, dict], None]
+    feature_group_id: int | None = None
 
     @property
     def offset_location(self) -> str:
@@ -607,6 +644,7 @@ def _commit(
             " leaving the rest to Spark"
         )
         return False
+    _report_merge_bytes(target.feature_group_id, target_bytes)
     # No transaction fence on a merge: on the primary key, event time and partition key it is idempotent,
     # so a rerun after a commit whose offsets were never saved rewrites the same rows.
     target.insert(table, write_options)
@@ -638,6 +676,7 @@ def offline_fg_materialization(
         app_id=f"hopsworks_feature_log_materialization_{entity.id}",
         partition_key=entity.partition_key,
         insert=lambda table, options: _insert(entity, table, options),
+        feature_group_id=entity.id,
     )
     pending_offsets = _pending_offsets(
         location, target.offset_location + "_pending", target.pending_location
