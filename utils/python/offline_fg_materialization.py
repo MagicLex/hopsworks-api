@@ -40,6 +40,7 @@ import sys
 import time
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Callable
@@ -76,6 +77,8 @@ ROWS_PER_BATCH = 10000
 POLL_SECONDS = 1.0
 # A range whose partitions all stay silent this long has a broker problem, not a slow topic.
 STALL_SECONDS = 300
+# Footers are small: the reads wait on the file system, a few at a time.
+FOOTER_READERS = 8
 # Where Kubernetes reads a container's termination message by default.
 TERMINATION_LOG = "/dev/termination-log"
 
@@ -420,16 +423,25 @@ def _merge_target_bytes(
         keep = pc.and_(keep, pc.is_in(files, value_set=values))
     root = _path(table_uri).rstrip("/")
     # Add action paths are relative URIs, with the partition values percent-encoded.
-    return sum(
-        _uncompressed_bytes(f"{root}/{unquote(path)}")
+    paths = [
+        f"{root}/{unquote(path)}"
         for path in actions.column("path").filter(keep).to_pylist()
-    )
+    ]
+    with ThreadPoolExecutor(FOOTER_READERS) as pool:
+        return sum(pool.map(_uncompressed_bytes, paths))
+
+
+class _FooterUnreadable(Exception):
+    pass
 
 
 def _uncompressed_bytes(path: str) -> int:
     """The uncompressed size of a Parquet file's column chunks, read from its footer alone."""
-    with hopsfs.open_input_file(path) as f:
-        metadata = pq.read_metadata(f)
+    try:
+        with hopsfs.open_input_file(path) as f:
+            metadata = pq.read_metadata(f)
+    except (OSError, pa.ArrowException) as e:
+        raise _FooterUnreadable(f"{path}: {e}") from e
     return sum(
         metadata.row_group(i).column(j).total_uncompressed_size
         for i in range(metadata.num_row_groups)
@@ -437,17 +449,18 @@ def _uncompressed_bytes(path: str) -> int:
     )
 
 
-def _report_merge_bytes(feature_group_id, target_bytes: int) -> None:
-    """Leave the size of the merge about to run in the container's termination message.
+def _report_merge_bytes(target_bytes: int) -> None:
+    """Leave the size of the merge about to run as the container's termination message.
 
     Kubernetes reads that file whatever ends the container, an OOM kill included, and the jobs monitor
-    reports it when the merges of a feature group are OOM killed twice in a row.
+    reports it when the merges of a feature group are OOM killed twice in a row. The report is best effort.
     """
-    if os.path.exists(TERMINATION_LOG):
-        with open(TERMINATION_LOG, "w") as f:
-            f.write(
-                f"feature group {feature_group_id}, merge of {target_bytes} bytes uncompressed"
-            )
+    try:
+        if os.path.exists(TERMINATION_LOG):
+            with open(TERMINATION_LOG, "w") as f:
+                f.write(str(target_bytes))
+    except OSError as e:
+        print(f"Could not write the termination message: {e}")
 
 
 @dataclass
@@ -461,7 +474,6 @@ class _Target:
     app_id: str
     partition_key: list
     insert: Callable[[pa.Table, dict], None]
-    feature_group_id: int | None = None
 
     @property
     def offset_location(self) -> str:
@@ -635,16 +647,23 @@ def _commit(
         fence = {"commit_properties": {"app_id": target.app_id, "version": version}}
         target.insert(table, {**write_options, **fence})
         return True
-    target_bytes = _merge_target_bytes(
-        target.table_uri, target.storage_options, target.partition_key, table
-    )
+    try:
+        target_bytes = _merge_target_bytes(
+            target.table_uri, target.storage_options, target.partition_key, table
+        )
+    except _FooterUnreadable as e:
+        # Spark reads the table on its own, and its run never comes back to Python.
+        print(
+            f"Could not size the merge from a Parquet footer, {e}; leaving the rest to Spark"
+        )
+        return False
     if target_bytes > max_merge_bytes:
         print(
             f"The merge would read {target_bytes} bytes of the table, more than {max_merge_bytes};"
             " leaving the rest to Spark"
         )
         return False
-    _report_merge_bytes(target.feature_group_id, target_bytes)
+    _report_merge_bytes(target_bytes)
     # No transaction fence on a merge: on the primary key, event time and partition key it is idempotent,
     # so a rerun after a commit whose offsets were never saved rewrites the same rows.
     target.insert(table, write_options)
@@ -676,7 +695,6 @@ def offline_fg_materialization(
         app_id=f"hopsworks_feature_log_materialization_{entity.id}",
         partition_key=entity.partition_key,
         insert=lambda table, options: _insert(entity, table, options),
-        feature_group_id=entity.id,
     )
     pending_offsets = _pending_offsets(
         location, target.offset_location + "_pending", target.pending_location

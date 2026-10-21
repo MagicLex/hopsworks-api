@@ -280,11 +280,41 @@ class TestDeltaTable:
     ):
         message = tmp_path / "termination-log"
         monkeypatch.setattr(job, "TERMINATION_LOG", str(message))
-        job._report_merge_bytes(9, 123)
+        job._report_merge_bytes(123)
         assert not message.exists(), "written only where Kubernetes provides the file"
         message.write_text("")
-        job._report_merge_bytes(9, 123)
-        assert message.read_text() == "feature group 9, merge of 123 bytes uncompressed"
+        job._report_merge_bytes(123)
+        assert message.read_text() == "123"
+
+    def test_a_failed_termination_message_does_not_fail_the_run(
+        self, job, tmp_path, monkeypatch
+    ):
+        # A directory exists but cannot be opened for writing.
+        monkeypatch.setattr(job, "TERMINATION_LOG", str(tmp_path))
+        job._report_merge_bytes(123)
+
+    def test_an_unreadable_footer_leaves_the_merge_to_spark(self, job, tmp_path):
+        from deltalake import write_deltalake
+
+        stored = pa.table({"id": [1, 2], "p": ["a", "b"]})
+        location = str(tmp_path / "table")
+        write_deltalake(location, stored)
+        for path in (tmp_path / "table").glob("*.parquet"):
+            path.write_bytes(b"not parquet")
+        inserts = []
+        target = job._Target(
+            location=location,
+            table_uri=location,
+            storage_options=None,
+            pending_location=location + "_kafka_offsets_pending_1",
+            app_id="hopsworks_feature_log_materialization_1",
+            partition_key=[],
+            insert=lambda table, options: inserts.append(table),
+        )
+        assert not job._commit(
+            stored.slice(0, 1), {}, False, False, target, {}, 1 << 30
+        )
+        assert inserts == []
 
 
 class TestRowBytes:
