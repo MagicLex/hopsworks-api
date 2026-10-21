@@ -526,6 +526,22 @@ class TestRetryWhileBackendUnavailable:
 
         assert send.call_count == 1
 
+    def test_a_404_on_a_resent_delete_counts_as_done(self, client, mocker):
+        """The try that got the 503 may have deleted it before the answer was lost."""
+        send = self._send(mocker, _response(503), _response(404, b'{"errorCode": 1}'))
+
+        assert client._send_request("DELETE", ["project", 119, "jobs", "j"]) is None
+        assert send.call_count == 2
+
+    def test_a_404_on_the_first_delete_still_raises(self, client, mocker):
+        send = self._send(mocker, _response(404, b'{"errorCode": 1}'))
+
+        with pytest.raises(RestAPIError) as e:
+            client._send_request("DELETE", ["project", 119, "jobs", "j"])
+
+        assert e.value.response.status_code == 404
+        assert send.call_count == 1
+
     @pytest.fixture
     def project_client(self, client, mocker):
         client._project_id = 119

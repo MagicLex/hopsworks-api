@@ -195,6 +195,8 @@ class Client:
             if not session_cache.used():
                 raise
             response = None
+        if response is _APPLIED_BEFORE:
+            return None
         if session_cache.used() and _session_went_stale(response):
             # A session an earlier process cached is refused: log in again and repeat the call once.
             # Refused this way the server did nothing, so a write repeats safely.
@@ -242,6 +244,7 @@ class Client:
         idempotent; any other raises `BackendUnavailableError`, so a write is never applied twice.
         A call with its own `timeout`, with `retry_while_unavailable` off, or from a client with
         `RETRY_WHILE_UNAVAILABLE` off, is sent once, as without retrying.
+        A DELETE resent after a 502/503/504 that gets a 404 counts as done: returns `_APPLIED_BEFORE`.
         """
         budget = _retry_budget(
             self.RETRY_BUDGET_ENV,
@@ -261,6 +264,7 @@ class Client:
         start = time.monotonic()
         next_report = self.RETRY_REPORT_EVERY
         tries = 0
+        gateway_error_before = False
         while True:
             tries += 1
             try:
@@ -286,6 +290,14 @@ class Client:
                 reason = f"{type(cause).__name__}: {cause}"
                 error, response = e, None
             else:
+                if (
+                    gateway_error_before
+                    and method == "DELETE"
+                    and response.status_code == 404
+                ):
+                    # The try that got the gateway error deleted it before the answer was lost.
+                    _log_series_end(tries, method, path, "already deleted")
+                    return _APPLIED_BEFORE
                 if budget <= 0 or not _backend_unavailable(response):
                     _log_series_end(tries, method, path, "the backend answered")
                     return response
@@ -298,6 +310,7 @@ class Client:
                     )
                 reason = f"HTTP {response.status_code}"
                 error = None
+                gateway_error_before |= response.status_code in (502, 503, 504)
 
             elapsed = time.monotonic() - start
             remaining = budget - elapsed
@@ -629,6 +642,9 @@ def _session_went_stale(response) -> bool:
             return False
     return False
 
+
+# Returned by `_send_until_available` for a resent call an earlier try already applied.
+_APPLIED_BEFORE = object()
 
 # POSTs that only read, so sending one twice changes nothing. Any other POST is never resent once the
 # backend may have received it. Matched against the end of the request path.
