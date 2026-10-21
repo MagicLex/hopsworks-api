@@ -533,6 +533,18 @@ class TestRetryWhileBackendUnavailable:
         assert client._send_request("DELETE", ["project", 119, "jobs", "j"]) is None
         assert send.call_count == 2
 
+    def test_a_payara_404_on_a_resent_delete_is_retried(self, client, mocker):
+        """Payara's HTML 404 during a redeploy is not the backend saying it is gone."""
+        send = self._send(
+            mocker,
+            _response(503),
+            _response(404, _PAYARA_404, "text/html"),
+            _response(204),
+        )
+
+        assert client._send_request("DELETE", ["project", 119, "jobs", "j"]) is None
+        assert send.call_count == 3
+
     def test_a_404_on_the_first_delete_still_raises(self, client, mocker):
         send = self._send(mocker, _response(404, b'{"errorCode": 1}'))
 

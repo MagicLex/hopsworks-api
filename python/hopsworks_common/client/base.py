@@ -294,6 +294,7 @@ class Client:
                     gateway_error_before
                     and method == "DELETE"
                     and response.status_code == 404
+                    and not _backend_unavailable(response)
                 ):
                     # The try that got the gateway error deleted it before the answer was lost.
                     _log_series_end(tries, method, path, "already deleted")
