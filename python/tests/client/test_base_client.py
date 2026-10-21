@@ -560,6 +560,19 @@ class TestRetryWhileBackendUnavailable:
         assert e.value.response.status_code == 503
         assert send.call_count == 1
 
+    def test_a_read_timeout_on_the_resend_email_put_is_sent_once(
+        self, project_client, mocker
+    ):
+        """The backend may have sent the email before the read timed out."""
+        send = self._send(
+            mocker, requests.exceptions.ReadTimeout(), _response(200, b"{}")
+        )
+
+        with pytest.raises(requests.exceptions.ReadTimeout):
+            UsersApi().resend_confirmation_email(42)
+
+        assert send.call_count == 1
+
     def test_a_503_on_a_validation_report_is_sent_once(self, project_client, mocker):
         """Each PUT stores a new report and triggers its alerts."""
         send = self._send(mocker, _response(503), _response(200, b"{}"))
