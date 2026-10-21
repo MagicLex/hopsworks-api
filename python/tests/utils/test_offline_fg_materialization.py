@@ -286,6 +286,31 @@ class TestDeltaTable:
         job._report_merge_bytes(123)
         assert message.read_text() == "123"
 
+    def test_the_first_unreadable_footer_stops_the_footer_reads(
+        self, job, tmp_path, monkeypatch
+    ):
+        import threading
+        import time
+
+        from deltalake import write_deltalake
+
+        uri = str(tmp_path / "table")
+        stored = pa.table({"id": [1]})
+        for _ in range(40):
+            write_deltalake(uri, stored, mode="append")
+        reads, lock = [], threading.Lock()
+
+        def unreadable(path):
+            with lock:
+                reads.append(path)
+            time.sleep(0.05)
+            raise job._FooterUnreadable(path)
+
+        monkeypatch.setattr(job, "_uncompressed_bytes", unreadable)
+        with pytest.raises(job._FooterUnreadable):
+            job._merge_target_bytes(uri, None, [], stored)
+        assert len(reads) < 40
+
     def test_a_failed_termination_message_does_not_fail_the_run(
         self, job, tmp_path, monkeypatch
     ):
