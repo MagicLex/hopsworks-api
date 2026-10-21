@@ -545,6 +545,34 @@ class TestRetryWhileBackendUnavailable:
         assert client._send_request("DELETE", ["project", 119, "jobs", "j"]) is None
         assert send.call_count == 3
 
+    @pytest.mark.parametrize(
+        "lost",
+        [
+            pytest.param(requests.exceptions.ReadTimeout(), id="read-timeout"),
+            pytest.param(requests.exceptions.ConnectionError(), id="dropped"),
+        ],
+    )
+    def test_a_404_on_a_delete_resent_after_a_lost_answer_counts_as_done(
+        self, client, mocker, lost
+    ):
+        send = self._send(mocker, lost, _response(404, b'{"errorCode": 1}'))
+
+        assert client._send_request("DELETE", ["project", 119, "jobs", "j"]) is None
+        assert send.call_count == 2
+
+    def test_a_payara_404_on_a_delete_resent_after_a_read_timeout_is_retried(
+        self, client, mocker
+    ):
+        send = self._send(
+            mocker,
+            requests.exceptions.ReadTimeout(),
+            _response(404, _PAYARA_404, "text/html"),
+            _response(204),
+        )
+
+        assert client._send_request("DELETE", ["project", 119, "jobs", "j"]) is None
+        assert send.call_count == 3
+
     def test_a_404_on_the_first_delete_still_raises(self, client, mocker):
         send = self._send(mocker, _response(404, b'{"errorCode": 1}'))
 

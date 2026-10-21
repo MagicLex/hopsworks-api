@@ -244,7 +244,8 @@ class Client:
         idempotent; any other raises `BackendUnavailableError`, so a write is never applied twice.
         A call with its own `timeout`, with `retry_while_unavailable` off, or from a client with
         `RETRY_WHILE_UNAVAILABLE` off, is sent once, as without retrying.
-        A DELETE resent after a 502/503/504 that gets a 404 counts as done: returns `_APPLIED_BEFORE`.
+        A DELETE resent after a try the backend may have applied (a 502/503/504, a dropped connection,
+        a read timeout) that gets the backend's own 404 counts as done: returns `_APPLIED_BEFORE`.
         """
         budget = _retry_budget(
             self.RETRY_BUDGET_ENV,
@@ -264,7 +265,7 @@ class Client:
         start = time.monotonic()
         next_report = self.RETRY_REPORT_EVERY
         tries = 0
-        gateway_error_before = False
+        maybe_applied_before = False
         while True:
             tries += 1
             try:
@@ -289,14 +290,15 @@ class Client:
                 cause = getattr(e.args[0] if e.args else None, "reason", None) or e
                 reason = f"{type(cause).__name__}: {cause}"
                 error, response = e, None
+                maybe_applied_before |= method == "DELETE" and not _never_sent(e)
             else:
                 if (
-                    gateway_error_before
+                    maybe_applied_before
                     and method == "DELETE"
                     and response.status_code == 404
                     and not _backend_unavailable(response)
                 ):
-                    # The try that got the gateway error deleted it before the answer was lost.
+                    # An earlier try deleted it before its answer was lost.
                     _log_series_end(tries, method, path, "already deleted")
                     return _APPLIED_BEFORE
                 if budget <= 0 or not _backend_unavailable(response):
@@ -311,7 +313,7 @@ class Client:
                     )
                 reason = f"HTTP {response.status_code}"
                 error = None
-                gateway_error_before |= response.status_code in (502, 503, 504)
+                maybe_applied_before |= response.status_code in (502, 503, 504)
 
             elapsed = time.monotonic() - start
             remaining = budget - elapsed
