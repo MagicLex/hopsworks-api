@@ -22,7 +22,10 @@ hold under 500 MB in all (`Offline size` in `hops fg info <fg>`): read, split, f
 there, in seconds. A Hopsworks job only with `job: yes` (the user asked for a pipeline, a job or a
 schedule), or data over that size: then `train.py` runs only as the job, never in the sandbox
 first, `hops job deploy <name>-train models/<name>/train.py --env pandas-training-pipeline --run
---wait --overwrite` (with `--cron` for a schedule); when the read or the fit runs out of memory, run the same program as a job. The same
+--wait --new` (with `--cron` for a schedule). `--new` refuses a job of that name that exists: it
+is the user's, so stop with one line naming it, unless the prompt says this conversation made it
+(`touched: yes`, or Hopsable's line on earlier sub-agents names `<name>`); then deploy again
+without `--new`; when the read or the fit runs out of memory, run the same program as a job. The same
 program runs unchanged as a job, so it calls only what the job image's `hopsworks` library has; the
 sandbox may run a newer one, and an argument that works here can fail there. Print `[time] <step>
 <seconds>s` after the split, each fit, and the registration.

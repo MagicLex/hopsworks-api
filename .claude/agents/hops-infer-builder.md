@@ -57,9 +57,11 @@ or retrained here. Print `[time] <step> <seconds>s` after the read, the predicti
    scikit-learn and XGBoost; `pandas-inference-pipeline` runs deployments, not jobs):
 
    ```bash
-   hops job deploy <name>-score inference/<name>/score.py --env pandas-training-pipeline --overwrite
+   hops job deploy <name>-score inference/<name>/score.py --env pandas-training-pipeline --new
    hops job schedule set <name>-score '<quartz cron>'
    ```
+
+   `--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
    Arguments carry no spaces (`--day 2026-10-16`). A run you start waits with `--wait`, or
    `hops job wait <name>-score` for one already started; never poll `hops job history`.

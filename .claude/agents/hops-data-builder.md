@@ -35,8 +35,10 @@ runs unchanged as a job, so it calls only what the job image's `hopsworks` libra
 sandbox may run a newer one, and an argument that works here can fail there:
 
 ```bash
-hops job deploy <name>-data data/<name>/generate.py --env python-feature-pipeline --run --wait --overwrite
+hops job deploy <name>-data data/<name>/generate.py --env python-feature-pipeline --run --wait --new
 ```
+
+`--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
 ## Rows from a source (`source: <data source>`)
 

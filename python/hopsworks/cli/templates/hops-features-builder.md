@@ -41,9 +41,11 @@ the sandbox may run a newer one, and an argument that works here can fail there.
 4. **Schedule, only when `schedule` is given.** The same program, as a job:
 
    ```bash
-   hops job deploy <name>-features features/<name>/pipeline.py --env python-feature-pipeline --overwrite
+   hops job deploy <name>-features features/<name>/pipeline.py --env python-feature-pipeline --new
    hops job schedule set <name>-features '<quartz cron>'
    ```
+
+   `--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
    A run you start waits with `--wait`, or `hops job wait <name>-features` for one already
    started; never poll `hops job history`. Arguments carry no spaces.

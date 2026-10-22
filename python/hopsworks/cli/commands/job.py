@@ -13,7 +13,7 @@ import tempfile
 from typing import TYPE_CHECKING, Any
 
 import click
-from hopsworks.cli import output, session
+from hopsworks.cli import output, session, versions
 from hopsworks.cli.commands.alert import job_alert_group
 from hopsworks.cli.commands.files import makedirs
 
@@ -279,6 +279,12 @@ def job_create(
     show_default=True,
     help="Overwrite the uploaded script if it exists: a redeploy runs the new script.",
 )
+@click.option(
+    "--new",
+    "new",
+    is_flag=True,
+    help="Refuse when a job of that name exists, so a new job never replaces another one.",
+)
 @click.pass_context
 def job_deploy(
     ctx: click.Context,
@@ -292,6 +298,7 @@ def job_deploy(
     wait: bool,
     upload_dir: str | None,
     overwrite: bool,
+    new: bool,
 ) -> None:
     """Upload, configure, schedule and run a job in one step.
 
@@ -311,9 +318,22 @@ def job_deploy(
         wait: With `do_run`, block until the execution terminates.
         upload_dir: HopsFS directory for a local script upload.
         overwrite: Overwrite an existing uploaded script.
+        new: Refuse when a job of that name exists.
     """
     project = session.get_project(ctx)
     api = project.get_job_api()
+    if new:
+        try:
+            existing = api.get_job(name)
+        except Exception as exc:  # noqa: BLE001
+            if not versions.not_found(exc):  # JOB_NOT_FOUND is a 404
+                raise click.ClickException(f"Could not check job '{name}': {exc}") from exc
+            existing = None
+        if existing is not None:
+            raise click.ClickException(
+                f"Job '{name}' already exists: --new never replaces it. Deploy under "
+                "another name, or drop --new to update a job you made."
+            )
 
     # 1. Resolve the app path — upload when a local file was given.
     app_path = script

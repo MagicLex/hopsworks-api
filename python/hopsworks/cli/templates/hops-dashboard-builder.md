@@ -25,7 +25,8 @@ seconds; never call the Superset REST API with raw requests (its writes need the
 sets). The program lives at `~/dashboards/<slug>.py` in a terminal, `./dashboards/<slug>.py`
 otherwise, or at the `program` path the prompt gives; `--delete` and `--list` run the same way.
 Only when the SDK refuses to reach Superset from here, run it as a job instead:
-`hops job deploy <slug>-dashboard <program> --env python-feature-pipeline --overwrite --run --wait`.
+`hops job deploy <slug>-dashboard <program> --env python-feature-pipeline --new --run --wait`.
+`--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
 ## Actions
 
