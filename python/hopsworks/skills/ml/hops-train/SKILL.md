@@ -56,14 +56,17 @@ fv = fs.get_feature_view(name="my_fv", version=1)  # no FV yet? create one first
 # Two split methods. They are NOT interchangeable; pick by data size and
 # whether you need a reproducible, stored dataset.
 
-# A. In-memory (default for small/static data). Returns the six frames
-#    directly, no Spark and no files, and registers an in-memory training
-#    dataset version (metadata only): a model registered with feature_view=fv
-#    in the same process records it, and scoring reads it.
-X_train, X_val, X_test, y_train, y_val, y_test = fv.train_validation_test_split(
-    validation_size=0.15, test_size=0.15, statistics_config=False
-)
+# A. In-memory (default for small/static data): one read with the keys, no Spark and no files.
+#    It registers an in-memory training dataset version (metadata only), which a model
+#    registered with feature_view=fv in the same process records. split_by_key (below, copied
+#    whole into the program) keeps one entity's rows in one part, by a hash of its key: the
+#    same rows give the same parts on every read, so a notebook scores the same test rows later.
+X, y = fv.training_data(primary_key=True, statistics_config=False)
 td_version = fv.get_last_accessed_training_dataset()
+X_train, X_val, X_test, y_train, y_val, y_test = split_by_key(
+    X, y, key="order_id", drop=[*fv.primary_keys, "order_ts"]  # every key and the event time leave X
+)
+# Scoring later: fv.get_training_data(training_dataset_version=td_version, primary_key=True), then split_by_key.
 
 # B. Materialized + versioned, only when the user asks for a stored dataset:
 #    each create_* call starts a PySpark job (minutes). An ML system and the
@@ -79,7 +82,46 @@ td_version = fv.get_last_accessed_training_dataset()
 # )
 ```
 
-> The in-memory splits return frames, not a version: `train_validation_test_split()` six, `train_test_split()` four (`X_train, X_test, y_train, y_test`); `fv.get_last_accessed_training_dataset()` gives the version they registered. `create_*_split()` returns `(version, Job)`. Unpacking one as the other (`td_version, _ = fv.train_test_split(...)`) raises `ValueError: too many values to unpack`, and passing the `(version, Job)` tuple to `get_train_test_split` URL-encodes it into the path and 404s. Each in-memory call registers a new version, so split once per program. For a static dataset, prefer the in-memory split.
+```python
+# split_by_key: copy it whole into the program that splits and into the one that scores.
+import hashlib, re
+
+import pandas as pd
+
+
+def key_column(columns, key):
+    """The column of `key`: its own name, or the prefixed name a key the view leaves out comes
+    back with (`<project>_<fg>_<version>_<key>`). Exactly one, else an error naming them."""
+    found = [c for c in columns if c == key or re.fullmatch(rf".+_\d+_{re.escape(key)}", c)]
+    if len(found) != 1:
+        raise ValueError(f"key {key!r}: {len(found)} matching columns {found} among {list(columns)}")
+    return found[0]
+
+
+def key_bucket(value):
+    """0 to 99 from a key value; 1 and 1.0 (an id read as float) give one bucket, and a missing
+    key (None, NaN, pd.NA, NaT) one."""
+    if pd.isna(value):
+        value = "<none>"
+    elif hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return int(hashlib.sha256(str(value).encode()).hexdigest(), 16) % 100
+
+
+def split_by_key(X, y, key, drop=(), validation=15, test=15):
+    """70/15/15 by default, one entity's rows in one part. `drop`: the other keys and the
+    event time; each present one leaves X with the key, since ids and times are no features."""
+    part = X[key_column(X.columns, key)].map(key_bucket)
+    present = [k for k in dict.fromkeys([key, *drop]) if any(c == k or re.fullmatch(rf".+_\d+_{re.escape(k)}", c) for c in X.columns)]
+    X = X.drop(columns=[key_column(X.columns, k) for k in present])
+    tr, va = part < 100 - validation - test, (part >= 100 - validation - test) & (part < 100 - test)
+    te = part >= 100 - test
+    return X[tr], X[va], X[te], y[tr], y[va], y[te]
+```
+
+> The in-memory splits return frames, not a version: `train_validation_test_split()` six, `train_test_split()` four (`X_train, X_test, y_train, y_test`); `fv.get_last_accessed_training_dataset()` gives the version they registered. `create_*_split()` returns `(version, Job)`. Unpacking one as the other (`td_version, _ = fv.train_test_split(...)`) raises `ValueError: too many values to unpack`, and passing the `(version, Job)` tuple to `get_train_test_split` URL-encodes it into the path and 404s. Each in-memory call registers a new version, so split once per program. For a static dataset, prefer the in-memory split. The split is `split_by_key`, never `fv.train_validation_test_split()`: it keeps one entity's rows in one part, and the program that scores the model later splits the same rows the same way.
 
 Hints:
 - `get_train_test_split` only works on a dataset created BY a split call. A plain
@@ -103,6 +145,7 @@ Hints:
   They are leaky and break `fit` (a datetime column raises
   `DTypePromotionError: DateTime64 could not be promoted by Float64`).
   The clean fix is upstream: exclude them when you create the FV, with
+  `hops fv create <fv> --feature-group <fg>:<v> --except <pk>,<event_time>`,
   `fg.select_except([pk, event_time])` or
   `fg.select_all(include_primary_key=False, include_event_time=False)` (skill: hops-fv).
 - If you do pull keys/event time into a split (e.g. `get_train_test_split(primary_keys=True, event_time=True)`
@@ -218,14 +261,23 @@ first, with `--sweep <id>` and `--json`.
   argument a model records the view's last read, so runs registered after several reads all name
   the last one.
 - **The sweep is one tracked change**, so a watcher (the Hopsable Experiments preview) opens when
-  it starts and sees it end:
+  it starts and sees it end. That signal is a local line only the Hopsable sandbox writes; the
+  record is the runs in the registry, which a job or a notebook registers the same way. The
+  library a job or Jupyter runs may lack `events`, so the block runs without it:
 
   ```python
-  from hopsworks_common import events
+  import contextlib
+
+  try:
+      from hopsworks_common import events  # the live-preview signal, written in the Hopsable sandbox only
+  except ImportError:
+      events = None
 
   sweep_id = f"{name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
-  with events.tracked("experiment", "create", long=True, name=name) as sweep:
-      sweep.detail.update(sweep_id=sweep_id, candidates=len(candidates), metric=metric, metric_goal=goal)
+  tracked = events.tracked("experiment", "create", long=True, name=name) if events else contextlib.nullcontext()
+  with tracked as sweep:
+      if sweep:
+          sweep.detail.update(sweep_id=sweep_id, candidates=len(candidates), metric=metric, metric_goal=goal)
       ...  # the one split, then every fit and registration
   ```
 - **Each run registers** its metrics (`val_<metric>`, `test_<metric>`), a one-line `description=`
@@ -261,14 +313,33 @@ first, with `--sweep <id>` and `--json`.
 
   A multiclass label whose largest class holds over 40% of the rows selects on `val_macro_f1`;
   otherwise on the metric asked for.
-- **Done** when `hops td list <view>` shows one new training dataset version for the sweep,
-  `hops model runs <name> --sweep <id>` shows one row per finished candidate, each with that
-  version under TD.
+- **Done** when `hops model runs <name> --sweep <id>` shows one row per finished candidate, all
+  with the same version under TD.
 - **Report** the `hops model runs` table. When the best run's accuracy is within 2 points of the
   baseline, say so plainly, naming the class: "No better than always guessing `delivered`: these
   features carry no signal for `status`." Then the next step: class weights, another target, or
   more or real data. Name the runs as `hops model runs <name>` and the model's page in Hopsworks;
   never point to an "Experiments" view the reader may not have.
+
+## In a notebook
+
+A notebook is where the code runs; this skill is the contract. Training, a sweep or a model built
+in notebook cells (`hops notebook run`, **hops-notebook**) follows sections 3 and 4 and "Runs and
+sweeps" as a job would: the sweep in one `events.tracked("experiment", ...)`, each candidate a run
+with its metrics, `description=`, `run.json` and the charts in `images/`, and the chosen model
+registered. In a kernel, leave the matplotlib backend as it is (no `matplotlib.use("Agg")`, which
+blanks every later chart of the notebook) and close each chart after saving it. Data the
+notebook made itself, in no feature group, registers without
+`feature_view=` and `training_dataset_version=`, and its `run.json` leaves the version out.
+Check it from outside the kernel: `hops model runs <name>` (one row per run) and
+`hops model info <name>` (its `Images`). Then offer once per notebook, with no option marked
+"(Recommended)", to promote the training into a pipeline: the data in a feature group, a feature
+view, and the cells as `train.py` (section 5), which **hops-model-builder** writes.
+
+The other way: a model a pipeline or a builder trained opens in a notebook without training it
+again. Load it with `mr.get_model("<name>", version=<v>)` and `model.download()`, read its
+`run.json` and `images/`, and score the test part of the training dataset it records
+(`training_dataset_version` in `hops model info`); never fit it again in the notebook.
 
 ## 5. Run it as a job
 

@@ -205,6 +205,23 @@ def test_deployment_create_via_model_deploy(mock_project):
 
 
 @pytest.mark.parametrize(
+    ("args", "suggested"),
+    [
+        (["order_returns"], "orderreturns"),
+        (["m", "--name", "order-returns"], "orderreturns"),
+        (["m", "--name", "2024churn"], "m2024churn"),
+        (["m", "--name", "1-churn"], "m1churn"),
+    ],
+)
+def test_deployment_create_refuses_a_name_hopsworks_refuses(mock_project, args, suggested):
+    result = CliRunner().invoke(cli, ["deployment", "create", *args])
+    assert result.exit_code == 2
+    assert "a letter first, then letters and digits ([a-zA-Z][a-zA-Z0-9]*)" in result.output
+    assert f"--name {suggested}" in result.output
+    mock_project.get_model_registry.assert_not_called()
+
+
+@pytest.mark.parametrize(
     ("framework", "has_view", "args", "expected"),
     [
         ("SKLEARN", True, [], True),

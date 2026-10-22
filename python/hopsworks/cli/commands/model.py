@@ -71,7 +71,7 @@ def model_info(ctx: click.Context, name: str, version: int | None) -> None:
         raise click.ClickException(f"Model '{name}' not found.")
 
     if output.JSON_MODE:
-        output.print_json(_model_to_dict(model))
+        output.print_json({**_model_to_dict(model), "images": _images(project, model)})
         return
 
     rows = [
@@ -84,6 +84,7 @@ def model_info(ctx: click.Context, name: str, version: int | None) -> None:
         ["Metrics", _short_metrics(getattr(model, "training_metrics", {}) or {}, None)],
         ["Description", output.first_line(getattr(model, "description", ""))],
         ["Tags", output.format_mapping(output.read_tags(model))],
+        ["Images", ", ".join(_images(project, model)) or "-"],
     ]
     output.print_table(["FIELD", "VALUE"], rows)
 
@@ -183,8 +184,11 @@ def _runs(project: Any, models: list[Any]) -> list[dict[str, Any]]:
             response = dataset_api.read_content(f"{model.version_path}/Files/run.json")
             if response is not None:
                 run = json.loads(response.content)
-        except Exception:  # noqa: BLE001 - a version registered without run.json
-            run = {}
+        except Exception as exc:  # noqa: BLE001
+            if not versions.not_found(exc):  # a version registered without run.json has none
+                raise click.ClickException(
+                    f"The run.json of {model.name} v{model.version} could not be read: {exc}"
+                ) from exc
         return {
             **run,
             "version": model.version,
@@ -211,8 +215,8 @@ def _feature_view_label(model: Any) -> str:
     """The feature view the model was trained on, `name vN`, from its provenance; `-` without one."""
     try:
         view = model.get_feature_view(init=False)
-    except Exception:  # noqa: BLE001 - provenance is optional; a model may have none
-        return "-"
+    except Exception as exc:  # noqa: BLE001
+        return "-" if versions.not_found(exc) else f"could not be read: {exc}"
     return f"{view.name} v{view.version}" if view is not None else "-"
 
 
@@ -241,6 +245,20 @@ def _short_metrics(metrics: dict[str, Any], limit: int | None = 3) -> str:
         return "-"
     parts = [f"{k}={v}" for k, v in list(metrics.items())[:limit]]
     return ", ".join(parts)
+
+
+def _images(project: Any, model: Any) -> list[str]:
+    """The evaluation images the registry shows with the version: the files under its images/."""
+    try:
+        # save() puts the model directory's files under Files/.
+        paths = project.get_dataset_api().list(f"{model.version_path}/Files/images")
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):  # a version registered without images/
+            return []
+        raise click.ClickException(
+            f"Images of {model.name} v{model.version} could not be read: {exc}"
+        ) from exc
+    return sorted(p.rsplit("/", 1)[-1] for p in paths)
 
 
 def _model_to_dict(model: Any) -> dict[str, Any]:

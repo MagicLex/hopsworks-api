@@ -14,14 +14,15 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`, no predict
 **hops-online-inference** with `hops skills info hops-online-inference`, its "Default predictor
 (no script)" section first.
 
-**Already made?** `hops deployment info <name>`: when it shows `RUNNING` and model version `<v>`,
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when that line lacks the deployment `<name>`, it is not made; go straight to the first write. Otherwise, `hops deployment info <name>`: when it shows `RUNNING` and model version `<v>`,
 run the exit check below; passing, return it in one line and stop. When it serves another version,
 switch it to `<v>` in place (step 4), never accept it as it is.
 
 ## Steps
 
 1. **Check what serving needs**, before anything is created; a failed check ends the run with one
-   line naming it:
+   line naming it. A prompt with `checked: yes` (a respawn after the caller turned a group online)
+   passed this step: go to step 2, whose online preview reads the group's rows.
    - `hops model info <m> --version <v>` shows a `Feature view` and a `Training dataset`: the
      default predictor looks the features up through that view and applies its transformations
      with that version's statistics.
@@ -43,6 +44,12 @@ switch it to `<v>` in place (step 4), never accept it as it is.
    ```bash
    hops deployment create <m> --version <v> --name <name> --env pandas-inference-pipeline \
      [--passed-feature <f> ...] [--cores <cores>] [--memory <memory>]
+   ```
+
+   `<name>` is a letter first, then letters and digits (`orderreturns`, never `order-returns`, `order_returns` or `2024churn`):
+   Hopsworks refuses any other name, and without `--name` the model's name is used.
+
+   ```bash
    hops deployment start <name>
    ```
 

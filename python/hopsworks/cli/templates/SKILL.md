@@ -73,7 +73,7 @@ hops fg create <name> --primary-key <cols> [flags]
 
 Flags:
 - `--primary-key <cols>` — comma-separated primary-key columns (required)
-- `--features "name:type[:description],..."` — schema (bigint, double, boolean, timestamp, string, `array<float>`); the optional third field is a per-column description
+- `--features "name:type[:description],..."`: the schema (bigint, double, boolean, timestamp, string, `array<float>`); the optional third field is a per-column description
 - `--partition-key <cols>` — comma-separated partition columns
 - `--online` — enable online storage (Kafka + RonDB + Spark materialization)
 - `--event-time <col>` — event-time column for time-travel queries
@@ -130,7 +130,7 @@ Join spec: `"<fg>[:<ver>] <INNER|LEFT|RIGHT|FULL> <on>[=<right_on>] [prefix]"`.
 hops fv list
 hops fv info <name> [--version N]
 hops fv preview <name> [--limit 10] [--td-version N]   # First rows, keys and event time, untransformed
-hops fv create <name> --feature-group <fg> [--join <spec>] [--transform <fn:col>]
+hops fv create <name> --feature-group <fg> [--except <cols>] [--join <spec>] [--transform <fn:col>]
 hops fv lookup <name> --entry "id=42,region=eu"       # Online vector lookup
 hops fv read <name> [--limit 100] [--output data.parquet]
 hops fv lineage <name> [--version N]               # Parent FGs + generated models

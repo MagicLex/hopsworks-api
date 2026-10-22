@@ -13,7 +13,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`, no deploym
 **hops-batch-inference**, **hops-fg** and **hops-job** with `hops skills info <name>`, one skill per
 command, and follow them.
 
-**Already made?** For a create, look for predictions of this model first: `hops fg list` and
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its lines for those kinds name every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when those lines list no feature group or job naming `<model>`, it is not made; go straight to the first write. Otherwise, for a create, look for predictions of this model first: `hops fg list` and
 `hops job list`, a feature group or job whose name or description names `<model>` (the project
 may already score it under another name). When one exists and `hops fg preview <it> --limit 1`
 prints a row, the piece exists; return it in one line and stop. Your exit check at the end is
@@ -57,9 +57,11 @@ or retrained here. Print `[time] <step> <seconds>s` after the read, the predicti
    scikit-learn and XGBoost; `pandas-inference-pipeline` runs deployments, not jobs):
 
    ```bash
-   hops job deploy <name>-score inference/<name>/score.py --env pandas-training-pipeline --overwrite
+   hops job deploy <name>-score inference/<name>/score.py --env pandas-training-pipeline --new
    hops job schedule set <name>-score '<quartz cron>'
    ```
+
+   `--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
    Arguments carry no spaces (`--day 2026-10-16`). A run you start waits with `--wait`, or
    `hops job wait <name>-score` for one already started; never poll `hops job history`.

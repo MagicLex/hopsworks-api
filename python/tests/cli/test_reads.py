@@ -18,6 +18,15 @@ from hopsworks.cli.commands import model as model_cmd
 from hopsworks.cli.main import cli
 
 
+
+def _path_not_found():
+    """A missing HopsFS path, as the backend answers it: a 400 with error code 110018."""
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = mock.MagicMock(status_code=400, reason="Bad Request", content=b"{}")
+    response.json.return_value = {"errorCode": 110018, "errorMsg": "Path not found"}
+    return RestAPIError("https://host/x", response)
+
 def _feature(name, type_, primary=False, partition=False, description=None):
     f = mock.MagicMock()
     f.name = name
@@ -132,7 +141,7 @@ def test_fg_info_without_offline_table_shows_a_dash(mock_project):
     )
     fs.get_feature_group.return_value = fg
     mock_project.get_dataset_api.return_value._list_dataset_path.side_effect = (
-        RuntimeError("not found")
+        _path_not_found()
     )
     result = CliRunner().invoke(cli, ["fg", "info", "orders"])
     assert result.exit_code == 0, result.output
@@ -525,6 +534,43 @@ def test_model_info_prints_every_metric(mock_project):
     assert "test_pr_auc=0.6" in result.output
 
 
+def test_model_info_lists_its_images(mock_project):
+    mr = mock.MagicMock()
+    model = mock.MagicMock()
+    model.name, model.version, model.framework = "order_model", 2, "sklearn"
+    model.training_metrics, model.created, model.description = {}, "2026-04-01", ""
+    model.version_path = "Models/order_model/2"
+    mr.get_model.return_value = model
+    mock_project.get_model_registry.return_value = mr
+    api = mock.MagicMock()
+    api.list.return_value = [
+        "Models/order_model/2/Files/images/roc_curve.png",
+        "Models/order_model/2/Files/images/confusion_matrix.png",
+    ]
+    mock_project.get_dataset_api.return_value = api
+    result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "2"])
+    assert result.exit_code == 0, result.output
+    api.list.assert_called_with("Models/order_model/2/Files/images")
+    row = next(line for line in result.output.splitlines() if line.startswith("Images"))
+    assert row.split(None, 1)[1].strip() == "confusion_matrix.png, roc_curve.png"
+    result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "2", "--json"])
+    assert json.loads(result.output)["images"] == ["confusion_matrix.png", "roc_curve.png"]
+
+
+def test_model_info_without_images_says_so(mock_project):
+    mr = mock.MagicMock()
+    model = mock.MagicMock()
+    model.name, model.version, model.framework = "order_model", 1, "sklearn"
+    model.training_metrics, model.created, model.description = {}, "2026-04-01", ""
+    mr.get_model.return_value = model
+    mock_project.get_model_registry.return_value = mr
+    mock_project.get_dataset_api.return_value.list.side_effect = _path_not_found()
+    result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "1"])
+    assert result.exit_code == 0, result.output
+    row = next(line for line in result.output.splitlines() if line.startswith("Images"))
+    assert row.split()[1] == "-"
+
+
 # --- deployment ------------------------------------------------------------
 
 
@@ -831,3 +877,15 @@ def test_fg_test_access_refuses_a_cached_feature_group(mock_project):
 
     assert result.exit_code == 1, result.output
     assert "not an external feature group" in result.output
+
+
+def test_files_download_takes_the_destination_as_upload_does(mock_project):
+    api = mock_project.get_dataset_api.return_value
+    api.download.return_value = "/tmp/nb/a.ipynb"
+    for args in (["nb"], ["--output", "nb"], ["nb", "--output", "nb"]):
+        result = CliRunner().invoke(cli, ["files", "download", "Users/u/a.ipynb", *args])
+        assert result.exit_code == 0, result.output
+        api.download.assert_called_with(path="Users/u/a.ipynb", local_path="nb", overwrite=False)
+    result = CliRunner().invoke(cli, ["files", "download", "Users/u/a.ipynb", "nb", "--output", "other"])
+    assert result.exit_code == 2
+    assert "DESTINATION or --output" in result.output

@@ -333,6 +333,66 @@ def test_fv_create_joins_on_a_composite_key(mock_project):
     assert kwargs["left_on"] is None
 
 
+def _base_fg(*names):
+    base = mock.MagicMock()
+    base.features = [mock.MagicMock() for _ in names]
+    for f, n in zip(base.features, names):
+        f.name = n
+    return base
+
+
+def _fv_create(*extra):
+    return CliRunner().invoke(
+        cli, ["fv", "create", "orders_returns", "--feature-group", "orders:1", *extra]
+    )
+
+
+def test_fv_create_except_refuses_an_unknown_column(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fs.get_feature_group.return_value = _base_fg("order_id", "order_ts", "returned")
+    result = _fv_create("--except", "order_id,ordr_ts", "--labels", "returned")
+    assert result.exit_code == 2, result.output
+    assert "ordr_ts" in result.output and "--except" in result.output
+    fs.create_feature_view.assert_not_called()
+
+
+def test_fv_create_except_refuses_a_label(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fs.get_feature_group.return_value = _base_fg("order_id", "returned")
+    result = _fv_create("--except", "order_id,returned", "--labels", "returned")
+    assert result.exit_code == 2, result.output
+    assert "returned" in result.output and "label" in result.output
+    fs.create_feature_view.assert_not_called()
+
+
+def test_fv_create_leaves_out_the_except_columns(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    base = _base_fg("order_id", "order_ts", "returned")
+    fs.get_feature_group.return_value = base
+    created = mock.MagicMock()
+    created.name, created.version = "orders_returns", 1
+    fs.create_feature_view.return_value = created
+    result = CliRunner().invoke(
+        cli,
+        [
+            "fv",
+            "create",
+            "orders_returns",
+            "--feature-group",
+            "orders:1",
+            "--except",
+            "order_id, order_ts",
+            "--labels",
+            "returned",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    base.select_except.assert_called_once_with(["order_id", "order_ts"])
+    base.select_all.assert_not_called()
+    query = fs.create_feature_view.call_args.kwargs["query"]
+    assert query is base.select_except.return_value
+
+
 # --- fv get ----------------------------------------------------------------
 
 

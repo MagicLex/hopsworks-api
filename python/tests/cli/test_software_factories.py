@@ -163,6 +163,17 @@ def test_the_menu_runs_on_haiku_and_hands_every_build_to_a_stronger_agent():
     assert "!`ls -d */system.yaml" in text
 
 
+def test_every_next_step_offer_has_a_data_pipeline_and_a_notebook():
+    text = (TEMPLATES / "hops.md").read_text(encoding="utf-8")
+    rules = " ".join(text.split("## Rules", 1)[1].split("\n## ", 1)[0].split())
+    assert "**Build a data pipeline over it**" in rules
+    assert "**Explore it in a notebook**" in rules
+    # Explore and Pieces offer through that rule, with no list of their own.
+    text = " ".join(text.split())
+    assert text.count("next-step offer (Rules)") == 2
+    assert "offer the next step" not in text
+
+
 def test_the_interview_runs_on_haiku_and_records_every_answer_as_it_goes():
     front = _front("hops-ml.md")
     text = (TEMPLATES / "hops-ml.md").read_text(encoding="utf-8")

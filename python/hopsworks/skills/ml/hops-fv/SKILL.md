@@ -35,15 +35,17 @@ fails):
 
 ```bash
 hops transformation create --file transformations.py            # register udfs first
-hops fv create <name> --feature-group <derived_fg>:1 \
+hops fv create <name> --feature-group <derived_fg>:1 --except <pk>,<event_time> \
   --transform <fn>:<col> --labels <label>                       # --join "<fg> LEFT <on>" repeatable
 hops td compute <fv> --fv-version <n> --split "train:0.8,test:0.2"  # 3-way: "train:0.7,validation:0.15,test:0.15"
 hops td list <fv>                                               # TD version auto-increments; read it back here
 ```
 
 `hops fv create --feature-group` takes `name[:version]`; `--transform` and `--join`
-are repeatable. `hops td compute` takes the FV version as a required positional —
-the training-dataset version it writes auto-increments, so read it from `hops td list`
+are repeatable. `--except` leaves base feature group columns out of the view (the
+primary key and event time are no model inputs); lookups by the key still work, and
+`training_data(primary_key=True)` returns it prefixed (`<project>_<fg>_<version>_<pk>`).
+`hops td compute` takes the FV version as a required positional: the training-dataset version it writes auto-increments, so read it from `hops td list`
 rather than assuming `1`.
 
 ---
