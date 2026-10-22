@@ -15,7 +15,7 @@ filled from, with the chart params in `hops skills info hops-superset references
 Load **hops-design** with `hops skills info hops-design` and follow its look (the "Look" section of
 hops-superset applies it to Superset).
 
-**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and the prompt has no `touched: yes` (an earlier step of this turn made or touched the piece): then, when that line lacks the title, it is not made; go straight to the first write. Otherwise, for a create, run `hops superset dashboard list` first: when it lists the title, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when that line lacks the title, it is not made; go straight to the first write. Otherwise, for a create, run `hops superset dashboard list` first: when it lists the title, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
 ## Where the program runs
 

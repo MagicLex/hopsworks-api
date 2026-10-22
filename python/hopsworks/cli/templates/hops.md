@@ -79,7 +79,8 @@ is the whole dispatch:
    `not listed`, not a count alone), the piece is not among them, and no earlier step of this
    turn made or touched it. Passing: the piece exists; say so in one line and go on. Failing or
    missing: spawn its builder with the Agent tool and its prompt below, adding `touched: yes` when
-   an earlier step of this turn made or touched the piece. The builder runs the same exit check
+   an earlier step of this turn made or touched the piece (Hopsable also names earlier sub-agents
+   of the turn in the builder's prompt). The builder runs the same exit check
    last. It counts only when the tool log Hopsable adds under the report (`[Hopsable: the
    sub-agent's last commands ...]`) shows that command, `[exit code 0]` and its passing output;
    otherwise run the check yourself, never on the builder's words. Failing: stop and say which

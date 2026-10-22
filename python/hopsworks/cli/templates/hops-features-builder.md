@@ -13,7 +13,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load **hop
 **hops-fg** and **hops-job** with `hops skills info <name>`, one skill per command, and follow them,
 with their rules for a pipeline outside a system.
 
-**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and the prompt has no `touched: yes` (an earlier step of this turn made or touched the piece): then, when that line lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops fg preview <name> --limit 1` first: when it prints a row, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when that line lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops fg preview <name> --limit 1` first: when it prints a row, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
 ## Speed
 
