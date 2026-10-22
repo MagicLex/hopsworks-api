@@ -333,6 +333,34 @@ def test_fv_create_joins_on_a_composite_key(mock_project):
     assert kwargs["left_on"] is None
 
 
+def test_fv_create_leaves_out_the_except_columns(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    base = mock.MagicMock()
+    fs.get_feature_group.return_value = base
+    created = mock.MagicMock()
+    created.name, created.version = "orders_returns", 1
+    fs.create_feature_view.return_value = created
+    result = CliRunner().invoke(
+        cli,
+        [
+            "fv",
+            "create",
+            "orders_returns",
+            "--feature-group",
+            "orders:1",
+            "--except",
+            "order_id, order_ts",
+            "--labels",
+            "returned",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    base.select_except.assert_called_once_with(["order_id", "order_ts"])
+    base.select_all.assert_not_called()
+    query = fs.create_feature_view.call_args.kwargs["query"]
+    assert query is base.select_except.return_value
+
+
 # --- fv get ----------------------------------------------------------------
 
 

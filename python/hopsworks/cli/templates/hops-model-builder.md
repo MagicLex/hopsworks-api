@@ -31,7 +31,8 @@ sandbox may run a newer one, and an argument that works here can fail there. Pri
 
 1. **Show it first.** Write `./models/<name>/train.py` before anything runs. With no feature view
    yet (`hops fv info <view>` fails), create it first from the prompt's feature groups and label:
-   `hops fv create <view> --feature-group <fg>:<v> --join ... --labels <label>` (**hops-fv**).
+   `hops fv create <view> --feature-group <fg>:<v> --except <key>,<event time> --join ... --labels
+   <label>` (**hops-fv**): the view serves model inputs only, and lookups by the key still work.
 2. **Split once, in memory, by entity.** A view often holds several rows per entity (a deal's
    daily snapshots): a random row split puts the same entity in train and test and inflates the
    score. `train.py` reads the view once with its keys, assigns each entity to a part by a stable
@@ -40,15 +41,17 @@ sandbox may run a newer one, and an argument that works here can fail there. Pri
    ```python
    X, y = fv.training_data(primary_key=True, statistics_config=False)
    td_version = fv.get_last_accessed_training_dataset()  # the one version every run records
-   bucket = X["<entity key>"].map(
+   key = next(c for c in X.columns if c == "<entity key>" or c.endswith("_<entity key>"))  # a left-out key comes back prefixed
+   bucket = X[key].map(
        lambda k: int(hashlib.sha256(str(k).encode()).hexdigest(), 16) % 100
    )
    parts = {"train": bucket < 70, "validation": (bucket >= 70) & (bucket < 85), "test": bucket >= 85}
    ```
 
    A random row split (`fv.train_validation_test_split(validation_size=0.15, test_size=0.15,
-   statistics_config=False)`) only when each entity has one row (`hops sql "SELECT count(*),
-   count(DISTINCT <key>) ..."` on the label group). Each read registers a training dataset
+   statistics_config=False)`) only when each entity has one row: the label group's primary key is
+   the entity key alone (`hops fg info`), else `hops sql "SELECT count(*), count(DISTINCT <key>)
+   ..."` on it says. Each read registers a training dataset
    version, so the sweep reads once: never per candidate, never in a loop. Use a training dataset the user named
    (`fv.get_training_data(training_dataset_version=<v>, primary_key=True)`) only when they named
    one. Before fitting, drop from every `X` the feature view's primary key, join keys and event

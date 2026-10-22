@@ -105,6 +105,7 @@ Hints:
   They are leaky and break `fit` (a datetime column raises
   `DTypePromotionError: DateTime64 could not be promoted by Float64`).
   The clean fix is upstream: exclude them when you create the FV, with
+  `hops fv create <fv> --feature-group <fg>:<v> --except <pk>,<event_time>`,
   `fg.select_except([pk, event_time])` or
   `fg.select_all(include_primary_key=False, include_event_time=False)` (skill: hops-fv).
 - If you do pull keys/event time into a split (e.g. `get_train_test_split(primary_keys=True, event_time=True)`

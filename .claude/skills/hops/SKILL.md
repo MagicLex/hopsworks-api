@@ -110,7 +110,7 @@ Join spec: `"<fg>[:<ver>] <INNER|LEFT|RIGHT|FULL> <on>[=<right_on>] [prefix]"`.
 hops fv list
 hops fv info <name> [--version N]
 hops fv preview <name> [--limit 10] [--td-version N]   # First rows, keys and event time, untransformed
-hops fv create <name> --feature-group <fg> [--join <spec>] [--transform <fn:col>]
+hops fv create <name> --feature-group <fg> [--except <cols>] [--join <spec>] [--transform <fn:col>]
 hops fv lookup <name> --entry "id=42,region=eu"       # Online vector lookup
 hops fv read <name> [--limit 100] [--output data.parquet]
 hops fv delete <name> --version N --yes

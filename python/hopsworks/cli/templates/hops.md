@@ -88,8 +88,10 @@ is the whole dispatch:
    exists, answer from a few `hops sql "<query>"` calls (Trino SQL, as in Explore) over `<t>_1`,
    each with a `GROUP BY` and a `LIMIT`: a short table or a few lines per breakdown. Never a
    dashboard or an app unless the user asked for one by name.
-6. **Then** offer the next step with `AskUserQuestion`, the one the request points to marked
-   "(Recommended)": the next piece, a dashboard or an app over the result, or the whole ML system.
+6. **Then** offer the next step with `AskUserQuestion`: the next piece, a dashboard or an app over
+   the result, or the whole ML system. "(Recommended)" marks only a step the request named and this
+   turn did not make; with the request done, no option is marked, so the turn ends on what was
+   asked (an Auto mode answer takes a marked option at once).
 
 Ask only what the request leaves open, in one `AskUserQuestion` call. Every prompt ends with
 `where: <Hopsworks terminal | external client>`.
@@ -179,8 +181,10 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    run the code and **hops-train** is the contract, its "In a notebook" section (read it with
    `hops skills info hops-train` once, when you reach this step). Every candidate is a run in
    the model registry, the chosen model registered, both checked with `hops model runs <m>` and
-   `hops model info <m>`, never a download. Data in a feature group trains on a feature view
-   of it (`hops fv create <v> --feature-group <fg>:<n> --labels <label>`, then
+   `hops model info <m>` (the check is these commands, not a download). Data in a feature group
+   trains on a feature view of it that leaves out the primary key and event time, so the view
+   serves model inputs only (`hops fv create <v> --feature-group <fg>:<n> --except
+   <key>,<event time> --labels <label>`, then
    `fv.train_validation_test_split(...)` in a cell) and registers
    with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
    notebook made itself registers without. "Register the model" afterwards is the best run,
