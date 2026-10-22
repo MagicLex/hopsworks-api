@@ -41,7 +41,7 @@ switch it to `<v>` in place (step 4), never accept it as it is.
      [--passed-feature <f> ...] [--cores <cores>] [--memory <memory>]
    ```
 
-   `<name>` is letters and digits only (`orderreturns`, never `order-returns` or `order_returns`):
+   `<name>` is a letter first, then letters and digits (`orderreturns`, never `order-returns`, `order_returns` or `2024churn`):
    Hopsworks refuses any other name, and without `--name` the model's name is used.
 
    ```bash

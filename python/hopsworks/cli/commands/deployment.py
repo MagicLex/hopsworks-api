@@ -343,11 +343,14 @@ def deployment_create(
         memory: Memory per instance in MB; None keeps the backend's default resources.
     """
     deploy_name = name or model_name
-    # The backend refuses any other name (422, "Serving name must follow regex [a-zA-Z0-9]+").
-    if not re.fullmatch(r"[a-zA-Z0-9]+", deploy_name):
+    # The backend's rule (hopsworks-ee ServingUtil): no leading digit ("Serving name cannot start
+    # with a number"), then letters and digits only ("Serving name must follow regex [a-zA-Z0-9]+").
+    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9]*", deploy_name):
+        kept = re.sub(r"[^a-zA-Z0-9]", "", deploy_name)
+        suggested = f"m{kept}" if kept[:1].isdigit() else kept or "<name>"
         raise click.UsageError(
-            f"Deployment name '{deploy_name}' must be letters and digits only ([a-zA-Z0-9]+): "
-            f"pass --name {re.sub(r'[^a-zA-Z0-9]', '', deploy_name) or '<name>'}."
+            f"Deployment name '{deploy_name}' must be a letter first, then letters and digits "
+            f"([a-zA-Z][a-zA-Z0-9]*): pass --name {suggested}."
         )
     project = session.get_project(ctx)
     mr = project.get_model_registry()
