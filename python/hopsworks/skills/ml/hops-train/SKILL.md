@@ -84,7 +84,9 @@ X_train, X_val, X_test, y_train, y_val, y_test = split_by_key(
 
 ```python
 # split_by_key: copy it whole into the program that splits and into the one that scores.
-import hashlib, math, re
+import hashlib, re
+
+import pandas as pd
 
 
 def key_column(columns, key):
@@ -97,12 +99,13 @@ def key_column(columns, key):
 
 
 def key_bucket(value):
-    """0 to 99 from a key value; 1 and 1.0 (an id read as float) give one bucket, None and NaN one."""
-    if hasattr(value, "item"):
-        value = value.item()
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    """0 to 99 from a key value; 1 and 1.0 (an id read as float) give one bucket, and a missing
+    key (None, NaN, pd.NA, NaT) one."""
+    if pd.isna(value):
         value = "<none>"
-    elif isinstance(value, float) and value.is_integer():
+    elif hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, float) and value.is_integer():
         value = int(value)
     return int(hashlib.sha256(str(value).encode()).hexdigest(), 16) % 100
 

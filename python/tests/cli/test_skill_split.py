@@ -34,7 +34,7 @@ def test_key_column_takes_the_key_or_its_exact_prefixed_form(split):
 def test_key_bucket_normalises_the_key(split):
     key_bucket = split["key_bucket"]
     assert key_bucket(1) == key_bucket(1.0) == key_bucket(np.int64(1)) == key_bucket(np.float64(1.0))
-    assert key_bucket(None) == key_bucket(float("nan"))
+    assert key_bucket(None) == key_bucket(float("nan")) == key_bucket(pd.NA) == key_bucket(pd.NaT)
     assert key_bucket(1.5) != key_bucket(1)
 
 
@@ -59,3 +59,16 @@ def test_split_by_key_keeps_an_entity_in_one_part_and_drops_every_key(split):
     assert not (seen[0] & seen[1] or seen[0] & seen[2] or seen[1] & seen[2])
     again = split["split_by_key"](X.iloc[::-1], y.iloc[::-1], key="order_id", drop=["customer_id"])
     assert set(again[2].index) == set(X_test.index)
+
+
+def test_a_missing_key_splits_the_same_from_a_nullable_int_or_a_float_read(split):
+    ids = [1, 2, None, 4] * 50
+    as_int = pd.DataFrame({"order_id": pd.array(ids, dtype="Int64"), "amount": range(200)})
+    as_float = pd.DataFrame({"order_id": pd.array(ids, dtype="float64"), "amount": range(200)})
+    y = pd.DataFrame({"returned": [0, 1] * 100})
+    key_bucket = split["key_bucket"]
+    assert as_int["order_id"].map(key_bucket).tolist() == as_float["order_id"].map(key_bucket).tolist()
+    a = split["split_by_key"](as_int, y, key="order_id")
+    b = split["split_by_key"](as_float, y, key="order_id")
+    for part_a, part_b in zip(a[:3], b[:3]):
+        assert list(part_a.index) == list(part_b.index)
