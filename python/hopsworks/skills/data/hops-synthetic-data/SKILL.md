@@ -62,9 +62,21 @@ hops job history <slug>-events              # the live writer has a RUNNING exec
   seeded `numpy.random.default_rng` (`choice`, `normal`, `gamma`, `poisson`,
   `uniform`), then build the rest with Polars expressions: ids with
   `pl.format("c-{}", pl.int_range(pl.len()))`, times with
-  `pl.lit(start) + pl.duration(microseconds=...)` or `pl.datetime_range`,
-  snapshots by a cross join with the date grid, labels and story effects with
-  `pl.when`, joins and window expressions. No Faker, no Python loop or list
+  `pl.lit(start) + pl.duration(seconds=pl.col(...))` (`start` a Python
+  `datetime`, never `pl.datetime`) or `pl.datetime_range`, snapshots by a cross
+  join with the date grid, labels and story effects with `pl.when`, joins and
+  window expressions. The numpy draws go into `pl.DataFrame({...})`; every
+  expression goes into `with_columns`, never the constructor:
+
+  ```python
+  start = datetime(2024, 1, 1)
+  df = pl.DataFrame({"offset_s": rng.integers(0, 365 * 86400, n), "country": rng.choice(countries, n)}).with_columns(
+      order_id=pl.int_range(pl.len()),
+      order_ts=pl.lit(start) + pl.duration(seconds=pl.col("offset_s")),
+  ).drop("offset_s")
+  ```
+
+  No Faker, no Python loop or list
   comprehension over rows, no `map_elements`, `apply` or `iter_rows`: each
   costs a Python call per row, about ten times slower than the whole column at a
   million rows. Names, cities and products come from a short list sampled with
