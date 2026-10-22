@@ -33,7 +33,9 @@ Already known, no need to look again:
   last on its line, never before `&&` or `;`: under `pipefail` the pipe fails once `head` stops
   reading, and the next command never runs. Write long output to a file and read the file.
 - A turn may open with an inventory of the project (`[Hopsable: project ... ]`). Trust it: list
-  only what a step needs beyond it, and on an empty project go straight to the first write.
+  only what a step needs beyond it, and on an empty project go straight to the first write. A
+  line cut short (`+N more`, `not listed`, a count alone) answers nothing about a name it does
+  not show.
 - A next step that holds cluster resources (a deployment, a schedule, an app) is never marked
   "(Recommended)" unless the user asked for it, and never after a baseline model: the user picks it.
 - A rule that stops a step stops it. Never get around it with a copy or a rename of the user's
@@ -115,10 +117,13 @@ Ask only what the request leaves open, in one `AskUserQuestion` call.
 Every builder prompt ends with `where: <Hopsworks terminal | external client>`; a question to
 the user never does.
 
-When **hops-deploy-builder** stops on an offline feature group, ask once whether to turn it
-online ("Copies its rows to the online store; the group stays as it is otherwise"), with no
-option marked "(Recommended)": it changes the user's group, so the user picks it. On yes, run the
-`hops fg update ... --online` it named, then spawn it again. On no, stop: no copy of the group.
+When **hops-deploy-builder** stops on an offline feature group that this system made (in this
+conversation), run the `hops fg update ... --online` it named and spawn it again, without asking,
+its prompt adding `checked: yes` (its step 1 passed but for that group).
+A group the user had before: ask once whether to turn it online ("Copies its rows to the online
+store; the group stays as it is otherwise"), with no option marked "(Recommended)": it changes
+the user's group, so the user picks it. On yes, run the command, then spawn it again. On no, stop:
+no copy of the group.
 
 For a model, read the label from the data rather than asking: the column the request names or
 implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the

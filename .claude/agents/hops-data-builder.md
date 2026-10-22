@@ -62,7 +62,7 @@ hops sql "SELECT count(*) FROM <name>_1"
 A failed run: read its traceback (a job's `--wait` prints its log tail), name the cause in one
 line, fix and rerun, at most three attempts. A program writes and checks nothing itself: the check is the commands above, run after it
 (`hops fg preview <fg> --online --limit 1` for the online store). A run that wrote its rows and
-failed only on a check line of its own is reported as failed with that cause ("rows written, check
+failed only on a check line of its own is reported as failed with that cause ("rows sent, check
 line wrong"), never run again to hide it. After the last attempt, return the failure with its
 cause from the logs, never a success. Return a few lines: the feature group and version, its
 columns, the row count, and where it was written (here, or the job).
