@@ -179,8 +179,8 @@ def _schema_label(d: Any) -> str:
         return "-"
     try:
         schema = d.schema
-    except Exception:  # noqa: BLE001 - info must not fail on a missing file
-        return "unreadable"
+    except Exception as exc:  # noqa: BLE001 - info must not fail on a missing file
+        return "-" if versions.not_found(exc) else f"could not be read: {exc}"
     if schema is None:
         return "-"
     return "inferred" if schema.inferred else "manual"
@@ -422,8 +422,14 @@ def _serves_by_default(model: Any, serving_tool: str | None) -> bool:
         return False
     try:
         return model.get_feature_view(init=False) is not None
-    except Exception:  # noqa: BLE001 - a model may have no feature view in its provenance
-        return False
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):
+            return False
+        # Never a predictor picked on a read that failed for another reason.
+        raise click.ClickException(
+            f"The model's feature view could not be read: {exc}. Pass --default-predictor or "
+            "--no-default-predictor to choose without it."
+        ) from exc
 
 
 def _resources(cores: float | None, memory: int | None) -> Any:

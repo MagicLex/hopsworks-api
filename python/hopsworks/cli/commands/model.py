@@ -184,8 +184,11 @@ def _runs(project: Any, models: list[Any]) -> list[dict[str, Any]]:
             response = dataset_api.read_content(f"{model.version_path}/Files/run.json")
             if response is not None:
                 run = json.loads(response.content)
-        except Exception:  # noqa: BLE001 - a version registered without run.json
-            run = {}
+        except Exception as exc:  # noqa: BLE001
+            if not versions.not_found(exc):  # a version registered without run.json has none
+                raise click.ClickException(
+                    f"The run.json of {model.name} v{model.version} could not be read: {exc}"
+                ) from exc
         return {
             **run,
             "version": model.version,
@@ -212,8 +215,8 @@ def _feature_view_label(model: Any) -> str:
     """The feature view the model was trained on, `name vN`, from its provenance; `-` without one."""
     try:
         view = model.get_feature_view(init=False)
-    except Exception:  # noqa: BLE001 - provenance is optional; a model may have none
-        return "-"
+    except Exception as exc:  # noqa: BLE001
+        return "-" if versions.not_found(exc) else f"could not be read: {exc}"
     return f"{view.name} v{view.version}" if view is not None else "-"
 
 
@@ -249,8 +252,12 @@ def _images(project: Any, model: Any) -> list[str]:
     try:
         # save() puts the model directory's files under Files/.
         paths = project.get_dataset_api().list(f"{model.version_path}/Files/images")
-    except Exception:  # noqa: BLE001 - a version registered without images/
-        return []
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):  # a version registered without images/
+            return []
+        raise click.ClickException(
+            f"Images of {model.name} v{model.version} could not be read: {exc}"
+        ) from exc
     return sorted(p.rsplit("/", 1)[-1] for p in paths)
 
 

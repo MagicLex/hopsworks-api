@@ -18,6 +18,15 @@ from hopsworks.cli.commands import model as model_cmd
 from hopsworks.cli.main import cli
 
 
+
+def _path_not_found():
+    """A missing HopsFS path, as the backend answers it: a 400 with error code 110018."""
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = mock.MagicMock(status_code=400, reason="Bad Request", content=b"{}")
+    response.json.return_value = {"errorCode": 110018, "errorMsg": "Path not found"}
+    return RestAPIError("https://host/x", response)
+
 def _feature(name, type_, primary=False, partition=False, description=None):
     f = mock.MagicMock()
     f.name = name
@@ -132,7 +141,7 @@ def test_fg_info_without_offline_table_shows_a_dash(mock_project):
     )
     fs.get_feature_group.return_value = fg
     mock_project.get_dataset_api.return_value._list_dataset_path.side_effect = (
-        RuntimeError("not found")
+        _path_not_found()
     )
     result = CliRunner().invoke(cli, ["fg", "info", "orders"])
     assert result.exit_code == 0, result.output
@@ -555,7 +564,7 @@ def test_model_info_without_images_says_so(mock_project):
     model.training_metrics, model.created, model.description = {}, "2026-04-01", ""
     mr.get_model.return_value = model
     mock_project.get_model_registry.return_value = mr
-    mock_project.get_dataset_api.return_value.list.side_effect = Exception("404")
+    mock_project.get_dataset_api.return_value.list.side_effect = _path_not_found()
     result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "1"])
     assert result.exit_code == 0, result.output
     row = next(line for line in result.output.splitlines() if line.startswith("Images"))
