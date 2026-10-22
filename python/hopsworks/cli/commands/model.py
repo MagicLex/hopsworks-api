@@ -71,7 +71,7 @@ def model_info(ctx: click.Context, name: str, version: int | None) -> None:
         raise click.ClickException(f"Model '{name}' not found.")
 
     if output.JSON_MODE:
-        output.print_json(_model_to_dict(model))
+        output.print_json({**_model_to_dict(model), "images": _images(project, model)})
         return
 
     rows = [
@@ -84,6 +84,7 @@ def model_info(ctx: click.Context, name: str, version: int | None) -> None:
         ["Metrics", _short_metrics(getattr(model, "training_metrics", {}) or {}, None)],
         ["Description", output.first_line(getattr(model, "description", ""))],
         ["Tags", output.format_mapping(output.read_tags(model))],
+        ["Images", ", ".join(_images(project, model)) or "-"],
     ]
     output.print_table(["FIELD", "VALUE"], rows)
 
@@ -241,6 +242,16 @@ def _short_metrics(metrics: dict[str, Any], limit: int | None = 3) -> str:
         return "-"
     parts = [f"{k}={v}" for k, v in list(metrics.items())[:limit]]
     return ", ".join(parts)
+
+
+def _images(project: Any, model: Any) -> list[str]:
+    """The evaluation images the registry shows with the version: the files under its images/."""
+    try:
+        # save() puts the model directory's files under Files/.
+        paths = project.get_dataset_api().list(f"{model.version_path}/Files/images")
+    except Exception:  # noqa: BLE001 - a version registered without images/
+        return []
+    return sorted(p.rsplit("/", 1)[-1] for p in paths)
 
 
 def _model_to_dict(model: Any) -> dict[str, Any]:
