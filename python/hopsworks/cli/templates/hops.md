@@ -97,7 +97,8 @@ Ask only what the request leaves open, in one `AskUserQuestion` call. Every prom
 `where: <Hopsworks terminal | external client>`.
 
 When **hops-deploy-builder** stops on an offline feature group that this system made (in this
-conversation), run the `hops fg update ... --online` it named and spawn it again, without asking.
+conversation), run the `hops fg update ... --online` it named and spawn it again, without asking,
+its prompt adding `checked: yes` (its step 1 passed but for that group).
 A group the user had before: ask once whether to turn it online ("Copies its rows to the online
 store; the group stays as it is otherwise"), with no option marked "(Recommended)": it changes
 the user's group, so the user picks it. On yes, run the command, then spawn it again. On no, stop:
@@ -171,9 +172,11 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    rows, one chart each.
 3. A model's predictions: load the model from the registry and score the test part of the training
    dataset it was trained on, with `<n>` from `Training dataset` in `hops model info <m>`:
-   `fv.get_train_validation_test_split(training_dataset_version=<n>)` for a three-way split,
-   `fv.get_train_test_split(training_dataset_version=<n>)` for a two-way one (`hops td list <fv>`
-   shows the splits). Never a new split: it puts rows the model trained on into the test part.
+   `fv.get_training_data(training_dataset_version=<n>, primary_key=True)` and the key hash of the
+   training code (**hops-train** section 1, or the pipeline's `train.py`) give the same test part.
+   Never a new split, and never `get_train_validation_test_split` on an in-memory version: both
+   put rows the model trained on into the test part. A model whose training code split another
+   way: show the test metrics its `run.json` records instead.
 4. A cell that raised, or one the user asks to change: fix it in place with `--cell N`, never with
    a new cell after it. `N` is the number its `hops notebook run` printed (`Cell N of ...`); no
    `hops notebook info` to find it, since `--cell` refuses a cell the user edited.
@@ -185,7 +188,7 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    trains on a feature view of it that leaves out the primary key and event time, so the view
    serves model inputs only (`hops fv create <v> --feature-group <fg>:<n> --except
    <key>,<event time> --labels <label>`, then
-   `fv.train_validation_test_split(...)` in a cell) and registers
+   the key-hash split of **hops-train** section 1 in a cell) and registers
    with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
    notebook made itself registers without. "Register the model" afterwards is the best run,
    already registered: say its version. Then offer once per notebook, no option marked

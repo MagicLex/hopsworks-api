@@ -56,16 +56,21 @@ fv = fs.get_feature_view(name="my_fv", version=1)  # no FV yet? create one first
 # Two split methods. They are NOT interchangeable; pick by data size and
 # whether you need a reproducible, stored dataset.
 
-# A. In-memory (default for small/static data). Returns the six frames
-#    directly, no Spark and no files, and registers an in-memory training
-#    dataset version (metadata only): a model registered with feature_view=fv
-#    in the same process records it, and scoring reads it.
-X_train, X_val, X_test, y_train, y_val, y_test = fv.train_validation_test_split(
-    validation_size=0.15, test_size=0.15, statistics_config=False
-)  # no seed= or random_state=: the library in jobs and Jupyter takes neither
+# A. In-memory (default for small/static data): one read with the keys, no Spark and no files.
+#    It registers an in-memory training dataset version (metadata only), which a model
+#    registered with feature_view=fv in the same process records. A stable hash of the entity
+#    key picks each row's part, so every read of that version gives the same parts (scoring the
+#    test part later), and one entity never sits in two parts.
+import hashlib
+X, y = fv.training_data(primary_key=True, statistics_config=False)
 td_version = fv.get_last_accessed_training_dataset()
-# The event time comes back as a feature: drop it (and any id) before fitting, since a datetime
-# column fails in scikit-learn: X_train = X_train.drop(columns=["order_ts"]).
+key = next(c for c in X.columns if c == "order_id" or c.endswith("_order_id"))  # a key the view leaves out comes back prefixed
+part = X[key].map(lambda k: int(hashlib.sha256(str(k).encode()).hexdigest(), 16) % 100)
+X = X.drop(columns=[key])  # and the event time, if the view has it: a datetime column fails in scikit-learn
+train, val, test = part < 70, (part >= 70) & (part < 85), part >= 85
+X_train, X_val, X_test = X[train], X[val], X[test]
+y_train, y_val, y_test = y[train], y[val], y[test]
+# Scoring later: fv.get_training_data(training_dataset_version=td_version, primary_key=True), the same hash.
 
 # B. Materialized + versioned, only when the user asks for a stored dataset:
 #    each create_* call starts a PySpark job (minutes). An ML system and the
@@ -81,7 +86,7 @@ td_version = fv.get_last_accessed_training_dataset()
 # )
 ```
 
-> The in-memory splits return frames, not a version: `train_validation_test_split()` six, `train_test_split()` four (`X_train, X_test, y_train, y_test`); `fv.get_last_accessed_training_dataset()` gives the version they registered. `create_*_split()` returns `(version, Job)`. Unpacking one as the other (`td_version, _ = fv.train_test_split(...)`) raises `ValueError: too many values to unpack`, and passing the `(version, Job)` tuple to `get_train_test_split` URL-encodes it into the path and 404s. Each in-memory call registers a new version, so split once per program. For a static dataset, prefer the in-memory split.
+> The in-memory splits return frames, not a version: `train_validation_test_split()` six, `train_test_split()` four (`X_train, X_test, y_train, y_test`); `fv.get_last_accessed_training_dataset()` gives the version they registered. `create_*_split()` returns `(version, Job)`. Unpacking one as the other (`td_version, _ = fv.train_test_split(...)`) raises `ValueError: too many values to unpack`, and passing the `(version, Job)` tuple to `get_train_test_split` URL-encodes it into the path and 404s. Each in-memory call registers a new version, so split once per program. For a static dataset, prefer the in-memory split. Never `fv.train_validation_test_split()` for a model someone scores later: the library in jobs and Jupyter takes no `seed=`, stores none, and `get_train_validation_test_split(training_dataset_version=<v>)` splits that version again at random, so the "test" rows it returns include rows the model trained on.
 
 Hints:
 - `get_train_test_split` only works on a dataset created BY a split call. A plain

@@ -48,11 +48,9 @@ sandbox may run a newer one, and an argument that works here can fail there. Pri
    parts = {"train": bucket < 70, "validation": (bucket >= 70) & (bucket < 85), "test": bucket >= 85}
    ```
 
-   A random row split (`fv.train_validation_test_split(validation_size=0.15, test_size=0.15,
-   statistics_config=False)`) only when each entity has one row: the label group's primary key is
-   the entity key alone (`hops fg info`), else `hops sql "SELECT count(*), count(DISTINCT <key>)
-   ..."` on it says. Each read registers a training dataset
-   version, so the sweep reads once: never per candidate, never in a loop. Use a training dataset the user named
+   The same hash on a re-read of `td_version` gives the same parts, so a notebook scores the same
+   test rows later; never `fv.train_validation_test_split()`, which a re-read splits again at
+   random. Each read registers a training dataset version, so the sweep reads once: never per candidate, never in a loop. Use a training dataset the user named
    (`fv.get_training_data(training_dataset_version=<v>, primary_key=True)`) only when they named
    one. Before fitting, drop from every `X` the feature view's primary key, join keys and event
    time (`deal_id`, `snapshot_date`): identifiers and timestamps are no features, and a datetime

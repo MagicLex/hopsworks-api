@@ -21,7 +21,8 @@ switch it to `<v>` in place (step 4), never accept it as it is.
 ## Steps
 
 1. **Check what serving needs**, before anything is created; a failed check ends the run with one
-   line naming it:
+   line naming it. A prompt with `checked: yes` (a respawn after the caller turned a group online)
+   passed this step: go to step 2, whose online preview reads the group's rows.
    - `hops model info <m> --version <v>` shows a `Feature view` and a `Training dataset`: the
      default predictor looks the features up through that view and applies its transformations
      with that version's statistics.
