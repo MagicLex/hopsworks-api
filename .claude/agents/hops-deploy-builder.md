@@ -14,7 +14,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`, no predict
 **hops-online-inference** with `hops skills info hops-online-inference`, its "Default predictor
 (no script)" section first.
 
-**Already made?** `hops deployment info <name>`: when it shows `RUNNING` and model version `<v>`,
+**Already made?** A prompt that opens with the project inventory (`[Hopsable: project ...]`) answers it: when the inventory lacks the deployment `<name>`, it is not made; go straight to the first write. Otherwise, `hops deployment info <name>`: when it shows `RUNNING` and model version `<v>`,
 run the exit check below; passing, return it in one line and stop. When it serves another version,
 switch it to `<v>` in place (step 4), never accept it as it is.
 

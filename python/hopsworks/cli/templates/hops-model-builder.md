@@ -13,7 +13,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`, no deploym
 prompt names one. Load **hops-fv** and **hops-train** with `hops skills info <name>`,
 one skill per command, and follow them.
 
-**Already made?** For a create, run `hops model info <name>` first: when it shows the feature view of the prompt, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
+**Already made?** A prompt that opens with the project inventory (`[Hopsable: project ...]`) answers it: when the inventory lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops model info <name>` first: when it shows the feature view of the prompt, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
 ## Speed
 

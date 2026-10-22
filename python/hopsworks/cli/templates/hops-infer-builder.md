@@ -13,7 +13,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`, no deploym
 **hops-batch-inference**, **hops-fg** and **hops-job** with `hops skills info <name>`, one skill per
 command, and follow them.
 
-**Already made?** For a create, look for predictions of this model first: `hops fg list` and
+**Already made?** A prompt that opens with the project inventory (`[Hopsable: project ...]`) answers it: when the inventory lists no feature group or job naming `<model>`, it is not made; go straight to the first write. Otherwise, for a create, look for predictions of this model first: `hops fg list` and
 `hops job list`, a feature group or job whose name or description names `<model>` (the project
 may already score it under another name). When one exists and `hops fg preview <it> --limit 1`
 prints a row, the piece exists; return it in one line and stop. Your exit check at the end is

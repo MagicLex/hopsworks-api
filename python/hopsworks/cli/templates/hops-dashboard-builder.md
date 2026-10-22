@@ -15,7 +15,7 @@ filled from, with the chart params in `hops skills info hops-superset references
 Load **hops-design** with `hops skills info hops-design` and follow its look (the "Look" section of
 hops-superset applies it to Superset).
 
-**Already made?** For a create, run `hops superset dashboard list` first: when it lists the title, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
+**Already made?** A prompt that opens with the project inventory (`[Hopsable: project ...]`) answers it: when the inventory lacks the title, it is not made; go straight to the first write. Otherwise, for a create, run `hops superset dashboard list` first: when it lists the title, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
 ## Where the program runs
 
