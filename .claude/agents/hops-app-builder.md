@@ -22,7 +22,7 @@ hops skills info hops-design
 The skeleton is `references/app_skeleton/` next to the SKILL.md whose path the first command
 prints.
 
-**Already made?** A prompt that opens with the project inventory (`[Hopsable: project ...]`) answers it: when the inventory lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops app list` first: when it lists `<name>` as `RUNNING`, the piece exists; return that in one line and stop. Your exit check at the end is `hops app info <name>` showing `State` `RUNNING`.
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and the prompt has no `touched: yes` (an earlier step of this turn made or touched the piece): then, when that line lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops app list` first: when it lists `<name>` as `RUNNING`, the piece exists; return that in one line and stop. Your exit check at the end is `hops app info <name>` showing `State` `RUNNING`.
 
 ## Actions
 

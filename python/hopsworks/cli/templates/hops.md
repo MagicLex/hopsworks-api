@@ -75,12 +75,16 @@ is the whole dispatch:
    model" when a model exists is the inference piece alone. "Serve", "real-time", "an endpoint" or
    "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference.
 2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
-   inventory already shows the piece missing. Passing: the piece exists; say so in one line and go
-   on. Failing or missing: spawn its builder with the Agent tool and its prompt below. The builder
-   runs the same exit check last and quotes its output: that is the check, so run it again only
-   when the report does not show it passing. Failing: stop and say which check failed and what
-   the builder reported.
-3. **A check is a command on the cluster**, run by you or quoted from a builder's report with its
+   inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
+   `not listed`, not a count alone), the piece is not among them, and no earlier step of this
+   turn made or touched it. Passing: the piece exists; say so in one line and go on. Failing or
+   missing: spawn its builder with the Agent tool and its prompt below, adding `touched: yes` when
+   an earlier step of this turn made or touched the piece. The builder runs the same exit check
+   last. It counts only when the tool log Hopsable adds under the report (`[Hopsable: the
+   sub-agent's last commands ...]`) shows that command, `[exit code 0]` and its passing output;
+   otherwise run the check yourself, never on the builder's words. Failing: stop and say which
+   check failed and what the builder reported.
+3. **A check is a command on the cluster**, run by you or shown by a builder's tool log with its
    output, never a claim without it.
 4. **No `system.yaml`**, build lease or `set.py` for pieces. "Make it a system" runs `/hops-ml`,
    which starts from what the checks find.
@@ -172,11 +176,11 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    rows, one chart each.
 3. A model's predictions: load the model from the registry and score the test part of the training
    dataset it was trained on, with `<n>` from `Training dataset` in `hops model info <m>`:
-   `fv.get_training_data(training_dataset_version=<n>, primary_key=True)` and the key hash of the
-   training code (**hops-train** section 1, or the pipeline's `train.py`) give the same test part.
-   Never a new split, and never `get_train_validation_test_split` on an in-memory version: both
-   put rows the model trained on into the test part. A model whose training code split another
-   way: show the test metrics its `run.json` records instead.
+   `fv.get_training_data(training_dataset_version=<n>, primary_key=True)`, then the
+   `split_by_key` call of the training code (**hops-train** section 1, or the pipeline's
+   `train.py`), which keeps one entity's rows in one part and gives the same test part. Never
+   another split. A model whose training code split another way: show the test metrics its
+   `run.json` records instead.
 4. A cell that raised, or one the user asks to change: fix it in place with `--cell N`, never with
    a new cell after it. `N` is the number its `hops notebook run` printed (`Cell N of ...`); no
    `hops notebook info` to find it, since `--cell` refuses a cell the user edited.
@@ -188,7 +192,7 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    trains on a feature view of it that leaves out the primary key and event time, so the view
    serves model inputs only (`hops fv create <v> --feature-group <fg>:<n> --except
    <key>,<event time> --labels <label>`, then
-   the key-hash split of **hops-train** section 1 in a cell) and registers
+   `split_by_key` of **hops-train** section 1 in a cell) and registers
    with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
    notebook made itself registers without. "Register the model" afterwards is the best run,
    already registered: say its version. Then offer once per notebook, no option marked

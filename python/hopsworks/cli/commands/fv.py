@@ -322,7 +322,21 @@ def fv_create(
     if base is None:
         raise click.ClickException(f"Base feature group '{base_fg}' not found.")
 
+    label_list = [lbl.strip() for lbl in (labels or "").split(",") if lbl.strip()]
     left_out = [c.strip() for c in (except_cols or "").split(",") if c.strip()]
+    columns = [f.name for f in base.features] if left_out else []
+    unknown = [c for c in left_out if c not in columns]
+    if unknown:
+        raise click.BadParameter(
+            f"{', '.join(unknown)} not in '{base_fg}' (its columns: {', '.join(columns)}).",
+            param_hint="--except",
+        )
+    labelled = [c for c in left_out if c in label_list]
+    if labelled:
+        raise click.BadParameter(
+            f"{', '.join(labelled)} is a label (--labels): the view needs it.",
+            param_hint="--except",
+        )
     query = base.select_except(left_out) if left_out else base.select_all()
     for raw in joins:
         try:
@@ -347,7 +361,6 @@ def fv_create(
         )
 
     tf_objs = _resolve_transforms(fs, transforms)
-    label_list = [lbl.strip() for lbl in (labels or "").split(",") if lbl.strip()]
 
     try:
         fv = fs.create_feature_view(
