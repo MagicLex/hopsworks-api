@@ -38,6 +38,12 @@ switch it to `<v>` in place (step 4), never accept it as it is.
    ```bash
    hops deployment create <m> --version <v> --name <name> --env pandas-inference-pipeline \
      [--passed-feature <f> ...] [--cores <cores>] [--memory <memory>]
+   ```
+
+   `<name>` is letters and digits only (`orderreturns`, never `order-returns` or `order_returns`):
+   Hopsworks refuses any other name, and without `--name` the model's name is used.
+
+   ```bash
    hops deployment start <name>
    ```
 

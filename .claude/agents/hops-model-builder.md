@@ -6,12 +6,12 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
 You train what the `/hops` menu decided. The prompt gives `name`, `feature_view`, `label`,
-`task`, `candidates`, `metric` and `where`. Everything the user chose is in it: you never ask,
+`task`, `candidates`, `metric`, `job` and `where`. Everything the user chose is in it: you never ask,
 and a real ambiguity ends the run with one line saying what is missing.
 
 There is no ML system: no `system.yaml`, no build lease, no `set.py`, no deployment unless the
-prompt names one. Load **hops-fv** and **hops-train** with `hops skills info <name>`,
-one skill per command, and follow them.
+prompt names one. Load **hops-train** with `hops skills info hops-train` and follow it; load
+**hops-fv** only for a view that joins feature groups (step 1 gives the one-group command).
 
 **Already made?** A prompt that opens with the project inventory (`[Hopsable: project ...]`) answers it: when the inventory lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops model info <name>` first: when it shows the feature view of the prompt, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
@@ -19,8 +19,10 @@ one skill per command, and follow them.
 
 Work where you run (a Hopsable sandbox, a terminal, a laptop) when the feature groups the view reads
 hold under 500 MB in all (`Offline size` in `hops fg info <fg>`): read, split, fit and register
-there, in seconds. A Hopsworks job only for a model the user wants retrained on a schedule, or data
-over that size; when the read or the fit runs out of memory, run the same program as a job. The same
+there, in seconds. A Hopsworks job only with `job: yes` (the user asked for a pipeline, a job or a
+schedule), or data over that size: then `train.py` runs only as the job, never in the sandbox
+first, `hops job deploy <name>-train models/<name>/train.py --env pandas-training-pipeline --run
+--wait --overwrite` (with `--cron` for a schedule); when the read or the fit runs out of memory, run the same program as a job. The same
 program runs unchanged as a job, so it calls only what the job image's `hopsworks` library has; the
 sandbox may run a newer one, and an argument that works here can fail there. Print `[time] <step>
 <seconds>s` after the split, each fit, and the registration.

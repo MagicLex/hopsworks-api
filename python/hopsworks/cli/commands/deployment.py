@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -341,6 +342,13 @@ def deployment_create(
         cores: CPU cores per instance; None keeps the backend's default resources.
         memory: Memory per instance in MB; None keeps the backend's default resources.
     """
+    deploy_name = name or model_name
+    # The backend refuses any other name (422, "Serving name must follow regex [a-zA-Z0-9]+").
+    if not re.fullmatch(r"[a-zA-Z0-9]+", deploy_name):
+        raise click.UsageError(
+            f"Deployment name '{deploy_name}' must be letters and digits only ([a-zA-Z0-9]+): "
+            f"pass --name {re.sub(r'[^a-zA-Z0-9]', '', deploy_name) or '<name>'}."
+        )
     project = session.get_project(ctx)
     mr = project.get_model_registry()
     try:
@@ -352,7 +360,6 @@ def deployment_create(
     if model is None:
         raise click.ClickException(f"Model '{model_name}' not found.")
 
-    deploy_name = name or model_name
     if default_predictor is None and not script_file:
         default_predictor = _serves_by_default(model, serving_tool) or None
     # Upload a local predictor to HopsFS (the backend needs a HopsFS path);

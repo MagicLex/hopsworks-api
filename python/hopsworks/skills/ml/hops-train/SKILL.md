@@ -61,9 +61,11 @@ fv = fs.get_feature_view(name="my_fv", version=1)  # no FV yet? create one first
 #    dataset version (metadata only): a model registered with feature_view=fv
 #    in the same process records it, and scoring reads it.
 X_train, X_val, X_test, y_train, y_val, y_test = fv.train_validation_test_split(
-    validation_size=0.15, test_size=0.15, statistics_config=False
+    validation_size=0.15, test_size=0.15, seed=42, statistics_config=False  # seed=, not random_state=
 )
 td_version = fv.get_last_accessed_training_dataset()
+# The event time comes back as a feature: drop it (and any id) before fitting, since a datetime
+# column fails in scikit-learn: X_train = X_train.drop(columns=["order_ts"]).
 
 # B. Materialized + versioned, only when the user asks for a stored dataset:
 #    each create_* call starts a PySpark job (minutes). An ML system and the
@@ -218,14 +220,23 @@ first, with `--sweep <id>` and `--json`.
   argument a model records the view's last read, so runs registered after several reads all name
   the last one.
 - **The sweep is one tracked change**, so a watcher (the Hopsable Experiments preview) opens when
-  it starts and sees it end:
+  it starts and sees it end. That signal is a local line only the Hopsable sandbox writes; the
+  record is the runs in the registry, which a job or a notebook registers the same way. The
+  library a job or Jupyter runs may lack `events`, so the block runs without it:
 
   ```python
-  from hopsworks_common import events
+  import contextlib
+
+  try:
+      from hopsworks_common import events  # the live-preview signal, written in the Hopsable sandbox only
+  except ImportError:
+      events = None
 
   sweep_id = f"{name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
-  with events.tracked("experiment", "create", long=True, name=name) as sweep:
-      sweep.detail.update(sweep_id=sweep_id, candidates=len(candidates), metric=metric, metric_goal=goal)
+  tracked = events.tracked("experiment", "create", long=True, name=name) if events else contextlib.nullcontext()
+  with tracked as sweep:
+      if sweep:
+          sweep.detail.update(sweep_id=sweep_id, candidates=len(candidates), metric=metric, metric_goal=goal)
       ...  # the one split, then every fit and registration
   ```
 - **Each run registers** its metrics (`val_<metric>`, `test_<metric>`), a one-line `description=`

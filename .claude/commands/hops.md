@@ -101,17 +101,20 @@ recommended), run the `hops fg update ... --online` it named, then spawn it agai
 For a model, read the label from the data rather than asking: the column the request names or
 implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the
 choice in one line ("Predicting `status`, the order outcome") and go on. "Train X", "an
-experiment (run)", "show me experiments" or "compare models" without names is `candidates: 3`;
-asked while this system builds a notebook, it is Notebook step 5, in that notebook. Ask only when two or more
+experiment (run)" or "compare models" without names is `candidates: 3`; asked while this system
+builds a notebook, it is Notebook step 5, in that notebook. "Show the experiments" or "the runs"
+of a model the project has is a read: `hops model runs <m>`, never a new sweep. "A (training)
+pipeline" is the model piece with `job: yes`; "run it" afterwards is `hops job run <m>-train
+--wait`, then `hops model runs <m>`. Ask only when two or more
 columns fit the request equally.
 
 | Builder | Prompt |
 | --- | --- |
 | hops-data-builder | `name`, `rows` (10000 unless the user said), `columns` (name and type, one per line), `story` (what the question should find), `source` (`synthetic` or a data source) |
 | hops-features-builder | `name`, `sources` (feature groups or a data source), `features` (name, meaning, type), `grain` (the key and the event time), `schedule` (a Quartz cron, or none) |
-| hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, or none), `metric` |
+| hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, or none), `metric`, `job` (`yes` when the user asks for a pipeline, a job or a schedule, else `no`) |
 | hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `population` (the entities to score, such as open deals, and the feature group that lists them), `schedule` |
-| hops-deploy-builder | `name` (the deployment), `model` (name:version, or the best by a metric), `feature_view` (name:version), `passed_features` (sent by the caller instead of looked up, or none), `known_entity` (a key to check with, or none), `cores` and `memory` (1 and 1024 unless the user said) |
+| hops-deploy-builder | `name` (the deployment, letters and digits only), `model` (name:version, or the best by a metric), `feature_view` (name:version), `passed_features` (sent by the caller instead of looked up, or none), `known_entity` (a key to check with, or none), `cores` and `memory` (1 and 1024 unless the user said) |
 
 ## Status
 
@@ -173,13 +176,18 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    run the code and **hops-train** is the contract, its "In a notebook" section (read it with
    `hops skills info hops-train` once, when you reach this step). Every candidate is a run in
    the model registry, the chosen model registered, both checked with `hops model runs <m>` and
-   `hops model info <m>`, never a download. "Register the model" afterwards is the best run,
+   `hops model info <m>`, never a download. Data in a feature group trains on a feature view
+   of it (`hops fv create`, then `fv.train_validation_test_split(...)` in a cell) and registers
+   with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
+   notebook made itself registers without. "Register the model" afterwards is the best run,
    already registered: say its version. Then offer once per notebook, no option marked
    "(Recommended)", to make it a training pipeline: the model piece (Pieces above), on a feature
    group of the notebook's data.
-6. Never change a cell you did not write unless the user asks: the user may have the notebook open
+6. A question about the data while this system builds a notebook is answered in it: a cell for the
+   table, a cell per chart, never `hops sql` beside it.
+7. Never change a cell you did not write unless the user asks: the user may have the notebook open
    in JupyterLab.
-7. A model the project already has (a pipeline's, a builder's) in a notebook: load it from the
+8. A model the project already has (a pipeline's, a builder's) in a notebook: load it from the
    registry and plot or score what it holds (step 3, its `run.json` and `images/`); never train it
    again there.
 
