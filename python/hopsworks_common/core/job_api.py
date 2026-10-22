@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from hopsworks_common import (
     client,
     decorators,
+    events,
     execution,
     job,
     job_schedule,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
     )
 
 from hopsworks_apigen import public
+from hopsworks_common.core import execution_api
 
 
 @public(
@@ -49,6 +51,7 @@ from hopsworks_apigen import public
 class JobApi:
     @public
     @usage._method_logger
+    @events.tracking("job", "create", key=lambda self, name, *a, **k: {"name": name})
     def create_job(self, name: str, config: dict) -> job.Job:
         """Create a new job or update an existing one.
 
@@ -186,6 +189,7 @@ class JobApi:
         headers = {"content-type": "application/json"}
         return _client._send_request("GET", path_params, headers=headers)
 
+    @events.tracking("job", "delete", key=lambda self, job, *a, **k: {"name": job.name})
     def _delete(self, job):
         """Delete the job and all executions.
 
@@ -201,6 +205,7 @@ class JobApi:
         ]
         _client._send_request("DELETE", path_params)
 
+    @events.tracking("job", "update", key=lambda self, name, *a, **k: {"name": name})
     def _update_job(self, name: str, config: dict) -> job.Job:
         """Update the job.
 
@@ -224,6 +229,9 @@ class JobApi:
             )
         )
 
+    @events.tracking(
+        "schedule", "update", key=lambda self, name, *a, **k: {"name": name}
+    )
     def _schedule_job(self, name, schedule_config):
         """Attach the `schedule_config` to the job with the given `name`."""
         _client = client._get_instance()
@@ -231,20 +239,30 @@ class JobApi:
         headers = {"content-type": "application/json"}
         method = "PUT" if schedule_config.get("id") else "POST"
 
-        return job_schedule.JobSchedule.from_response_json(
-            _client._send_request(
-                method, path_params, headers=headers, data=json.dumps(schedule_config)
-            )
+        stored = _client._send_request(
+            method, path_params, headers=headers, data=json.dumps(schedule_config)
         )
+        # The web updates the job row from the line instead of waiting for a reload.
+        events.note(
+            cron=stored.get("cronExpression"),
+            enabled=stored.get("enabled"),
+            next=stored.get("nextExecutionDateTime"),
+        )
+        return job_schedule.JobSchedule.from_response_json(stored)
 
+    @events.tracking(
+        "schedule", "delete", key=lambda self, name, *a, **k: {"name": name}
+    )
     def _delete_schedule_job(self, name):
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "jobs", name, "schedule", "v2"]
 
-        return _client._send_request(
+        deleted = _client._send_request(
             "DELETE",
             path_params,
         )
+        events.note(enabled=False)
+        return deleted
 
     @public
     @usage._method_logger
@@ -277,7 +295,7 @@ class JobApi:
         # args and application/json for logical-time params); without an explicit
         # Content-Type Jersey can't dispatch and returns 415.
         headers = {"content-type": "text/plain"}
-        _client._send_request("POST", path_params, headers=headers, data=args)
+        execution_api.ExecutionApi()._post_start(name, path_params, headers, args)
 
     @public
     @usage._method_logger
@@ -318,11 +336,16 @@ class JobApi:
         headers = {"content-type": "application/json"}
         method = "PUT" if schedule_config.get("id") else "POST"
 
-        return job_schedule.JobSchedule.from_response_json(
-            _client._send_request(
-                method, path_params, headers=headers, data=json.dumps(schedule_config)
-            )
+        stored = _client._send_request(
+            method, path_params, headers=headers, data=json.dumps(schedule_config)
         )
+        # The web updates the job row from the line instead of waiting for a reload.
+        events.note(
+            cron=stored.get("cronExpression"),
+            enabled=stored.get("enabled"),
+            next=stored.get("nextExecutionDateTime"),
+        )
+        return job_schedule.JobSchedule.from_response_json(stored)
 
     @public
     @usage._method_logger
@@ -330,10 +353,12 @@ class JobApi:
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "jobs", name, "schedule", "v2"]
 
-        return _client._send_request(
+        deleted = _client._send_request(
             "DELETE",
             path_params,
         )
+        events.note(enabled=False)
+        return deleted
 
     def _add_tag(self, job: job.Job, name: str, value: Any) -> None:
         """Attach a name/value tag to a job.

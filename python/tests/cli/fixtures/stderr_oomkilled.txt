@@ -1,0 +1,7 @@
+Job failed with exit code: 137, Reason: OOMKilled
+
+Try increasing the memory for the job.
+
+--- Container logs ---
+2026-10-20 12:41:02,118 INFO: Reading umami events since 2026-10-19T02:00:00Z
+2026-10-20 12:41:09,540 INFO: Loaded 4812003 rows

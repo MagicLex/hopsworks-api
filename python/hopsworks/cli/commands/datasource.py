@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import click
 from click.core import ParameterSource
 from hopsworks.cli import output, session
+from hopsworks.cli.commands.files import makedirs
 
 
 if TYPE_CHECKING:
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
 @click.group("datasource")
 def datasource_group() -> None:
-    """Data source (storage connector) commands."""
+    """Data sources: connections to external storage."""
 
 
 @datasource_group.command("list")
@@ -40,6 +41,7 @@ def datasource_group() -> None:
 def connector_list(ctx: click.Context) -> None:
     """List all storage connectors in the active project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -75,6 +77,7 @@ def _credentials_label(connector: dict[str, Any]) -> str:
 def connector_info(ctx: click.Context, name: str) -> None:
     """Show details for a single storage connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -83,7 +86,9 @@ def connector_info(ctx: click.Context, name: str) -> None:
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Connector '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
 
     sc = getattr(ds, "storage_connector", ds)
     if output.JSON_MODE:
@@ -179,7 +184,7 @@ def _read_secret(
             raise click.BadParameter("stdin was empty", ctx=ctx, param=param)
     # An empty value (``--password ""`` or an empty env var) is missing, not a secret.
     if not value and required:
-        if _interactive():
+        if not output.no_input():
             value = click.prompt(flag.lstrip("-").replace("-", " "), hide_input=True)
         else:
             raise click.MissingParameter(ctx=ctx, param=param)
@@ -197,10 +202,6 @@ def _account_secret(ctx: click.Context, param: click.Parameter, name: str) -> st
             f"your account has no variable {name}", ctx=ctx, param=param
         )
     return var.value
-
-
-def _interactive() -> bool:
-    return sys.stdin.isatty()
 
 
 def _secret_option(
@@ -232,7 +233,7 @@ def _secret_option(
 
 @datasource_group.group("create")
 def connector_create() -> None:
-    """Create a storage connector (subcommand per backend)."""
+    """Create a data source; one command per source type."""
 
 
 @connector_create.command("jdbc", help="Register a JDBC connector.")
@@ -252,6 +253,7 @@ def connector_create_jdbc(
 ) -> None:
     """Register a JDBC connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -295,6 +297,7 @@ def connector_create_s3(
 ) -> None:
     """Register an S3 connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -345,6 +348,7 @@ def connector_create_snowflake(
 ) -> None:
     """Register a Snowflake connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1432,7 +1436,7 @@ for _name, _spec in _SPECS.items():
 
 @datasource_group.group("credentials")
 def connector_credentials() -> None:
-    """Your own credentials for a data source with provided credentials."""
+    """Your own credentials for a data source."""
 
 
 _CREDENTIAL_PAIRS = (
@@ -1504,7 +1508,7 @@ def _credential_arguments(
             )
     bound = getattr(sc, "user_credentials", None) or {}
     if not _given(values, "--password") and not _given(values, "--password-secret"):
-        if _interactive():
+        if not output.no_input():
             values["password"] = click.prompt("password", hide_input=True)
         elif not bound.get("password_secret_name"):
             raise click.UsageError(
@@ -1541,7 +1545,9 @@ def _provided_connector(ctx: click.Context, name: str) -> Any:
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Data source '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
     sc = getattr(ds, "storage_connector", ds)
     if not hasattr(sc, "set_credentials"):
         raise click.ClickException(
@@ -1572,15 +1578,13 @@ def _upload_wallet(ctx: click.Context, sc: Any, local_zip: str) -> tuple[str, st
     file_name = f"wallet-{uuid.uuid4().hex}.zip"
     dataset_api = project.get_dataset_api()
     try:
-        for directory in (os.path.dirname(target_dir), target_dir):
-            if not dataset_api.exists(directory):
-                dataset_api.mkdir(directory)
+        makedirs(dataset_api, target_dir)
         with tempfile.TemporaryDirectory() as tmp:
             staged = os.path.join(tmp, file_name)
             shutil.copyfile(local_zip, staged)
             dataset_api.upload(staged, target_dir)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Wallet upload failed: {exc}") from exc
+        raise click.ClickException(f"Could not upload the wallet: {exc}") from exc
     relative = f"{target_dir}/{file_name}"
     output.info("Uploaded wallet to %s", relative)
     return f"/Projects/{project.name}/{relative}", relative
@@ -1600,7 +1604,9 @@ def _validate(sc: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         result = sc._validate_credentials(**args)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Validation failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not validate credentials for data source '{name}': {exc}"
+        ) from exc
     if not result.get("valid"):
         code = result.get("errorCode")
         detail = result.get("message") or "the data source rejected the credentials"
@@ -1629,12 +1635,15 @@ def _binding_rows(binding: dict[str, Any]) -> list[list[Any]]:
 @_credential_options
 @click.pass_context
 def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # noqa: D417
-    """Save your credentials for a data source to your account, once the data source accepts them.
+    """Save your credentials for a data source.
+
+    Save your credentials for a data source to your account, once the data source accepts them.
 
     Nothing is saved when the data source rejects them.
     An option not given keeps what is already bound, so `--password` alone rotates the password and keeps the username and wallet.
     Each credential option is given by value or by account entry name.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -1665,12 +1674,13 @@ def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # no
 @_credential_options
 @click.pass_context
 def credentials_validate(ctx: click.Context, name: str, **values: Any) -> None:  # noqa: D417
-    """Test your credentials against a data source without saving them.
+    """Test credentials against a data source without saving.
 
     A wallet is uploaded under a new name for the test, which reads it from HopsFS,
     and removed again afterwards.
     Each credential option is given by value or by account entry name.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -1690,12 +1700,15 @@ def credentials_validate(ctx: click.Context, name: str, **values: Any) -> None: 
     output.success("✓ Data source %s accepted the credentials", name)
 
 
-@connector_credentials.command("show")
+@connector_credentials.command("info")
 @click.argument("name")
 @click.pass_context
 def credentials_show(ctx: click.Context, name: str) -> None:
-    """Show your binding for a data source: status and account entry names, never values.
+    """Show your credential binding, never the values.
 
+    Show your binding for a data source: status and account entry names, never values.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -1716,18 +1729,21 @@ def credentials_show(ctx: click.Context, name: str) -> None:
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Remove your binding for a data source, its wallet file and its default-named account entries.
+    """Remove your credentials for a data source.
+
+    Remove your binding for a data source, its wallet file and its default-named account entries.
 
     The default env var and secrets (DS_<NAME>_<feature store id>_USER, ds_<name>_<feature store id>_password and ds_<name>_<feature store id>_wallet_password) are deleted from your account; ones you named yourself stay.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
         yes: Skip confirmation when True.
     """
     sc = _provided_connector(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Remove your credentials for '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Remove your credentials for '{name}'?")
     try:
         sc.delete_credentials()
     except Exception as exc:  # noqa: BLE001
@@ -1745,26 +1761,31 @@ def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
 def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
     """Delete a storage connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
         yes: Skip confirmation when True.
     """
     fs = session.get_feature_store(ctx)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete connector '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete connector '{name}'?")
 
+    from hopsworks_common import events
     from hopsworks_common.core import rest
 
     try:
-        rest._send_request(
-            "DELETE",
-            rest._project_path(
-                "featurestores", getattr(fs, "id", None), "storageconnectors", name
-            ),
-        )
+        with events.tracked("datasource", "delete", name=name):
+            rest._send_request(
+                "DELETE",
+                rest._project_path(
+                    "featurestores", getattr(fs, "id", None), "storageconnectors", name
+                ),
+            )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Delete failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not delete data source '{name}': {exc}"
+        ) from exc
     output.success("✓ Deleted connector %s", name)
 
 
@@ -1774,6 +1795,7 @@ def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
 def connector_databases(ctx: click.Context, name: str) -> None:
     """List databases visible through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1797,6 +1819,7 @@ def connector_databases(ctx: click.Context, name: str) -> None:
 def connector_tables(ctx: click.Context, name: str, database: str | None) -> None:
     """List tables in a database reachable through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1825,6 +1848,7 @@ def connector_tables(ctx: click.Context, name: str, database: str | None) -> Non
 def connector_preview(ctx: click.Context, name: str) -> None:
     """Fetch a small data preview through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1834,7 +1858,9 @@ def connector_preview(ctx: click.Context, name: str) -> None:
         ds = fs.get_data_source(name)
         data = ds.get_data()
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Preview failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not preview data source '{name}': {exc}"
+        ) from exc
     if output.JSON_MODE:
         to_dict = getattr(data, "to_dict", None)
         output.print_json(to_dict() if callable(to_dict) else str(data))
@@ -1850,7 +1876,7 @@ def connector_preview(ctx: click.Context, name: str) -> None:
 def connector_infer_metadata(
     ctx: click.Context, name: str, table: str, database: str | None
 ) -> None:
-    """Use platform intelligence to infer feature metadata for a table.
+    """Infer feature metadata for a table.
 
     Calls the same LLM-backed endpoint as the "Infer metadata" button in the
     UI: suggests a renamed feature name, Hopsworks type, and description per
@@ -1858,6 +1884,7 @@ def connector_infer_metadata(
     external table as an external feature group, or before creating a new
     feature group from it.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1885,7 +1912,9 @@ def connector_infer_metadata(
     except PlatformIntelligenceException as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Infer metadata failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not infer metadata of table '{table}': {exc}"
+        ) from exc
 
     if output.JSON_MODE:
         output.print_json(inferred.to_dict())
@@ -1922,12 +1951,16 @@ def _test_connector(ctx: click.Context, body: dict[str, Any]) -> None:
             json_body=body,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Connection test failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not connect to data source '{body.get('name', '?')}': {exc}"
+        ) from exc
     result = result if isinstance(result, dict) else {}
     message = (result.get("connectionOutput") or "").strip()
     # The checkers report success as exit code 0, or 200 for HTTP sources.
     if result.get("statusCode") not in (0, 200):
-        raise click.ClickException(f"Connection test failed: {message or 'no output'}")
+        raise click.ClickException(
+            f"Could not connect to data source '{body.get('name', '?')}': {message or 'no output'}"
+        )
     output.success(
         "✓ Connection to %s works%s", body["name"], f": {message}" if message else ""
     )
@@ -1935,16 +1968,20 @@ def _test_connector(ctx: click.Context, body: dict[str, Any]) -> None:
 
 def _create_connector(ctx: click.Context, body: dict[str, Any]) -> None:
     fs = session.get_feature_store(ctx)
+    from hopsworks_common import events
     from hopsworks_common.core import rest
 
     try:
-        rest._send_request(
-            "POST",
-            rest._project_path(
-                "featurestores", getattr(fs, "id", None), "storageconnectors"
-            ),
-            json_body=body,
-        )
+        with events.tracked("datasource", "create", name=body.get("name")):
+            rest._send_request(
+                "POST",
+                rest._project_path(
+                    "featurestores", getattr(fs, "id", None), "storageconnectors"
+                ),
+                json_body=body,
+            )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Create failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not create data source '{body.get('name', '?')}': {exc}"
+        ) from exc
     output.success("✓ Created connector %s", body["name"])

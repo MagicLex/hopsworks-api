@@ -7,11 +7,18 @@ customise the returned ``Project`` mock to shape the command's output.
 
 from __future__ import annotations
 
+import copy
+import json
+import os
+from pathlib import Path
 from unittest import mock
 
 import pytest
-from hopsworks.cli import config, session
+from hopsworks.cli import config, output, session, waits
 from hopsworks.cli.commands import factory
+from hopsworks_common.core.dataset_api import DatasetApi
+
+from tests.fixtures.backend_fixtures import backend_fixtures_json
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +26,99 @@ def factory_enabled():
     """Run `hops factory` commands as on a cluster with the Factory enabled; test_factory_enabled checks the check."""
     with mock.patch.object(factory, "_require_enabled"):
         yield
+
+
+class Clock:
+    """Time for `waits`: sleeping moves it on at once."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def tty():
+    """A terminal on stdin, so prompts are asked and the runner's input answers them."""
+    with mock.patch.object(output, "_stdin_tty", return_value=True):
+        yield
+
+
+@pytest.fixture
+def clock():
+    """Run every wait, the CLI's and the SDK's, on a fake clock: a 600 s timeout passes in no time."""
+    fake = Clock()
+    with (
+        mock.patch.object(waits, "time", fake),
+        # The SDK's await_termination sleeps between its polls.
+        mock.patch("hopsworks_common.engine.execution_engine.time", fake),
+    ):
+        yield fake
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def backend(name: str) -> dict:
+    """A backend response body from fixtures/: captured from a cluster, or edited from one."""
+    return json.loads((FIXTURES / f"{name}.json").read_text())
+
+
+def execution(key: str) -> dict:
+    """A captured execution body from the SDK's fixtures, tests/fixtures/execution_fixtures.json."""
+    return copy.deepcopy(backend_fixtures_json["execution"][key]["response"])
+
+
+class HopsFS:
+    """The Logs dataset: each path's content, and the existence check it shows up at (1 = the first)."""
+
+    def __init__(self):
+        self.files: dict[str, tuple[str, int]] = {}
+        self.checks: dict[str, int] = {}
+
+    def exists(self, path: str) -> bool:
+        self.checks[path] = self.checks.get(path, 0) + 1
+        return path in self.files and self.checks[path] >= self.files[path][1]
+
+    def download(self, path, local_path=None, overwrite=False, **kwargs) -> str:
+        target = os.path.join(local_path, os.path.basename(path))
+        with open(target, "w") as fd:
+            fd.write(self.files[path][0])
+        return target
+
+
+@pytest.fixture
+def hopsfs():
+    """A fake Logs dataset behind the SDK's DatasetApi; tests put files in `files`."""
+    fake = HopsFS()
+    with (
+        mock.patch.object(DatasetApi, "exists", lambda self, path: fake.exists(path)),
+        mock.patch.object(
+            DatasetApi,
+            "download",
+            lambda self, path, *a, **k: fake.download(path, *a, **k),
+        ),
+    ):
+        yield fake
+
+
+# The reason Kubernetes gave for a pod it could not place on the dev cluster.
+PENDING_REASON = (
+    "FailedScheduling: 0/6 nodes are available: 1 node(s) didn't match Pod's node "
+    "affinity/selector, 5 Insufficient memory. preemption: 0/6 nodes are available: "
+    "1 Preemption is not helpful for scheduling, 5 No preemption victims found for "
+    "incoming pod."
+)
+
+
+@pytest.fixture
+def unschedulable():
+    """The KubeMonitorDTO of a job execution whose pod Kubernetes cannot place."""
+    return execution("get_python_queued")["kubeMonitor"]
 
 
 @pytest.fixture

@@ -515,7 +515,7 @@ def test_only_one_secret_can_come_from_stdin():
 
 
 def test_a_required_secret_is_prompted_for_without_echo_on_a_terminal(monkeypatch):
-    monkeypatch.setattr(ds, "_interactive", lambda: True)
+    monkeypatch.setattr(ds.output, "no_input", lambda: False)
     with mock.patch.object(ds, "_create_connector") as create:
         result = CliRunner().invoke(
             cli,
@@ -530,7 +530,7 @@ def test_a_required_secret_is_prompted_for_without_echo_on_a_terminal(monkeypatc
 
 def test_an_empty_required_secret_is_treated_as_missing(monkeypatch):
     """An empty value must not satisfy a required secret and carry an empty credential."""
-    monkeypatch.setattr(ds, "_interactive", lambda: False)
+    monkeypatch.setattr(ds.output, "no_input", lambda: True)
 
     result, create = _invoke(
         ["sap-hana", "n", "--host", "h", "--user", "u", "--password", ""]

@@ -96,7 +96,7 @@ def _doc(target: Path) -> dict:
     return yaml.safe_load((target / "system.yaml").read_text(encoding="utf-8"))
 
 
-def test_an_example_asks_only_where_the_code_goes(tmp_path, monkeypatch, quiet):
+def test_an_example_asks_only_where_the_code_goes(tmp_path, monkeypatch, quiet, tty):
     done = _example(tmp_path, monkeypatch, ["1"], "churn-example")
     assert done.exit_code == 0, done.output
     doc = _doc(tmp_path / "churn-example")
@@ -111,7 +111,7 @@ def test_an_example_asks_only_where_the_code_goes(tmp_path, monkeypatch, quiet):
 
 
 def test_the_helpdesk_example_keeps_its_llm_in_account_env_vars(
-    tmp_path, monkeypatch, quiet
+    tmp_path, monkeypatch, quiet, tty
 ):
     """The key goes to the account settings, never to the screen or system.yaml."""
     from hopsworks_common.core import env_var_api
@@ -202,7 +202,9 @@ def test_the_build_starts_in_the_system_directory(tmp_path, monkeypatch, quiet):
     assert "logs-*/" in ignored.splitlines() and "*.log" in ignored.splitlines()
 
 
-def test_the_ui_starts_an_example_by_name_and_resumes_it(tmp_path, monkeypatch, quiet):
+def test_the_ui_starts_an_example_by_name_and_resumes_it(
+    tmp_path, monkeypatch, quiet, tty
+):
     done = _example(tmp_path, monkeypatch, ["1"], "recs-example")
     assert done.exit_code == 0, done.output
     assert _doc(tmp_path / "recs-example")["system"]["repo"] == {"url": "new"}

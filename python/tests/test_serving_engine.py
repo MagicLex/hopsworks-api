@@ -639,6 +639,68 @@ class TestSchemaPublishing:
             "/Projects/p/Deployments/dep/resources/schema"
         )
 
+    def test_a_running_deployment_refusal_names_both_ways_out(self, mocker):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = "Running"
+
+        with pytest.raises(ModelServingException) as refused:
+            eng._delete(deployment)
+
+        assert str(refused.value) == (
+            "Deployment 'dep' is Running: stop it first, or force the delete."
+        )
+        eng._serving_api._delete.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["Starting", "Updating"])
+    def test_a_starting_or_updating_deployment_is_told_to_wait(self, mocker, status):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = status
+
+        with pytest.raises(ModelServingException) as refused:
+            eng._delete(deployment)
+
+        assert str(refused.value) == (
+            f"Deployment 'dep' is {status}: wait until it is running, "
+            "then stop it or force the delete."
+        )
+        eng._serving_api._delete.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["Starting", "Updating"])
+    def test_force_leaves_the_decision_to_the_backend(self, mocker, status):
+        from hopsworks_common.client.exceptions import RestAPIError
+
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = status
+        response = mocker.Mock(status_code=400)
+        response.json.return_value = {
+            "errorCode": 240001,
+            "errorMsg": "Deployment is starting or updating",
+        }
+        refusal = RestAPIError("url", response)
+        eng._serving_api._delete.side_effect = refusal
+
+        with pytest.raises(RestAPIError) as refused:
+            eng._delete(deployment, force=True)
+
+        assert refused.value is refusal
+        eng._serving_api._delete.assert_called_once_with(deployment)
+
+    def test_a_deployment_without_state_is_not_reported_deleted(self, mocker):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value = None
+
+        with pytest.raises(ModelServingException, match="nothing deleted"):
+            eng._delete(deployment, force=True)
+        eng._serving_api._delete.assert_not_called()
+
     def test_read_schema_from_backend(self, mocker):
         from hsml.deployment_schema import DeploymentSchema
 
@@ -919,6 +981,34 @@ class TestStartWithoutWaiting:
         eng._start(deployment, await_status=0)
 
         eng._serving_api._post.assert_called_once()
+
+    def test_refused_start_is_not_rolled_back(self, mocker):
+        from hopsworks_common.client.exceptions import RestAPIError
+        from hopsworks_common.constants import PREDICTOR_STATE
+        from hsml.engine import serving_engine
+
+        error = RestAPIError.__new__(RestAPIError)
+        error.response = mocker.Mock(status_code=403)
+        error.error_code = 150068
+        error.args = ("refused",)
+        eng = serving_engine.ServingEngine()
+        eng._serving_api = mocker.Mock()
+        eng._serving_api._post.side_effect = error
+        eng._check_status = mocker.Mock(
+            return_value=(False, mocker.Mock(status=PREDICTOR_STATE.STATUS_STOPPED))
+        )
+        eng._get_available_instances = mocker.Mock(return_value=1)
+        eng._get_starting_progress = mocker.Mock(return_value=(0, ""))
+        eng._stop = mocker.Mock()
+        deployment = mocker.Mock(
+            name="dep", model_server="PYTHON", has_model=True, requested_instances=1
+        )
+
+        with pytest.raises(RestAPIError) as info:
+            eng._start(deployment, await_status=0)
+
+        assert info.value is error
+        eng._stop.assert_not_called()
 
 
 class TestStartAndSaveAwaitTheRoute:
@@ -1291,6 +1381,7 @@ class TestWarmRestTransport:
             "GET",
             ["v1", "proj", "fraud", "v1", "models", "fraud"],
             with_base_path_params=False,
+            retry_while_unavailable=False,
         )
 
     def test_an_error_answer_is_not_raised(self, mocker):
@@ -1494,3 +1585,161 @@ def test_dropped_scaling_fields_names_what_an_older_backend_left_out():
     )
     assert _dropped_scaling_fields(None, {}) == []
     assert _dropped_scaling_fields(sent, None) == []
+
+
+class TestIsRoutedThroughTheClient:
+    """The probe's own timeout keeps the client from retrying it: a quick answer is the point."""
+
+    def _probe(self, mocker, *outcomes):
+        import requests
+        from hsfs.client.base import Client
+        from hsml.core import serving_api
+
+        mocker.patch("requests.sessions.Session.prepare_request")
+        sleep = mocker.patch("hopsworks_common.client.base.time.sleep")
+        send = mocker.patch("requests.sessions.Session.send", side_effect=outcomes)
+        istio = Client()
+        istio._connected = True
+        istio._base_url = "https://gateway.example:443"
+        istio._auth = None
+        istio._verify = False
+        istio._session = requests.session()
+        mocker.patch(
+            "hsml.core.serving_api.client.istio._get_instance", return_value=istio
+        )
+        deployment = mocker.Mock(api_protocol="REST")
+        deployment.name = "fraud"
+        deployment.project_namespace = "proj"
+        routed = serving_api.ServingApi()._is_routed(deployment, timeout=2)
+        return routed, send, sleep
+
+    def test_a_read_timeout_is_not_routed_at_once(self, mocker):
+        import requests
+
+        routed, send, sleep = self._probe(
+            mocker, requests.exceptions.ReadTimeout(), mocker.Mock()
+        )
+
+        assert routed is False
+        assert send.call_count == 1
+        sleep.assert_not_called()
+
+    def test_a_gateway_503_is_answered_at_once(self, mocker):
+        import requests
+
+        unavailable = requests.Response()
+        unavailable.status_code = 503
+        unavailable._content = b"no healthy upstream"
+        unavailable.headers["Content-Type"] = "text/plain"
+
+        routed, send, sleep = self._probe(mocker, unavailable, mocker.Mock())
+
+        assert routed is True
+        assert send.call_count == 1
+        sleep.assert_not_called()
+
+
+class TestModelTrafficIsNotRetried:
+    """The Istio client sends once: a gateway error is the deployment's answer, not an outage to wait out."""
+
+    def _istio(self, mocker, *outcomes):
+        import requests
+        from hopsworks_common.client.istio import base as istio_base
+
+        class Istio(istio_base.Client):
+            def __init__(self):
+                pass
+
+        mocker.patch("requests.sessions.Session.prepare_request")
+        sleep = mocker.patch("hopsworks_common.client.base.time.sleep")
+        send = mocker.patch("requests.sessions.Session.send", side_effect=outcomes)
+        istio = Istio()
+        istio._connected = True
+        istio._base_url = "https://gateway.example:443"
+        istio._auth = None
+        istio._verify = False
+        istio._session = requests.session()
+        mocker.patch(
+            "hsml.core.serving_api.client.istio._get_instance", return_value=istio
+        )
+        deployment = mocker.Mock(api_protocol="REST")
+        deployment.name = "fraud"
+        deployment.project_namespace = "proj"
+        return deployment, send, sleep
+
+    def _503(self):
+        import requests
+
+        response = requests.Response()
+        response.status_code = 503
+        response._content = b"no healthy upstream"
+        response.headers["Content-Type"] = "text/plain"
+        return response
+
+    def test_a_503_on_predict_raises_rest_api_error_once(self, mocker):
+        from hopsworks_common.client.exceptions import RestAPIError
+        from hsml.core import serving_api
+
+        deployment, send, sleep = self._istio(mocker, self._503(), mocker.Mock())
+
+        with pytest.raises(RestAPIError) as e:
+            serving_api.ServingApi()._send_inference_request_via_rest_protocol(
+                deployment, {"instances": [[1]]}
+            )
+
+        assert e.value.response.status_code == 503
+        assert send.call_count == 1
+        sleep.assert_not_called()
+
+    def test_a_503_on_the_warm_up_is_logged_and_skipped(self, mocker, caplog):
+        import logging
+
+        from hsml.core import serving_api
+
+        deployment, send, sleep = self._istio(mocker, self._503(), mocker.Mock())
+
+        with caplog.at_level(logging.DEBUG, logger="hsml.core.serving_api"):
+            serving_api.ServingApi()._warm_rest_transport(deployment)
+
+        assert send.call_count == 1
+        sleep.assert_not_called()
+        assert any("answered 503" in r.getMessage() for r in caplog.records)
+
+    def test_a_503_on_predict_through_hopsworks_raises_rest_api_error_once(
+        self, mocker
+    ):
+        """Without an Istio client, predict goes through the Hopsworks client, which retries other calls."""
+        import requests
+        from hopsworks_common.client.exceptions import RestAPIError
+        from hsfs.client.base import Client
+        from hsml.core import serving_api
+
+        mocker.patch("requests.sessions.Session.prepare_request")
+        sleep = mocker.patch("hopsworks_common.client.base.time.sleep")
+        send = mocker.patch(
+            "requests.sessions.Session.send", side_effect=[self._503(), mocker.Mock()]
+        )
+        hopsworks_client = Client()
+        hopsworks_client._connected = True
+        hopsworks_client._base_url = "https://hopsworks.example:443"
+        hopsworks_client._auth = None
+        hopsworks_client._verify = False
+        hopsworks_client._session = requests.session()
+        hopsworks_client._project_id = 119
+        mocker.patch(
+            "hsml.core.serving_api.client.istio._get_instance", return_value=None
+        )
+        mocker.patch(
+            "hsml.core.serving_api.client._get_instance", return_value=hopsworks_client
+        )
+        deployment = mocker.Mock(api_protocol="REST")
+        deployment.name = "fraud"
+
+        with pytest.raises(RestAPIError) as e:
+            serving_api.ServingApi()._send_inference_request_via_rest_protocol(
+                deployment, {"instances": [[1]]}
+            )
+
+        assert e.value.response.status_code == 503
+        assert send.call_count == 1
+        sleep.assert_not_called()

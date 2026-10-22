@@ -359,8 +359,13 @@ class UsersApi:
         _client = client._get_instance()
         path_params = ["admin", "users", user_id, "accepted"]
         headers = {"content-type": "application/json"}
+        # Each accept sends the activation email, so a resend could send it twice.
         response = _client._send_request(
-            "PUT", path_params, headers=headers, data=json.dumps({})
+            "PUT",
+            path_params,
+            headers=headers,
+            data=json.dumps({}),
+            retry_while_unavailable=False,
         )
         return AdminUser.from_response_json(response)
 
@@ -391,7 +396,10 @@ class UsersApi:
         """
         _client = client._get_instance()
         path_params = ["admin", "users", user_id, "rejected"]
-        response = _client._send_request("PUT", path_params)
+        # Each reject sends the rejection email, so a resend could send it twice.
+        response = _client._send_request(
+            "PUT", path_params, retry_while_unavailable=False
+        )
         return AdminUser.from_response_json(response)
 
     @public
@@ -422,7 +430,10 @@ class UsersApi:
         """
         _client = client._get_instance()
         path_params = ["admin", "users", user_id, "pending"]
-        response = _client._send_request("PUT", path_params)
+        # Each call sends a new email with a new validation key, which voids the previous link.
+        response = _client._send_request(
+            "PUT", path_params, retry_while_unavailable=False
+        )
         return AdminUser.from_response_json(response)
 
     @public

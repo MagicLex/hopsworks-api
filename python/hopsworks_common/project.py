@@ -80,6 +80,7 @@ class Project:
         self._id = project_id
         self._name = project_name
         self._owner = owner
+        self._project_team = project_team
         self._description = description
         self._created = created
 
@@ -124,6 +125,11 @@ class Project:
     def owner(self):
         """Owner of the project."""
         return self._owner
+
+    @property
+    def project_team(self):
+        """Members of the project as the project info lists them, with their role and user."""
+        return self._project_team
 
     @public
     @property

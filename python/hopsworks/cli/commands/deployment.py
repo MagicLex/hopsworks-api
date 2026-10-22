@@ -14,12 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import click
-from hopsworks.cli import lineage, output, session, versions
+from hopsworks.cli import lineage, output, session, versions, waits
+from hopsworks.cli.commands.files import makedirs
 
 
 @click.group("deployment")
 def deployment_group() -> None:
-    """Model serving deployment commands."""
+    """Deployments: models served behind an endpoint."""
 
 
 @deployment_group.command("list")
@@ -27,6 +28,7 @@ def deployment_group() -> None:
 def deployment_list(ctx: click.Context) -> None:
     """List every deployment in the active project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -54,25 +56,48 @@ def deployment_list(ctx: click.Context) -> None:
 
 @deployment_group.command("info")
 @click.argument("name")
+@click.option(
+    "--stable",
+    type=click.IntRange(min=1),
+    metavar="SECONDS",
+    help="Watch the deployment this long; exit non-zero unless it stays Running "
+    "with no container restart in that window.",
+)
 @click.pass_context
-def deployment_info(ctx: click.Context, name: str) -> None:
+def deployment_info(ctx: click.Context, name: str, stable: int | None) -> None:
     """Show details for a single deployment.
 
+    With `--stable`, the deployment is read every few seconds for that long, and
+    the command fails as soon as it leaves Running or a container restarts: a
+    deployment that answers one request and then crashes is flapping, not served.
+
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
+        stable: Seconds to watch for a status change or a restart.
     """
     project = session.get_project(ctx)
     ms = project.get_model_serving()
     try:
         deployment = ms.get_deployment(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Deployment '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find deployment '{name}': {exc}"
+        ) from exc
     if deployment is None:
         raise click.ClickException(f"Deployment '{name}' not found.")
 
+    status, restarts = (
+        _watch_stable(deployment, name, stable)
+        if stable
+        else (_deployment_status_live(deployment), _restarts(deployment))
+    )
+
     if output.JSON_MODE:
-        output.print_json(_deployment_to_dict(deployment))
+        output.print_json(
+            {**_deployment_to_dict(deployment), "status": status, "restarts": restarts}
+        )
         return
 
     rows = [
@@ -85,9 +110,54 @@ def deployment_info(ctx: click.Context, name: str) -> None:
         ["Model server", getattr(deployment, "model_server", "-")],
         ["Schema", _schema_label(deployment)],
         ["Schema id", getattr(deployment, "schema_id", None) or "-"],
-        ["Status", _deployment_status_live(deployment)],
+        ["Status", status],
+        ["Restarts", "-" if restarts is None else restarts],
     ]
     output.print_table(["FIELD", "VALUE"], rows)
+    if stable:
+        output.success("✓ %s stayed Running for %ds with no restart", name, stable)
+
+
+_STABLE_POLL_SECONDS = 5
+
+
+def _restarts(d: Any) -> int | None:
+    """Container restarts of the predictor's live pods; None when none is reported."""
+    try:
+        logs = d._serving_engine._serving_api._get_logs(d, "predictor", 1)
+    except Exception:  # noqa: BLE001 - a stopped deployment has no live pod
+        return None
+    counts = [
+        log.restart_count
+        for log in logs or []
+        if getattr(log, "restart_count", None) is not None
+    ]
+    return sum(counts) if counts else None
+
+
+def _watch_stable(d: Any, name: str, seconds: int) -> tuple[str, int | None]:
+    """Status and restarts after `seconds` of Running with no new restart, or fail."""
+    import time
+
+    deadline = time.monotonic() + seconds
+    first = None
+    while True:
+        status, restarts = _deployment_status_live(d), _restarts(d)
+        if status.lower() != "running":
+            raise click.ClickException(
+                f"Deployment '{name}' is {status}, not Running. "
+                f"Read `hops deployment logs {name}`."
+            )
+        first = restarts if first is None else first
+        if first is not None and restarts is not None and restarts > first:
+            raise click.ClickException(
+                f"Deployment '{name}' restarted {restarts - first} time(s) while "
+                f"watched: it is flapping, not served. Read `hops deployment logs {name}`."
+            )
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return status, restarts
+        time.sleep(min(_STABLE_POLL_SECONDS, left))
 
 
 @deployment_group.command("schema")
@@ -110,6 +180,7 @@ def deployment_schema(
 ) -> None:
     """Show the request contract of a deployment.
 
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
@@ -179,24 +250,6 @@ def _schema_label(d: Any) -> str:
     return "inferred" if schema.inferred else "manual"
 
 
-@deployment_group.command("status")
-@click.argument("name")
-@click.pass_context
-def deployment_status(ctx: click.Context, name: str) -> None:
-    """Show the current status of a deployment.
-
-    Args:
-        ctx: Click context.
-        name: Deployment name.
-    """
-    deployment = _get_deployment(ctx, name)
-    status = _deployment_status_live(deployment)
-    if output.JSON_MODE:
-        output.print_json({"name": name, "status": status})
-        return
-    click.echo(status)
-
-
 def _deployment_status(d: Any) -> str:
     """Return a best-effort status string without triggering a network call.
 
@@ -255,10 +308,6 @@ def _deployment_to_dict(d: Any) -> dict[str, Any]:
 
 # region Write commands
 
-# The backend's default limits for a predictor instance.
-DEFAULT_CORES = 1.0
-DEFAULT_MEMORY_MB = 1024
-
 
 @deployment_group.command("create")
 @click.argument("model_name")
@@ -297,21 +346,22 @@ DEFAULT_MEMORY_MB = 1024
     "Only with the default predictor.",
 )
 @click.option(
-    "--no-default-predictor",
-    "no_default_predictor",
-    is_flag=True,
-    help="Never use the library's default predictor.",
+    "--default-predictor/--no-default-predictor",
+    "default_predictor",
+    default=None,
+    help="Serve with the library's default predictor (no script). Unset: on for a Python or "
+    "scikit-learn model registered with a feature view and deployed without a script.",
 )
 @click.option(
     "--cores",
     type=click.FloatRange(min=0, min_open=True),
     help="CPU cores each instance may use; half of them are requested. "
-    f"Default {DEFAULT_CORES:g}.",
+    "Unset means the backend default.",
 )
 @click.option(
     "--memory",
     type=click.IntRange(min=1),
-    help=f"Memory in MB each instance may use, all of it requested. Default {DEFAULT_MEMORY_MB}.",
+    help="Memory in MB each instance may use, all of it requested. Unset means the backend default.",
 )
 @click.pass_context
 def deployment_create(
@@ -325,17 +375,18 @@ def deployment_create(
     knative_mode: bool | None,
     description: str,
     passed_features: tuple[str, ...],
-    no_default_predictor: bool,
+    default_predictor: bool | None,
     cores: float | None,
     memory: int | None,
 ) -> None:
     """Deploy a model from the registry.
 
-    A local ``--script`` is uploaded to HopsFS first (the backend needs a
-    HopsFS path); an existing HopsFS path is passed through. ``--env`` selects
+    A local `--script` is uploaded to HopsFS first (the backend needs a
+    HopsFS path); an existing HopsFS path is passed through. `--env` selects
     the inference environment. Without a script, a Python model registered
     with a feature view gets the default predictor and a deployment schema.
 
+    \f
     Args:
         ctx: Click context.
         model_name: Model registry name.
@@ -343,11 +394,11 @@ def deployment_create(
         name: Deployment name; defaults to the model name.
         script_file: Predictor script, local or HopsFS.
         environment: Inference environment name.
-        serving_tool: ``KSERVE`` or ``DEFAULT``.
+        serving_tool: `KSERVE` or `DEFAULT`.
         knative_mode: KServe Knative (True) vs Standard (False) mode; None lets the backend decide.
         description: Deployment description.
         passed_features: Features clients send with each request.
-        no_default_predictor: Disable the default predictor.
+        default_predictor: Serve with the default predictor; None decides from the model.
         cores: CPU cores per instance; None keeps the backend's default resources.
         memory: Memory per instance in MB; None keeps the backend's default resources.
     """
@@ -356,19 +407,22 @@ def deployment_create(
     try:
         model = versions.model(mr, model_name, version)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Model '{model_name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find model '{model_name}': {exc}"
+        ) from exc
     if model is None:
         raise click.ClickException(f"Model '{model_name}' not found.")
 
     deploy_name = name or model_name
+    if default_predictor is None and not script_file:
+        default_predictor = _serves_by_default(model, serving_tool) or None
     # Upload a local predictor to HopsFS (the backend needs a HopsFS path);
     # an existing HopsFS path passes through untouched.
     if script_file and Path(script_file).is_file():
         dataset = project.get_dataset_api()
         dest_dir = f"Resources/deployments/{deploy_name}"
-        with contextlib.suppress(Exception):  # directory may already exist
-            dataset.mkdir(dest_dir)
         try:
+            makedirs(dataset, dest_dir)
             uploaded = dataset.upload(
                 local_path=script_file, upload_path=dest_dir, overwrite=True
             )
@@ -389,12 +443,14 @@ def deployment_create(
             environment=environment,
             serving_tool=(serving_tool or "").upper() or None,
             passed_features=list(passed_features) or None,
-            default_predictor=False if no_default_predictor else None,
+            default_predictor=default_predictor,
             knative_mode=knative_mode,
             resources=_resources(cores, memory),
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Deployment creation failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not create deployment '{name or model_name}': {exc}"
+        ) from exc
 
     output.success(
         "✓ Deployed model %s v%s as %s",
@@ -405,20 +461,36 @@ def deployment_create(
     _report_schema(deployment)
 
 
+def _serves_by_default(model: Any, serving_tool: str | None) -> bool:
+    """Whether the default predictor can serve the model with no script.
+
+    The library turns it on by itself only for Python models; a scikit-learn model with a
+    feature view is served the same way once asked.
+    """
+    if (serving_tool or "kserve").lower() != "kserve":
+        return False
+    if str(getattr(model, "framework", "") or "").upper() not in ("PYTHON", "SKLEARN"):
+        return False
+    try:
+        return model.get_feature_view(init=False) is not None
+    except Exception:  # noqa: BLE001 - a model may have no feature view in its provenance
+        return False
+
+
 def _resources(cores: float | None, memory: int | None) -> Any:
     """One instance with `cores` and `memory` as its limits, or None for the backend's defaults.
 
-    Requests follow the defaults' shape: half the cores, all the memory.
+    Requests are half the cores and all the memory. A value left unset is not sent.
     """
     if cores is None and memory is None:
         return None
     from hsml.resources import PredictorResources, Resources
 
-    cores = DEFAULT_CORES if cores is None else cores
-    memory = DEFAULT_MEMORY_MB if memory is None else memory
     return PredictorResources(
         num_instances=1,
-        requests=Resources(cores=cores / 2, memory=memory, gpus=0),
+        requests=Resources(
+            cores=None if cores is None else cores / 2, memory=memory, gpus=0
+        ),
         limits=Resources(cores=cores, memory=memory, gpus=0),
     )
 
@@ -442,53 +514,131 @@ def _report_schema(deployment: Any) -> None:
 @deployment_group.command("start")
 @click.argument("name")
 @click.option(
-    "--wait",
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait until the deployment is RUNNING.",
+)
+@click.option(
+    "--timeout",
     type=int,
     default=600,
     show_default=True,
-    help="Seconds to wait for RUNNING.",
+    help="Seconds to wait.",
 )
 @click.pass_context
-def deployment_start(ctx: click.Context, name: str, wait: int) -> None:
-    """Start a deployment and optionally wait for the RUNNING state.
+def deployment_start(ctx: click.Context, name: str, wait: bool, timeout: int) -> None:
+    """Start a deployment.
 
+    Start a deployment and optionally wait for the RUNNING state.
+
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
-        wait: Seconds to wait for the deployment to become RUNNING.
+        wait: Whether to wait for RUNNING.
+        timeout: Seconds to wait.
     """
+    from hopsworks_common.constants import PREDICTOR_STATE
+
     deployment = _get_deployment(ctx, name)
+    watch = waits.Watch(f"Deployment {name}", timeout, _DEPLOYMENT_POLL_SECONDS)
+    # The backend starts a deployment only once it is created.
+    if wait and _state(deployment, name).status == PREDICTOR_STATE.STATUS_CREATING:
+        _await_deployment(deployment, name, watch, {PREDICTOR_STATE.STATUS_CREATED})
     try:
-        deployment.start(await_running=wait)
+        deployment.start(await_running=0)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Start failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not start deployment '{name}': {exc}"
+        ) from exc
+    if wait:
+        _await_deployment(
+            deployment,
+            name,
+            watch,
+            {PREDICTOR_STATE.STATUS_RUNNING, PREDICTOR_STATE.STATUS_IDLE},
+            failed=PREDICTOR_STATE.STATUS_FAILED,
+        )
+        # A prediction sent before the gateway routes to the deployment gets a 404; this only warns.
+        deployment._serving_engine._await_route(deployment, watch.left())
     output.success("✓ Started deployment %s", name)
 
 
 @deployment_group.command("stop")
 @click.argument("name")
 @click.option(
-    "--wait",
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait until the deployment is STOPPED.",
+)
+@click.option(
+    "--timeout",
     type=int,
     default=600,
     show_default=True,
-    help="Seconds to wait for STOPPED.",
+    help="Seconds to wait.",
 )
 @click.pass_context
-def deployment_stop(ctx: click.Context, name: str, wait: int) -> None:
+def deployment_stop(ctx: click.Context, name: str, wait: bool, timeout: int) -> None:
     """Stop a running deployment.
 
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
-        wait: Seconds to wait for the deployment to stop.
+        wait: Whether to wait for STOPPED.
+        timeout: Seconds to wait.
     """
+    from hopsworks_common.constants import PREDICTOR_STATE
+
     deployment = _get_deployment(ctx, name)
     try:
-        deployment.stop(await_stopped=wait)
+        deployment.stop(await_stopped=0)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Stop failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not stop deployment '{name}': {exc}"
+        ) from exc
+    if wait:
+        watch = waits.Watch(f"Deployment {name}", timeout, _DEPLOYMENT_POLL_SECONDS)
+        _await_deployment(deployment, name, watch, {PREDICTOR_STATE.STATUS_STOPPED})
     output.success("✓ Stopped deployment %s", name)
+
+
+_DEPLOYMENT_POLL_SECONDS = 5
+
+
+def _state(deployment: Any, name: str) -> Any:
+    state = deployment.get_state()
+    if state is None:
+        raise click.ClickException(f"Deployment '{name}' not found.")
+    return state
+
+
+def _await_deployment(
+    deployment: Any,
+    name: str,
+    watch: waits.Watch,
+    done: set[str],
+    failed: str | None = None,
+) -> None:
+    """Poll the deployment until its status is in `done`, printing each status and its reason."""
+    while True:
+        state = _state(deployment, name)
+        condition = state.condition
+        watch.see(state.status, condition.reason if condition is not None else None)
+        if state.status in done:
+            return
+        if state.status == failed:
+            raise click.ClickException(
+                f"Deployment {name} failed"
+                + (f": {watch.reason.rstrip('.')}" if watch.reason else "")
+                + f". Read `hops deployment logs {name}`."
+            )
+        if watch.expired():
+            watch.fail(f"Read `hops deployment logs {name}`, or raise --timeout.")
+        watch.sleep()
 
 
 @deployment_group.command("predict")
@@ -519,6 +669,7 @@ def deployment_predict(
 ) -> None:
     """Send an inference request to a running deployment.
 
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
@@ -540,7 +691,9 @@ def deployment_predict(
     try:
         response = deployment.predict(data=payload, validate=not no_validate)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Predict failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not predict with deployment '{name}': {exc}"
+        ) from exc
 
     if output.JSON_MODE:
         output.print_json(response)
@@ -618,24 +771,25 @@ def deployment_logs(
 ) -> None:
     """Read or follow logs from a deployment component.
 
-    Without ``--follow``: prints the last ``--tail`` lines and exits.
-    With ``--follow``: yields new chunks every ``--interval`` seconds
+    Without `--follow`: prints the last `--tail` lines and exits.
+    With `--follow`: yields new chunks every `--interval` seconds
     until interrupted with Ctrl-C.
-    With ``--download``: downloads the HopsFS log archives of a stopped
+    With `--download`: downloads the HopsFS log archives of a stopped
     or deleted deployment and prints the local paths.
 
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
-        component: Component to query (e.g. ``predictor``, ``transformer``).
+        component: Component to query (e.g. `predictor`, `transformer`).
         tail: Number of lines.
-        source: ``kubernetes`` or ``opensearch`` (deprecated).
+        source: `kubernetes` or `opensearch` (deprecated).
         since: ISO-8601 lower bound on log timestamp.
         until: ISO-8601 upper bound on log timestamp.
         follow: Stream new lines instead of returning a one-shot tail.
         interval: Seconds between polls when following.
         download: Download the HopsFS log archives instead of reading pods.
-        log_dir: With ``--download``, the directory to download into.
+        log_dir: With `--download`, the directory to download into.
     """
     deployment = _get_deployment(ctx, name)
 
@@ -654,7 +808,9 @@ def deployment_logs(
                 os.makedirs(path, exist_ok=True)
             local_paths = deployment.download_logs(path=path)
         except Exception as exc:  # noqa: BLE001
-            raise click.ClickException(f"Log download failed: {exc}") from exc
+            raise click.ClickException(
+                f"Could not download the logs of deployment '{name}': {exc}"
+            ) from exc
         if output.JSON_MODE:
             output.print_json({"paths": local_paths})
             return
@@ -678,7 +834,9 @@ def deployment_logs(
             # GeneratorExit and ``time.sleep`` is interruptible.
             return
         except Exception as exc:  # noqa: BLE001
-            raise click.ClickException(f"Log follow failed: {exc}") from exc
+            raise click.ClickException(
+                f"Could not follow the logs of deployment '{name}': {exc}"
+            ) from exc
         return
 
     try:
@@ -690,7 +848,9 @@ def deployment_logs(
             until=until,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Log fetch failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not read the logs of deployment '{name}': {exc}"
+        ) from exc
     if output.JSON_MODE:
         output.print_json({"component": component, "logs": text})
         return
@@ -700,24 +860,29 @@ def deployment_logs(
 @deployment_group.command("delete")
 @click.argument("name")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-@click.option("--force", is_flag=True, help="Force-delete even when running.")
+@click.option(
+    "--force", is_flag=True, help="Stop a running deployment, then delete it."
+)
 @click.pass_context
 def deployment_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete a deployment.
 
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
         yes: Skip confirmation when True.
-        force: Pass ``force=True`` to the SDK.
+        force: Pass `force=True` to the SDK.
     """
     deployment = _get_deployment(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete deployment '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete deployment '{name}'?")
     try:
         deployment.delete(force=force)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Delete failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not delete deployment '{name}': {exc}"
+        ) from exc
     output.success("✓ Deleted deployment %s", name)
 
 
@@ -730,6 +895,7 @@ def deployment_lineage(ctx: click.Context, name: str) -> None:
     A deployment serves a model, so its upstream lineage is that model plus
     the model's own feature view and training dataset provenance.
 
+    \f
     Args:
         ctx: Click context.
         name: Deployment name.
@@ -760,7 +926,9 @@ def _get_deployment(ctx: click.Context, name: str) -> Any:
     try:
         deployment = ms.get_deployment(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Deployment '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find deployment '{name}': {exc}"
+        ) from exc
     if deployment is None:
         raise click.ClickException(f"Deployment '{name}' not found.")
     return deployment

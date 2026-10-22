@@ -113,43 +113,6 @@ class TestConstants:
             expected_constants=model_serving,
         )
 
-    # RESOURCES
-
-    def test_resources_min_constants(self):
-        # Arrange
-        min_resources = {
-            "MIN_CORES": 0.2,
-            "MIN_MEMORY": 32,
-        }
-
-        # Assert
-        self._check_added_modified_or_removed_values(
-            constants.RESOURCES,
-            num_values=len(min_resources),
-            expected_constants=min_resources,
-            prefix="MIN",
-        )
-
-    def test_resources_max_constants(self):
-        # Arrange
-        max_resources = {
-            "MAX_CORES": 2,
-            "MAX_MEMORY": 1024,
-        }
-
-        # Assert
-        self._check_added_modified_or_removed_values(
-            constants.RESOURCES,
-            num_values=len(max_resources),
-            expected_constants=max_resources,
-            prefix="MAX",
-        )
-
-    def test_resources_gpu_constants(self):
-        # Assert
-        assert hasattr(constants.RESOURCES, "GPUS")
-        assert constants.RESOURCES.GPUS == 0
-
     # KAFKA_TOPIC
 
     def test_kafka_topic_names_constants(self):

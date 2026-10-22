@@ -550,7 +550,7 @@ def _files(system: _System) -> dict:
             ["hops", "files", "upload", str(path), location], check=False
         )
         if done.returncode != 0:
-            raise click.ClickException(f"uploading {path} failed")
+            raise click.ClickException(f"Could not upload {path}")
     return {"name": name, "kind": "file", "location": location, "status": "present"}
 
 
@@ -674,7 +674,7 @@ def _realtime(ctx: click.Context, system: _System, prefetch: _Prefetch) -> None:
     if not system.requirements.get("data_sources"):
         _data(ctx, system, prefetch)
     if "app" not in system.doc:
-        wanted = click.confirm(
+        wanted = output.ask(
             click.style("Build an app to try the deployment?", bold=True), default=True
         )
         system.put("requirements.consumers", "api")
@@ -712,7 +712,7 @@ def _realtime(ctx: click.Context, system: _System, prefetch: _Prefetch) -> None:
 def _agent(ctx: click.Context, system: _System, prefetch: _Prefetch) -> None:
     if not system.requirements.get("data_sources"):
         _data(ctx, system, prefetch)
-        wanted = click.confirm(
+        wanted = output.ask(
             click.style("Build an app to try the agent?", bold=True), default=True
         )
         system.put(
@@ -767,7 +767,7 @@ def _llm_env_vars(slug: str) -> dict:
             "Account settings, Environment variables, before the agent is deployed."
         )
         return record
-    if {LLM_VARS["url"], LLM_VARS["api_key"]} <= present and click.confirm(
+    if {LLM_VARS["url"], LLM_VARS["api_key"]} <= present and output.ask(
         click.style(
             f"Use the LLM in your account settings ({LLM_VARS['url']}, {LLM_VARS['api_key']})?",
             bold=True,
@@ -904,7 +904,7 @@ def resume(ctx: click.Context, target: Path, launch: bool) -> None:
 
 def _run(ctx: click.Context, launch: bool, open_system, ask: bool = True) -> Path:
     # Create and resume alike: where nobody can answer, the build asks in the chat.
-    ask = ask and os.environ.get("HOPS_NO_INPUT") != "1"
+    ask = ask and not output.no_input()
     prefetch = _Prefetch(ctx)
     # Without questions nothing reads the listing, and its login would race
     # the registration's on the shared session.

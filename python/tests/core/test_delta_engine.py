@@ -2157,7 +2157,7 @@ class TestDeltaEngine:
             mock_history_data[1], mock_history_data[0]
         )
 
-    def test_get_last_commit_metadata_deltars(self, mocker):
+    def test_get_last_commit_metadata_deltars(self, mocker, monkeypatch):
         # Arrange
         mock_history_data = [
             {"version": 1, "operation": "WRITE", "timestamp": "2024-01-01T00:00:00Z"},
@@ -2171,7 +2171,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        monkeypatch.setitem(sys.modules, "deltalake", fake_deltalake)
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2192,13 +2192,13 @@ class TestDeltaEngine:
             mock_history_data[1], mock_history_data[0]
         )
 
-    def test_get_last_commit_metadata_empty_history(self, mocker):
+    def test_get_last_commit_metadata_empty_history(self, mocker, monkeypatch):
         # Arrange
         mock_history_data = []
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        monkeypatch.setitem(sys.modules, "deltalake", fake_deltalake)
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2216,7 +2216,7 @@ class TestDeltaEngine:
         assert result is None
         mocker_get_delta_feature_group_commit.assert_not_called()
 
-    def test_get_last_commit_metadata_one_history_entry(self, mocker):
+    def test_get_last_commit_metadata_one_history_entry(self, mocker, monkeypatch):
         # Arrange
         mock_history_data = [
             {"version": 1, "operation": "WRITE", "timestamp": "2024-01-01T00:00:00Z"},
@@ -2224,7 +2224,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        monkeypatch.setitem(sys.modules, "deltalake", fake_deltalake)
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2245,7 +2245,9 @@ class TestDeltaEngine:
             mock_history_data[0], mock_history_data[0]
         )
 
-    def test_get_last_commit_metadata_one_history_entry_optimize(self, mocker):
+    def test_get_last_commit_metadata_one_history_entry_optimize(
+        self, mocker, monkeypatch
+    ):
         # Arrange
         mock_history_data = [
             {
@@ -2257,7 +2259,7 @@ class TestDeltaEngine:
 
         # Fake the deltalake module
         fake_deltalake = types.SimpleNamespace(DeltaTable=mocker.MagicMock())
-        sys.modules["deltalake"] = fake_deltalake
+        monkeypatch.setitem(sys.modules, "deltalake", fake_deltalake)
 
         mock_delta_rs_table = mocker.MagicMock()
         mock_delta_rs_table.history.return_value = mock_history_data
@@ -2955,9 +2957,8 @@ class TestDeltaEngineGlueSync:
 def test_commit_properties_become_a_delta_application_transaction(monkeypatch):
     import sys
 
-    # The fake goes first: other tests leave one in sys.modules, and importorskip would
-    # find it and not skip, leaving this to fail on an interpreter that has no real
-    # deltalake. hops-deltalake is linux and darwin-arm64 only, so Windows is exactly
+    # Drop any deltalake already imported, so importorskip skips on an interpreter without
+    # a real one. hops-deltalake is linux and darwin-arm64 only, so Windows is exactly
     # that interpreter.
     monkeypatch.delitem(sys.modules, "deltalake", raising=False)
     pytest.importorskip("deltalake")

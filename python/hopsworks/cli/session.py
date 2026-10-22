@@ -80,7 +80,7 @@ def get_project(ctx: click.Context) -> Project:
             hostname_verification=cfg.hostname_verification,
         )
     except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
-        raise click.ClickException(f"Login failed: {exc}") from exc
+        auth.login_failed(exc, cfg.api_key_source)
     obj["project"] = project
     return project
 
