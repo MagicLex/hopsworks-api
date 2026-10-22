@@ -43,9 +43,14 @@ hops notebook start --env <name>        # a not running server, in that environm
   `stop`. Never `pip install` in a cell: it is gone when the server restarts. `--env` refuses to
   replace a server running in another environment: stopping it ends the user's kernels, so ask first.
 - Charts: `matplotlib` or `plotly`, one chart per cell; the figure is saved as the cell's output.
+- Training, a sweep or a model in cells: **hops-train** is the contract ("In a notebook"). Every
+  candidate is a run in the model registry and the chosen model is registered there; a notebook
+  is never the only place a model or an experiment exists. A model trained elsewhere is loaded
+  from the registry, never trained again.
 
 ## Rules
 - Run each cell before writing the next, so a failure is fixed where it happens.
 - Never change a cell you did not write unless the user asks: the user may be editing the notebook
   in JupyterLab, and a save replaces the file.
-- Done when `hops notebook info` shows a `RUN` number on every code cell and no cell raised.
+- Done when every `hops notebook run` exited 0: each prints `ran as In [n]` or the cell's error.
+  A notebook from an earlier session: `hops notebook info` shows a `RUN` number on every code cell.

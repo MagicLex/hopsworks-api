@@ -270,6 +270,24 @@ first, with `--sweep <id>` and `--json`.
   more or real data. Name the runs as `hops model runs <name>` and the model's page in Hopsworks;
   never point to an "Experiments" view the reader may not have.
 
+## In a notebook
+
+A notebook is where the code runs; this skill is the contract. Training, a sweep or a model built
+in notebook cells (`hops notebook run`, **hops-notebook**) follows sections 3 and 4 and "Runs and
+sweeps" as a job would: the sweep in one `events.tracked("experiment", ...)`, each candidate a run
+with its metrics, `description=`, `run.json` and the charts in `images/`, and the chosen model
+registered. Data the notebook made itself, in no feature group, registers without
+`feature_view=` and `training_dataset_version=`, and its `run.json` leaves the version out.
+Check it from outside the kernel: `hops model runs <name>` (one row per run) and
+`hops model info <name>` (its `Images`). Then offer once per notebook, with no option marked
+"(Recommended)", to promote the training into a pipeline: the data in a feature group, a feature
+view, and the cells as `train.py` (section 5), which **hops-model-builder** writes.
+
+The other way: a model a pipeline or a builder trained opens in a notebook without training it
+again. Load it with `mr.get_model("<name>", version=<v>)` and `model.download()`, read its
+`run.json` and `images/`, and score the test part of the training dataset it records
+(`training_dataset_version` in `hops model info`); never fit it again in the notebook.
+
 ## 5. Run it as a job
 
 ```bash
