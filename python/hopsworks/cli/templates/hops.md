@@ -94,9 +94,12 @@ is the whole dispatch:
 Ask only what the request leaves open, in one `AskUserQuestion` call. Every prompt ends with
 `where: <Hopsworks terminal | external client>`.
 
-When **hops-deploy-builder** stops on an offline feature group, ask once whether to turn it
-online ("Copies its rows to the online store; the group stays as it is otherwise",
-recommended), run the `hops fg update ... --online` it named, then spawn it again.
+When **hops-deploy-builder** stops on an offline feature group that this system made (in this
+conversation), run the `hops fg update ... --online` it named and spawn it again, without asking.
+A group the user had before: ask once whether to turn it online ("Copies its rows to the online
+store; the group stays as it is otherwise"), with no option marked "(Recommended)": it changes
+the user's group, so the user picks it. On yes, run the command, then spawn it again. On no, stop:
+no copy of the group.
 
 For a model, read the label from the data rather than asking: the column the request names or
 implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the
@@ -177,7 +180,8 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    `hops skills info hops-train` once, when you reach this step). Every candidate is a run in
    the model registry, the chosen model registered, both checked with `hops model runs <m>` and
    `hops model info <m>`, never a download. Data in a feature group trains on a feature view
-   of it (`hops fv create`, then `fv.train_validation_test_split(...)` in a cell) and registers
+   of it (`hops fv create <v> --feature-group <fg>:<n> --labels <label>`, then
+   `fv.train_validation_test_split(...)` in a cell) and registers
    with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
    notebook made itself registers without. "Register the model" afterwards is the best run,
    already registered: say its version. Then offer once per notebook, no option marked

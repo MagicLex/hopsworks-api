@@ -61,8 +61,8 @@ fv = fs.get_feature_view(name="my_fv", version=1)  # no FV yet? create one first
 #    dataset version (metadata only): a model registered with feature_view=fv
 #    in the same process records it, and scoring reads it.
 X_train, X_val, X_test, y_train, y_val, y_test = fv.train_validation_test_split(
-    validation_size=0.15, test_size=0.15, seed=42, statistics_config=False  # seed=, not random_state=
-)
+    validation_size=0.15, test_size=0.15, statistics_config=False
+)  # no seed= or random_state=: the library in jobs and Jupyter takes neither
 td_version = fv.get_last_accessed_training_dataset()
 # The event time comes back as a feature: drop it (and any id) before fitting, since a datetime
 # column fails in scikit-learn: X_train = X_train.drop(columns=["order_ts"]).
@@ -272,9 +272,8 @@ first, with `--sweep <id>` and `--json`.
 
   A multiclass label whose largest class holds over 40% of the rows selects on `val_macro_f1`;
   otherwise on the metric asked for.
-- **Done** when `hops td list <view>` shows one new training dataset version for the sweep,
-  `hops model runs <name> --sweep <id>` shows one row per finished candidate, each with that
-  version under TD.
+- **Done** when `hops model runs <name> --sweep <id>` shows one row per finished candidate, all
+  with the same version under TD.
 - **Report** the `hops model runs` table. When the best run's accuracy is within 2 points of the
   baseline, say so plainly, naming the class: "No better than always guessing `delivered`: these
   features carry no signal for `status`." Then the next step: class weights, another target, or
@@ -287,7 +286,9 @@ A notebook is where the code runs; this skill is the contract. Training, a sweep
 in notebook cells (`hops notebook run`, **hops-notebook**) follows sections 3 and 4 and "Runs and
 sweeps" as a job would: the sweep in one `events.tracked("experiment", ...)`, each candidate a run
 with its metrics, `description=`, `run.json` and the charts in `images/`, and the chosen model
-registered. Data the notebook made itself, in no feature group, registers without
+registered. In a kernel, leave the matplotlib backend as it is (no `matplotlib.use("Agg")`, which
+blanks every later chart of the notebook) and close each chart after saving it. Data the
+notebook made itself, in no feature group, registers without
 `feature_view=` and `training_dataset_version=`, and its `run.json` leaves the version out.
 Check it from outside the kernel: `hops model runs <name>` (one row per run) and
 `hops model info <name>` (its `Images`). Then offer once per notebook, with no option marked

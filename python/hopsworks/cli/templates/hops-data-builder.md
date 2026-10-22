@@ -29,7 +29,7 @@ create the feature group with its schema (`hops fg create <name> --version 1 --p
 part. The generator builds the frame and inserts it into that group with
 `fg.insert(df, wait=True)`. Run it where you run (a Hopsable sandbox, a terminal, a laptop):
 `python data/<name>/generate.py`, which writes `rows` in seconds; print `[time] generate
-<seconds>s` and `[time] insert <seconds>s`. A job only when the frame would not fit in memory
+<seconds>s`, `[time] insert <seconds>s` and the rows inserted (`len(df)`). A job only when the frame would not fit in memory
 (rows x columns x 8 bytes over 1 GB), or when the generation runs out of memory. The same program
 runs unchanged as a job, so it calls only what the job image's `hopsworks` library has; the
 sandbox may run a newer one, and an argument that works here can fail there:
@@ -46,9 +46,10 @@ source holds it already, else ingest it.
 ## Check and return
 
 ```bash
-hops fg preview <name> --limit 5
-hops sql "SELECT count(*) FROM <name>_1"
+hops fg preview <name> --limit 1
 ```
+
+The row count is the one `generate.py` printed after its insert; no count query.
 
 A failed run: read its traceback (a job's `--wait` prints its log tail), name the cause in one
 line, fix and rerun, at most three attempts. Return a few lines: the feature group and version, its

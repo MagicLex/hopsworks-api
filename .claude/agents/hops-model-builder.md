@@ -74,8 +74,7 @@ sandbox may run a newer one, and an argument that works here can fail there. Pri
 5. **Pick the best** with `hops model runs <name> --sweep <id>`: it ranks by the metric each
    `run.json` names (`val_macro_f1` for an imbalanced multiclass label). No tag: a model tag
    needs a tag schema the cluster may not have. The run is done when that command lists one row
-   per fitted candidate, all with the same training dataset version, and `hops td list <view>`
-   shows one new version for the sweep.
+   per fitted candidate, all with the same training dataset version under TD.
 
 A failed fit: read its traceback (in a job, `hops job wait` prints the log tail), name the cause
 in one line, fix and rerun that candidate, at most three attempts each.
