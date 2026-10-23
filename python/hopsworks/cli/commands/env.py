@@ -27,6 +27,8 @@ def env_group() -> None:
 # RESTCodes.PythonErrorCode.ENVIRONMENT_CHANGE_FORBIDDEN: only the environment's creator or a Data owner changes it.
 _CHANGE_FORBIDDEN = 300029
 _COPY_SUFFIX = "-app-env"
+# environment.name is varchar(128) in Hopsworks.
+_MAX_NAME = 128
 
 
 def copy_name(env_name: str, username: str) -> str:
@@ -66,6 +68,8 @@ def current_username() -> str:
 def own_copy(api: Any, source: str, name: str) -> Any:
     """The caller's copy of `source`, cloned first when it does not exist.
 
+    A clone that fails is deleted, so an existing copy is always a finished one.
+
     Args:
         api: The project's environment API.
         source: The environment to clone.
@@ -74,20 +78,35 @@ def own_copy(api: Any, source: str, name: str) -> Any:
     Returns:
         The copy.
     """
+    if len(name) > _MAX_NAME:
+        raise click.ClickException(
+            f"Only its creator or a Data owner can change environment '{source}', and "
+            f"your copy's name '{name}' would be {len(name)} characters, over the "
+            f"{_MAX_NAME} Hopsworks allows: use a shorter name."
+        )
     try:
         env = api.get_environment(name)
-        if env is not None:
-            return env
-        output.info(
-            "Only its creator or a Data owner can change environment %s: cloning it "
-            "to your own copy %s; this takes a few minutes.",
-            source,
-            name,
-        )
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not find environment '{name}': {exc}"
+        ) from exc
+    if env is not None:
+        return env
+    output.info(
+        "Only its creator or a Data owner can change environment %s: cloning it "
+        "to your own copy %s; this takes a few minutes.",
+        source,
+        name,
+    )
+    try:
         return api.create_environment(
             name, source_environment_name=source, await_creation=True
         )
     except Exception as exc:  # noqa: BLE001
+        with contextlib.suppress(Exception):
+            half = api.get_environment(name)
+            if half is not None:
+                half.delete()
         raise click.ClickException(
             f"Could not clone environment '{source}' to '{name}': {exc}"
         ) from exc
@@ -301,6 +320,14 @@ def env_install(
             env.install_requirements(remote_path, await_installation=True)
         except Exception as copy_exc:  # noqa: BLE001
             raise click.ClickException(f"Install failed: {copy_exc}") from copy_exc
+        output.warn(
+            "Installed into your copy '%s', not '%s', which only its creator or a "
+            "Data owner can change: a job, app or deployment sees these packages "
+            "only when it runs on '%s'.",
+            env_name,
+            source,
+            env_name,
+        )
     if output.JSON_MODE:
         output.print_json({"environment": env_name, "installed": remote_path})
     else:

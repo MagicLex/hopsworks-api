@@ -798,10 +798,12 @@ def test_app_delete_force_stops_first(mock_project):
     a.delete.assert_called_once()
 
 
-def _delete_as_scott(mock_project, env_name, *names):
+def _delete_as_scott(mock_project, env_name, *names, creator=None):
     a = _fake_app(name="shop", environment_name=env_name)
     mock_project.get_app_api.return_value.get_app.return_value = a
     envs = Environments(mock_project, *names)
+    if creator is not None:
+        envs.envs[env_name].creator = creator
     users_api = mock.MagicMock()
     users_api._get_current_user.return_value.username = "scott"
     with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
@@ -818,6 +820,33 @@ def test_app_delete_deletes_your_copy_of_its_environment(mock_project):
     envs.envs["shop-app-env-scott"].delete.assert_called_once()
     envs.envs["shop-app-env"].delete.assert_not_called()
     assert "Deleted environment shop-app-env-scott" in result.output
+
+
+def test_app_delete_keeps_a_copy_of_your_name_someone_else_created(mock_project):
+    result, a, envs = _delete_as_scott(
+        mock_project, "shop-app-env-scott", "shop-app-env-scott", creator="alice"
+    )
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_not_called()
+    assert "Kept environment shop-app-env-scott: alice created it" in result.output
+
+
+def test_app_delete_warns_when_the_copy_cannot_go_since_the_app_is_gone(mock_project):
+    mock_project.get_environment_api.return_value.get_environment.side_effect = (
+        RuntimeError("503")
+    )
+    a = _fake_app(name="shop", environment_name="shop-app-env-scott")
+    mock_project.get_app_api.return_value.get_app.return_value = a
+    users_api = mock.MagicMock()
+    users_api._get_current_user.return_value.username = "scott"
+    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
+        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    assert "Kept environment shop-app-env-scott: could not delete it: 503" in (
+        result.output
+    )
 
 
 def test_app_delete_keeps_your_copy_while_another_app_runs_on_it(mock_project):

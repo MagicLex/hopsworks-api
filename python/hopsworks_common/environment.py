@@ -42,10 +42,12 @@ class Environment:
         href=None,
         type=None,
         is_preinstalled_docker_image=None,
+        creator=None,
         **kwargs,
     ):
         self._name = name
         self._preinstalled = is_preinstalled_docker_image
+        self._creator = creator
         self._description = description
         self._python_version = python_version
         self._python_conflicts = python_conflicts
@@ -89,6 +91,11 @@ class Environment:
     def preinstalled(self) -> bool | None:
         """Whether this is a built-in environment of the cluster, not one of the project's; `None` when unknown."""
         return self._preinstalled
+
+    @property
+    def creator(self) -> str | None:
+        """Username of whoever created the environment; `None` for a built-in, or when the cluster does not say."""
+        return self._creator
 
     @public
     @usage._method_logger

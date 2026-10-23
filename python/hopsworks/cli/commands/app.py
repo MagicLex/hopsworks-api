@@ -575,7 +575,7 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete an app.
 
     Its environment goes too when it is your own copy, `<name>-app-env-<user>`,
-    of a shared environment.
+    that you created and no other app runs on.
 
     Args:
         ctx: Click context.
@@ -592,17 +592,15 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
         with contextlib.suppress(Exception):
             a.stop()
     env_name = getattr(a, "environment_name", None) or ""
-    copy = None
+    username = None
     if env_name.startswith(f"{name}-app-env-"):
-        copy = env_commands.copy_name(
-            f"{name}-app-env", env_commands.current_username()
-        )
+        username = env_commands.current_username()
     try:
         a.delete()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Delete failed: {exc}") from exc
     output.success("✓ Deleted app %s", name)
-    if env_name != copy:
+    if username is None or env_name != env_commands.copy_name(name, username):
         return
     project = session.get_project(ctx)
     try:
@@ -610,21 +608,25 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
         users = [
             other.name
             for other in project.get_app_api().get_apps() or []
-            if getattr(other, "environment_name", None) == copy and other.name != name
+            if getattr(other, "environment_name", None) == env_name
+            and other.name != name
         ]
+        env = project.get_environment_api().get_environment(env_name)
         if users:
             output.info(
-                "Kept environment %s: app %s runs on it.", copy, ", ".join(users)
+                "Kept environment %s: app %s runs on it.", env_name, ", ".join(users)
             )
-            return
-        env = project.get_environment_api().get_environment(copy)
-        if env is not None:
+        elif env is not None and env.creator != username:
+            output.info(
+                "Kept environment %s: %s created it, not you.",
+                env_name,
+                env.creator or "someone else",
+            )
+        elif env is not None:
             env.delete()
+            output.success("✓ Deleted environment %s", env_name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(
-            f"Deleted app '{name}', but not its environment '{copy}': {exc}"
-        ) from exc
-    output.success("✓ Deleted environment %s", copy)
+        output.warn("Kept environment %s: could not delete it: %s", env_name, exc)
 
 
 def _accepted_kwargs(fn: Any, kwargs: dict[str, Any]) -> dict[str, Any]:

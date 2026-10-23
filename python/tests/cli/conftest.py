@@ -131,5 +131,7 @@ class Environments:
     def add(self, name):
         env = mock.MagicMock(name=f"env {name}")
         env.name = name
+        # A copy `<env>-app-env-<user>` was created by its user.
+        env.creator = name.rsplit("-app-env-", 1)[1] if "-app-env-" in name else None
         self.envs[name] = env
         return env

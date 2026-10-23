@@ -180,3 +180,10 @@ class TestEnvironment:
             environment.Environment.from_response_json(body).preinstalled
             is preinstalled
         )
+
+    @pytest.mark.parametrize(
+        ("body", "creator"),
+        [({"name": "fraud", "creator": "scott"}, "scott"), ({"name": "fraud"}, None)],
+    )
+    def test_creator_reads_who_created_the_environment(self, body, creator):
+        assert environment.Environment.from_response_json(body).creator == creator

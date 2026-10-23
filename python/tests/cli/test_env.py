@@ -155,6 +155,11 @@ def test_env_install_reuses_your_copy_of_an_app_environment(mock_project):
         "Users/scott/r.txt", await_installation=True
     )
     assert "into environment 'shop-app-env-scott'" in result.output
+    assert (
+        "Installed into your copy 'shop-app-env-scott', not 'shop-app-env'"
+        in result.output
+    )
+    assert "only when it runs on 'shop-app-env-scott'" in result.output
 
 
 def test_env_install_any_other_refusal_is_reported_without_a_copy(mock_project):
@@ -205,4 +210,39 @@ def test_env_clone_of_an_unknown_environment_says_so(mock_project):
 
     assert result.exit_code == 1
     assert "No environment named 'nope'" in result.output
+    envs.api.create_environment.assert_not_called()
+
+
+def test_env_install_deletes_a_clone_that_failed_and_clones_again(mock_project):
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+
+    def clone_fails(name, **kwargs):
+        half = envs.add(name)
+        half.delete.side_effect = lambda: envs.envs.pop(name)
+        raise RuntimeError("build failed")
+
+    envs.api.create_environment.side_effect = clone_fails
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+    assert result.exit_code == 1
+    assert (
+        "Could not clone environment 'fraud' to 'fraud-app-env-scott'" in result.output
+    )
+    assert "fraud-app-env-scott" not in envs.envs
+
+    envs.api.create_environment.side_effect = lambda name, **kwargs: envs.add(name)
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+    assert result.exit_code == 0, result.output
+    envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
+
+
+def test_env_install_refuses_a_copy_name_over_the_hopsworks_limit(mock_project):
+    name = "f" * 120
+    envs = Environments(mock_project, name)
+    envs.envs[name].install_requirements.side_effect = environment_refused()
+
+    result = _install_as_scott("env", "install", name, "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 1
+    assert "over the 128 Hopsworks allows" in result.output
     envs.api.create_environment.assert_not_called()
