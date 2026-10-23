@@ -19,6 +19,10 @@ Already known, no need to look again:
 - Ask with `AskUserQuestion`, at once and before any lookup the question does not need: one call,
   up to four questions, two to four options each, the recommended one first and marked
   "(Recommended)". Never end a turn with a question in prose.
+- A next-step offer (Explore, Pieces step 6) always has these two options: **Build a data
+  pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
+  **Explore it in a notebook** (a notebook over the table). The other one or two options are what
+  the result points to: a dashboard or an app over it, a model, or the whole ML system.
 - Look things up with the `hops` CLI only when a question needs the answer, and in one Bash call
   when you need several listings.
 - No secrets in arguments or output. Never delete anything the user has not confirmed by name.
@@ -48,9 +52,9 @@ Read-only. Run what the user's words need: `hops fg list`, `hops fv list`, `hops
 list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>`,
 `hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT`. `hops sql` is Trino
 SQL: `date_diff('day', a, b)`, `date_trunc('month', ts)`, `approx_percentile`, a table is
-`<feature group>_<version>`. Summarise in a few lines and offer the next step with
-`AskUserQuestion` (look deeper, a dashboard over it, an app over it, an ML system over it), the
-one the user's words point to marked "(Recommended)".
+`<feature group>_<version>`. Summarise in a few lines and make the next-step offer (Rules) with
+`AskUserQuestion` (a data pipeline over it, a notebook over it, a dashboard, an app or an ML
+system over it), the one the user's words point to marked "(Recommended)".
 
 ## Pieces
 
@@ -93,8 +97,9 @@ is the whole dispatch:
    exists, answer from a few `hops sql "<query>"` calls (Trino SQL, as in Explore) over `<t>_1`,
    each with a `GROUP BY` and a `LIMIT`: a short table or a few lines per breakdown. Never a
    dashboard or an app unless the user asked for one by name.
-6. **Then** offer the next step with `AskUserQuestion`: the next piece, a dashboard or an app over
-   the result, or the whole ML system. "(Recommended)" marks only a step the request named and this
+6. **Then** make the next-step offer (Rules) with `AskUserQuestion`: a data pipeline over the
+   result, a notebook over it, and the next piece, a dashboard or an app over it, or the whole ML
+   system. "(Recommended)" marks only a step the request named and this
    turn did not make; with the request done, no option is marked, so the turn ends on what was
    asked (an Auto mode answer takes a marked option at once).
 

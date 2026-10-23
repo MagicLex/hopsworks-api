@@ -168,3 +168,6 @@ three live ticks into an online test group are readable online; both are deleted
 ## Next Steps
 - Mount or ingest a real source instead: **hops-data-sources**.
 - Build features over the synthetic groups: **hops-features**, **hops-fg**.
+- Build a data pipeline over them (a feature pipeline, bronze, silver and gold layers, a scheduled
+  job): **hops-features**, **hops-job**.
+- Explore them in a notebook: **hops-notebook**, **hops-eda**.
