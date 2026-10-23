@@ -246,3 +246,74 @@ def test_env_install_refuses_a_copy_name_over_the_hopsworks_limit(mock_project):
     assert result.exit_code == 1
     assert "over the 128 Hopsworks allows" in result.output
     envs.api.create_environment.assert_not_called()
+
+
+def test_env_install_clones_again_over_a_copy_whose_build_failed(mock_project):
+    from hopsworks_common.command import Command
+
+    envs = Environments(mock_project, "fraud", "fraud-app-env-scott")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+    broken = envs.envs["fraud-app-env-scott"]
+    broken.commands = [Command(status="FAILED", op="CREATE")]
+
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 0, result.output
+    broken.delete.assert_called_once()
+    broken.install_requirements.assert_not_called()
+    envs.api.create_environment.assert_called_once_with(
+        "fraud-app-env-scott", source_environment_name="fraud", await_creation=True
+    )
+    envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
+
+
+def test_env_install_says_how_to_delete_a_broken_copy_it_cannot_delete(mock_project):
+    from hopsworks_common.command import Command
+
+    envs = Environments(mock_project, "fraud", "fraud-app-env-scott")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+    broken = envs.envs["fraud-app-env-scott"]
+    broken.commands = [Command(status="FAILED", op="CREATE")]
+    broken.delete.side_effect = RuntimeError("503")
+
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 1
+    assert "hops env delete fraud-app-env-scott --yes" in result.output
+    envs.api.create_environment.assert_not_called()
+
+
+def test_a_failed_clone_it_cannot_delete_is_named_with_how_to_delete_it(mock_project):
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+
+    def clone_fails(name, **kwargs):
+        envs.add(name).delete.side_effect = RuntimeError("503")
+        raise RuntimeError("build failed")
+
+    envs.api.create_environment.side_effect = clone_fails
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 1
+    assert (
+        "Could not delete the unfinished copy fraud-app-env-scott: 503" in result.output
+    )
+    assert "hops env delete fraud-app-env-scott --yes" in result.output
+
+
+def test_env_delete_deletes_after_confirmation(mock_project):
+    envs = Environments(mock_project, "fraud-app-env-scott")
+
+    result = CliRunner().invoke(cli, ["env", "delete", "fraud-app-env-scott", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    envs.envs["fraud-app-env-scott"].delete.assert_called_once()
+
+
+def test_env_delete_of_an_unknown_environment_says_so(mock_project):
+    Environments(mock_project)
+
+    result = CliRunner().invoke(cli, ["env", "delete", "nope", "--yes"])
+
+    assert result.exit_code == 1
+    assert "No environment named 'nope'" in result.output

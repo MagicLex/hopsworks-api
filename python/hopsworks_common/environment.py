@@ -93,6 +93,11 @@ class Environment:
         return self._preinstalled
 
     @property
+    def commands(self) -> list | None:
+        """The environment's own commands, such as its build; `None` when the response carried none."""
+        return self._commands
+
+    @property
     def creator(self) -> str | None:
         """Username of whoever created the environment; `None` for a built-in, or when the cluster does not say."""
         return self._creator

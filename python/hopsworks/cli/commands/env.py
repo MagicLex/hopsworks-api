@@ -68,7 +68,8 @@ def current_username() -> str:
 def own_copy(api: Any, source: str, name: str) -> Any:
     """The caller's copy of `source`, cloned first when it does not exist.
 
-    A clone that fails is deleted, so an existing copy is always a finished one.
+    A copy whose build failed is deleted and cloned again; a clone that fails is
+    deleted, and when that delete fails too the warning says how to delete it.
 
     Args:
         api: The project's environment API.
@@ -90,8 +91,17 @@ def own_copy(api: Any, source: str, name: str) -> Any:
         raise click.ClickException(
             f"Could not find environment '{name}': {exc}"
         ) from exc
-    if env is not None:
+    if env is not None and not _build_failed(env):
         return env
+    if env is not None:
+        output.warn("Your copy %s did not build: cloning it again.", name)
+        try:
+            env.delete()
+        except Exception as exc:  # noqa: BLE001
+            raise click.ClickException(
+                f"Your copy '{name}' did not build and could not be deleted: {exc}. "
+                f"Delete it with `hops env delete {name} --yes`, then run this again."
+            ) from exc
     output.info(
         "Only its creator or a Data owner can change environment %s: cloning it "
         "to your own copy %s; this takes a few minutes.",
@@ -103,13 +113,25 @@ def own_copy(api: Any, source: str, name: str) -> Any:
             name, source_environment_name=source, await_creation=True
         )
     except Exception as exc:  # noqa: BLE001
-        with contextlib.suppress(Exception):
+        try:
             half = api.get_environment(name)
             if half is not None:
                 half.delete()
+        except Exception as cleanup:  # noqa: BLE001
+            output.warn(
+                "Could not delete the unfinished copy %s: %s. Delete it with "
+                "`hops env delete %s --yes`.",
+                name,
+                cleanup,
+                name,
+            )
         raise click.ClickException(
             f"Could not clone environment '{source}' to '{name}': {exc}"
         ) from exc
+
+
+def _build_failed(env: Any) -> bool:
+    return any(c.status == "FAILED" for c in env.commands or [])
 
 
 def _api(ctx: click.Context) -> Any:
@@ -219,6 +241,43 @@ def env_clone(
             ["FIELD", "VALUE"],
             [[k.upper(), str(v) if v is not None else ""] for k, v in payload.items()],
         )
+
+
+@env_group.command("delete")
+@click.argument("name")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
+@click.pass_context
+def env_delete(ctx: click.Context, name: str, yes: bool) -> None:
+    """Delete the project environment NAME.
+
+    Only its creator or a Data owner can delete it, and not while a job,
+    app or deployment runs on it.
+
+    Args:
+        ctx: Click context.
+        name: Environment to delete.
+        yes: Skip confirmation when True.
+    """
+    api = _api(ctx)
+    try:
+        env = api.get_environment(name)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not find environment '{name}': {exc}"
+        ) from exc
+    if env is None:
+        raise click.ClickException(
+            f"No environment named '{name}'. Run `hops env list` to see what exists."
+        )
+    if not yes:
+        output.confirm(f"Delete environment '{name}'?")
+    try:
+        env.delete()
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not delete environment '{name}': {exc}"
+        ) from exc
+    output.success("✓ Deleted environment %s", name)
 
 
 @env_group.command("install")

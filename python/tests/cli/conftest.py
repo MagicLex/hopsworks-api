@@ -133,5 +133,6 @@ class Environments:
         env.name = name
         # A copy `<env>-app-env-<user>` was created by its user.
         env.creator = name.rsplit("-app-env-", 1)[1] if "-app-env-" in name else None
+        env.commands = None
         self.envs[name] = env
         return env
