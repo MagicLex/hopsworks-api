@@ -9,8 +9,13 @@ SDK's problem.
 
 from __future__ import annotations
 
+import json
+from unittest import mock
+
 from click.testing import CliRunner
 from hopsworks.cli.main import cli
+
+from tests.cli.conftest import Environments, environment_refused
 
 
 def _env_api(mock_project, env_name="my_env"):
@@ -106,3 +111,58 @@ def test_env_install_unknown_environment(mock_project):
 
     assert result.exit_code != 0
     assert "No environment named 'nope'" in result.output
+
+
+def _install_as_scott(*args):
+    users_api = mock.MagicMock()
+    users_api._get_current_user.return_value.username = "scott"
+    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
+        return CliRunner().invoke(cli, [*args])
+
+
+def test_env_install_into_a_shared_environment_clones_your_own_copy(mock_project):
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+
+    result = _install_as_scott(
+        "--json", "env", "install", "fraud", "-f", "Users/scott/r.txt"
+    )
+
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "fraud-app-env-scott", source_environment_name="fraud", await_creation=True
+    )
+    envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once_with(
+        "Users/scott/r.txt", await_installation=True
+    )
+    assert json.loads(result.stdout[result.stdout.index("{") :]) == {
+        "environment": "fraud-app-env-scott",
+        "installed": "Users/scott/r.txt",
+    }
+
+
+def test_env_install_reuses_your_copy_of_an_app_environment(mock_project):
+    envs = Environments(mock_project, "shop-app-env", "shop-app-env-scott")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+
+    result = _install_as_scott(
+        "env", "install", "shop-app-env", "-f", "Users/scott/r.txt"
+    )
+
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_not_called()
+    envs.envs["shop-app-env-scott"].install_requirements.assert_called_once_with(
+        "Users/scott/r.txt", await_installation=True
+    )
+    assert "into environment 'shop-app-env-scott'" in result.output
+
+
+def test_env_install_any_other_refusal_is_reported_without_a_copy(mock_project):
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused(300019)
+
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 1
+    assert "Install failed" in result.output
+    envs.api.create_environment.assert_not_called()

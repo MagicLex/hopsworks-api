@@ -8,6 +8,8 @@ from unittest import mock
 from click.testing import CliRunner
 from hopsworks.cli.main import cli
 
+from tests.cli.conftest import Environments
+
 
 def _fake_app(**overrides):
     a = mock.MagicMock(name="App")
@@ -17,6 +19,7 @@ def _fake_app(**overrides):
     a.state = overrides.get("state", "CREATED")
     a.serving = overrides.get("serving", False)
     a.environment = overrides.get("environment", "python-app-pipeline")
+    a.environment_name = overrides.get("environment_name", "python-app-pipeline")
     a.memory = overrides.get("memory", 2048)
     a.cores = overrides.get("cores", 1.0)
     a.app_path = overrides.get("app_path", "Resources/app.py")
@@ -793,6 +796,39 @@ def test_app_delete_force_stops_first(mock_project):
     assert result.exit_code == 0, result.output
     a.stop.assert_called_once()
     a.delete.assert_called_once()
+
+
+def _delete_as_scott(mock_project, env_name, *names):
+    a = _fake_app(name="shop", environment_name=env_name)
+    mock_project.get_app_api.return_value.get_app.return_value = a
+    envs = Environments(mock_project, *names)
+    users_api = mock.MagicMock()
+    users_api._get_current_user.return_value.username = "scott"
+    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
+        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
+    return result, a, envs
+
+
+def test_app_delete_deletes_your_copy_of_its_environment(mock_project):
+    result, a, envs = _delete_as_scott(
+        mock_project, "shop-app-env-scott", "shop-app-env", "shop-app-env-scott"
+    )
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_called_once()
+    envs.envs["shop-app-env"].delete.assert_not_called()
+    assert "Deleted environment shop-app-env-scott" in result.output
+
+
+def test_app_delete_keeps_a_shared_environment_and_another_users_copy(mock_project):
+    for env_name in ("shop-app-env", "shop-app-env-alice"):
+        result, a, envs = _delete_as_scott(
+            mock_project, env_name, "shop-app-env", "shop-app-env-alice"
+        )
+        assert result.exit_code == 0, result.output
+        a.delete.assert_called_once()
+        for env in envs.envs.values():
+            env.delete.assert_not_called()
 
 
 def test_app_info_surfaces_not_found(mock_project):

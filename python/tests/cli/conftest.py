@@ -7,6 +7,7 @@ customise the returned ``Project`` mock to shape the command's output.
 
 from __future__ import annotations
 
+import json
 from unittest import mock
 
 import pytest
@@ -93,3 +94,42 @@ def mock_project(authed_config):
         mock.patch("hopsworks_common.client._is_external", return_value=False),
     ):
         yield project
+
+
+def environment_refused(code: int = 300029) -> Exception:
+    """The 403 Hopsworks answers a change to an environment the caller did not create (code 300029)."""
+    import requests
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = requests.Response()
+    response.status_code = 403
+    response.reason = "Forbidden"
+    response._content = json.dumps(
+        {
+            "errorCode": code,
+            "errorMsg": "Only the creator of the environment or a Data owner can change it.",
+            "usrMsg": "Only the creator of environment shop-app-env or a Data owner can change it.",
+        }
+    ).encode()
+    return RestAPIError(
+        "https://h/hopsworks-api/api/project/119/python/environments/shop-app-env/libraries/r.txt",
+        response,
+    )
+
+
+class Environments:
+    """The project's environments by name, as `get_environment_api()` serves them; a clone or create adds one."""
+
+    def __init__(self, mock_project, *names):
+        self.api = mock_project.get_environment_api.return_value
+        self.envs = {}
+        for name in names:
+            self.add(name)
+        self.api.get_environment.side_effect = self.envs.get
+        self.api.create_environment.side_effect = lambda name, **kwargs: self.add(name)
+
+    def add(self, name):
+        env = mock.MagicMock(name=f"env {name}")
+        env.name = name
+        self.envs[name] = env
+        return env

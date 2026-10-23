@@ -25,6 +25,7 @@ from typing import Any
 
 import click
 from hopsworks.cli import output, session
+from hopsworks.cli.commands import env as env_commands
 
 
 @click.group("app")
@@ -573,6 +574,9 @@ def app_stop(ctx: click.Context, name: str) -> None:
 def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete an app.
 
+    Its environment goes too when it is your own copy, `<name>-app-env-<user>`,
+    of a shared environment.
+
     Args:
         ctx: Click context.
         name: App name.
@@ -587,11 +591,28 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
 
         with contextlib.suppress(Exception):
             a.stop()
+    env_name = getattr(a, "environment_name", None) or ""
+    copy = None
+    if env_name.startswith(f"{name}-app-env-"):
+        copy = env_commands.copy_name(
+            f"{name}-app-env", env_commands.current_username()
+        )
     try:
         a.delete()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Delete failed: {exc}") from exc
     output.success("✓ Deleted app %s", name)
+    if env_name != copy:
+        return
+    try:
+        env = session.get_project(ctx).get_environment_api().get_environment(copy)
+        if env is not None:
+            env.delete()
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Deleted app '{name}', but not its environment '{copy}': {exc}"
+        ) from exc
+    output.success("✓ Deleted environment %s", copy)
 
 
 def _accepted_kwargs(fn: Any, kwargs: dict[str, Any]) -> dict[str, Any]:

@@ -24,6 +24,75 @@ def env_group() -> None:
     """Python environment commands (list, clone, install)."""
 
 
+# RESTCodes.PythonErrorCode.ENVIRONMENT_CHANGE_FORBIDDEN: only the environment's creator or a Data owner changes it.
+_CHANGE_FORBIDDEN = 300029
+_COPY_SUFFIX = "-app-env"
+
+
+def copy_name(env_name: str, username: str) -> str:
+    """The caller's own copy of a shared environment.
+
+    Args:
+        env_name: The shared environment.
+        username: The caller's Hopsworks username.
+
+    Returns:
+        `<env>-app-env-<user>`, `<env>` being `env_name` without a trailing `-app-env`.
+    """
+    return f"{env_name.removesuffix(_COPY_SUFFIX)}{_COPY_SUFFIX}-{username}"
+
+
+def change_forbidden(exc: Exception) -> bool:
+    """Whether Hopsworks refused to change an environment the caller did not create.
+
+    Args:
+        exc: What the SDK raised.
+
+    Returns:
+        True for error 300029.
+    """
+    return getattr(exc, "error_code", None) == _CHANGE_FORBIDDEN
+
+
+def current_username() -> str:
+    import hopsworks
+
+    try:
+        return hopsworks.get_users_api()._get_current_user().username
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not resolve your username: {exc}") from exc
+
+
+def own_copy(api: Any, source: str, name: str) -> Any:
+    """The caller's copy of `source`, cloned first when it does not exist.
+
+    Args:
+        api: The project's environment API.
+        source: The environment to clone.
+        name: The copy's name, from `copy_name`.
+
+    Returns:
+        The copy.
+    """
+    try:
+        env = api.get_environment(name)
+        if env is not None:
+            return env
+        output.info(
+            "Only its creator or a Data owner can change environment %s: cloning it "
+            "to your own copy %s; this takes a few minutes.",
+            source,
+            name,
+        )
+        return api.create_environment(
+            name, source_environment_name=source, await_creation=True
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not clone environment '{source}' to '{name}': {exc}"
+        ) from exc
+
+
 def _api(ctx: click.Context) -> Any:
     return session.get_project(ctx).get_environment_api()
 
@@ -150,6 +219,10 @@ def env_install(
 ) -> None:
     """Install a requirements.txt into ENV_NAME.
 
+    When ENV_NAME is shared and only its creator or a Data owner can change
+    it, the install goes into your own copy, `<ENV_NAME>-app-env-<user>`
+    (ENV_NAME without a trailing `-app-env`), cloned from ENV_NAME the first time.
+
     ``--file`` is either a local file — uploaded to HopsFS first, since the
     backend can only read paths inside the project — or a path that already
     exists in the project (e.g. ``Users/<username>/requirements.txt``).
@@ -205,7 +278,14 @@ def env_install(
     try:
         env.install_requirements(remote_path, await_installation=True)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Install failed: {exc}") from exc
+        if not change_forbidden(exc):
+            raise click.ClickException(f"Install failed: {exc}") from exc
+        source, env_name = env_name, copy_name(env_name, current_username())
+        env = own_copy(api, source, env_name)
+        try:
+            env.install_requirements(remote_path, await_installation=True)
+        except Exception as copy_exc:  # noqa: BLE001
+            raise click.ClickException(f"Install failed: {copy_exc}") from copy_exc
     if output.JSON_MODE:
         output.print_json({"environment": env_name, "installed": remote_path})
     else:
