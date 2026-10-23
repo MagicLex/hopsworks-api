@@ -399,9 +399,11 @@ def test_each_users_copy_of_an_environment_goes_and_nothing_else():
         SimpleNamespace(name=n, delete=lambda n=n: deleted.append(n))
         for n in (
             "churn-example-app-app-env",
-            "churn-example-app-app-env-scott",
-            "churn-example-app-app-env-alice",
-            "churn-example-v2-app-app-env-scott",
+            "churn-example-app-app-env-meb10000",
+            "churn-example-app-app-env-alice001",
+            "churn-example-app-app-env-backup",
+            "churn-example-app-app-env-meb10000-old",
+            "churn-example-v2-app-app-env-meb10000",
         )
     ]
     by_name = {e.name: e for e in envs}
@@ -420,14 +422,14 @@ def test_each_users_copy_of_an_environment_goes_and_nothing_else():
     )
     assert [str(a) for a in planned] == [
         "app churn-example-app",
-        "environment churn-example-app-app-env-scott",
-        "environment churn-example-app-app-env-alice",
+        "environment churn-example-app-app-env-meb10000",
+        "environment churn-example-app-app-env-alice001",
     ]
     for asset in planned[1:]:
         assert deleter.delete(asset) == "deleted"
     assert deleted == [
-        "churn-example-app-app-env-scott",
-        "churn-example-app-app-env-alice",
+        "churn-example-app-app-env-meb10000",
+        "churn-example-app-app-env-alice001",
     ]
 
 

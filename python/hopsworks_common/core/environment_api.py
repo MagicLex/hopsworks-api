@@ -102,6 +102,35 @@ class EnvironmentApi:
 
     @public
     @usage._method_logger
+    def await_creation(self, name: str, timeout: float | None = None) -> None:
+        """Wait for the creation of an environment to finish.
+
+        Use it after `create_environment(..., await_creation=False)`.
+
+        ```python
+        import hopsworks
+
+        project = hopsworks.login()
+
+        env_api = project.get_environment_api()
+
+        env_api.create_environment("my_custom_environment", await_creation=False)
+        env_api.await_creation("my_custom_environment")
+        ```
+
+        Parameters:
+            name: Name of the environment.
+            timeout: Seconds to wait for the creation to finish before raising.
+                Falls back to the engine's default when unset.
+
+        Raises:
+            hopsworks.client.exceptions.EnvironmentException: If the creation failed or did not finish within `timeout`.
+            hopsworks.client.exceptions.RestAPIError: If the backend encounters an error when handling the request.
+        """
+        self._environment_engine._await_environment_command(name, timeout)
+
+    @public
+    @usage._method_logger
     def get_environments(self) -> list[environment.Environment]:
         """Get all available environments in the project.
 

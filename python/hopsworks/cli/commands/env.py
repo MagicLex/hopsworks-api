@@ -118,7 +118,7 @@ def own_copy(api: Any, source: str, name: str) -> Any:
             f"Could not clone environment '{source}' to '{name}': {exc}"
         ) from exc
     try:
-        api._environment_engine._await_environment_command(name)
+        api.await_creation(name)
     except Exception as exc:  # noqa: BLE001
         failure = f"Could not clone environment '{source}' to '{name}': {exc}"
         try:

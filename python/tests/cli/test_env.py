@@ -127,9 +127,7 @@ def _clone_fails_in_its_build(envs, deletable):
         return half
 
     envs.api.create_environment.side_effect = clone
-    envs.api._environment_engine._await_environment_command.side_effect = RuntimeError(
-        "build failed"
-    )
+    envs.api.await_creation.side_effect = RuntimeError("build failed")
 
 
 def _install_as_scott(*args):
@@ -245,7 +243,7 @@ def test_env_install_deletes_a_clone_that_failed_and_clones_again(mock_project):
     assert "fraud-app-env-scott" not in envs.envs
 
     envs.api.create_environment.side_effect = lambda name, **kwargs: envs.add(name)
-    envs.api._environment_engine._await_environment_command.side_effect = None
+    envs.api.await_creation.side_effect = None
     result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
     assert result.exit_code == 0, result.output
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
@@ -369,7 +367,7 @@ def test_env_install_deletes_nothing_when_the_clone_request_fails(mock_project):
 def test_env_install_keeps_a_copy_still_building_after_a_timeout(mock_project):
     envs = Environments(mock_project, "fraud")
     envs.envs["fraud"].install_requirements.side_effect = environment_refused()
-    envs.api._environment_engine._await_environment_command.side_effect = RuntimeError(
+    envs.api.await_creation.side_effect = RuntimeError(
         "Timed out after 1800s waiting for environment"
     )
 

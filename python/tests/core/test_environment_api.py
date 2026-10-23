@@ -15,8 +15,12 @@
 #
 
 import json
+from types import SimpleNamespace
 
+import pytest
 from hopsworks_common import client
+from hopsworks_common.client.exceptions import EnvironmentException
+from hopsworks_common.command import Command
 from hopsworks_common.core import environment_api
 
 
@@ -102,3 +106,36 @@ class TestEnvironmentApi:
             "name": "myenv",
             "baseImage": {"name": "python-agent-pipeline", "description": None},
         }
+
+    def _build(self, mocker, api, *statuses):
+        """The environment's CREATE command as each poll sees it."""
+        mocker.patch.object(api._environment_engine, "POLL_INTERVAL", 0)
+        return mocker.patch.object(
+            api._environment_engine,
+            "_poll_commands_environment",
+            side_effect=[
+                SimpleNamespace(_commands=[Command(status=s, op="CREATE")])
+                for s in statuses
+            ],
+        )
+
+    def test_await_creation_returns_once_the_build_succeeded(self, mocker):
+        # Arrange
+        api = self._api(mocker)
+        poll = self._build(mocker, api, "ONGOING", "SUCCESS")
+
+        # Act
+        api.await_creation("shop-app-env-meb10000")
+
+        # Assert
+        assert poll.call_count == 2
+        assert poll.call_args.args[0] == "shop-app-env-meb10000"
+
+    def test_await_creation_raises_when_the_build_failed(self, mocker):
+        # Arrange
+        api = self._api(mocker)
+        self._build(mocker, api, "FAILED")
+
+        # Act, Assert
+        with pytest.raises(EnvironmentException, match="Command failed"):
+            api.await_creation("shop-app-env-meb10000")

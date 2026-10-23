@@ -491,10 +491,13 @@ class Deleter:
                 out.append(asset)
                 continue
             owner = _names(asset.owned_by) if asset.owned_by else None
+            # A Hopsworks username is 8 lowercase letters and digits, so
+            # `<env>-app-env-backup` is someone's own environment, not a copy.
+            copy = re.compile(re.escape(asset.name[:-1]) + r"[a-z0-9]{8}")
             out.extend(
                 Asset("environment", e.name)
                 for e in envs
-                if e.name.startswith(asset.name[:-1])
+                if copy.fullmatch(e.name)
                 and (
                     owner is None or owner.search(getattr(e, "description", None) or "")
                 )
