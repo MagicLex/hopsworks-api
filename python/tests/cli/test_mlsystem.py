@@ -42,7 +42,10 @@ SYSTEMS = [
 def logged_in(monkeypatch):
     from hopsworks.cli import teardown
 
-    monkeypatch.setattr(session, "get_project", lambda ctx: mock.Mock(name="churndemo"))
+    project = mock.Mock(name="churndemo")
+    # A project with no copies of the system's environments.
+    project.get_environment_api.return_value.get_environments.return_value = []
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
     monkeypatch.setattr(teardown, "require_data_owner", lambda project: None)
 
 
@@ -401,17 +404,31 @@ def test_each_users_copy_of_an_environment_goes_and_nothing_else():
             "churn-example-v2-app-app-env-scott",
         )
     ]
+    by_name = {e.name: e for e in envs}
     project = SimpleNamespace(
-        get_environment_api=lambda: SimpleNamespace(get_environments=lambda: envs)
+        get_environment_api=lambda: SimpleNamespace(
+            get_environments=lambda: envs, get_environment=by_name.get
+        )
     )
     deleter = teardown.Deleter(project)
-    asset = teardown.Asset("environment", "churn-example-app-app-env-*")
-    assert deleter.delete(asset) == "deleted"
+    planned = deleter.expand(
+        [
+            teardown.Asset("app", "churn-example-app"),
+            teardown.Asset("environment", "churn-example-app-app-env-*"),
+            teardown.Asset("environment", "other-app-env-*"),
+        ]
+    )
+    assert [str(a) for a in planned] == [
+        "app churn-example-app",
+        "environment churn-example-app-app-env-scott",
+        "environment churn-example-app-app-env-alice",
+    ]
+    for asset in planned[1:]:
+        assert deleter.delete(asset) == "deleted"
     assert deleted == [
         "churn-example-app-app-env-scott",
         "churn-example-app-app-env-alice",
     ]
-    assert deleter.delete(teardown.Asset("environment", "other-app-env-*")) == "gone"
 
 
 def test_delete_removes_the_code_last_and_a_retry_after_it_finishes(
@@ -537,7 +554,10 @@ def test_a_data_scientist_is_refused_before_anything_is_deleted(
 ):
     from hopsworks.cli import teardown
 
-    monkeypatch.setattr(session, "get_project", lambda ctx: mock.Mock(name="churndemo"))
+    project = mock.Mock(name="churndemo")
+    # A project with no copies of the system's environments.
+    project.get_environment_api.return_value.get_environments.return_value = []
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
 
     def refuse(project):
         raise click.ClickException("only a Data owner can delete")

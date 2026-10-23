@@ -68,8 +68,9 @@ def current_username() -> str:
 def own_copy(api: Any, source: str, name: str) -> Any:
     """The caller's copy of `source`, cloned first when it does not exist.
 
-    A copy whose build failed is deleted and cloned again; a clone that fails is
-    deleted, and when that delete fails too the warning says how to delete it.
+    A copy whose build failed is deleted and cloned again. A clone is deleted
+    only once its own build failed: a refused request, a timeout or a lost
+    answer leaves it, since it may be another run's copy or still building.
 
     Args:
         api: The project's environment API.
@@ -109,14 +110,27 @@ def own_copy(api: Any, source: str, name: str) -> Any:
         name,
     )
     try:
-        return api.create_environment(
-            name, source_environment_name=source, await_creation=True
+        env = api.create_environment(
+            name, source_environment_name=source, await_creation=False
         )
     except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not clone environment '{source}' to '{name}': {exc}"
+        ) from exc
+    try:
+        api._environment_engine._await_environment_command(name)
+    except Exception as exc:  # noqa: BLE001
+        failure = f"Could not clone environment '{source}' to '{name}': {exc}"
         try:
             half = api.get_environment(name)
-            if half is not None:
-                half.delete()
+        except Exception:  # noqa: BLE001
+            half = None
+        if half is None or not _build_failed(half):
+            raise click.ClickException(
+                f"{failure}. The copy is kept: it may still be building; run this again later."
+            ) from exc
+        try:
+            half.delete()
         except Exception as cleanup:  # noqa: BLE001
             output.warn(
                 "Could not delete the unfinished copy %s: %s. Delete it with "
@@ -125,9 +139,8 @@ def own_copy(api: Any, source: str, name: str) -> Any:
                 cleanup,
                 name,
             )
-        raise click.ClickException(
-            f"Could not clone environment '{source}' to '{name}': {exc}"
-        ) from exc
+        raise click.ClickException(failure) from exc
+    return env
 
 
 def _build_failed(env: Any) -> bool:
@@ -252,7 +265,7 @@ def env_delete(ctx: click.Context, name: str, yes: bool) -> None:
     """Delete the project environment NAME.
 
     Only its creator or a Data owner can delete it, and not while a job,
-    app or deployment runs on it.
+    app, deployment or Jupyter server runs on it.
 
     Args:
         ctx: Click context.

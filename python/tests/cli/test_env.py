@@ -113,6 +113,25 @@ def test_env_install_unknown_environment(mock_project):
     assert "No environment named 'nope'" in result.output
 
 
+def _clone_fails_in_its_build(envs, deletable):
+    """The clone request goes through and its build fails: the copy's CREATE command is FAILED."""
+    from hopsworks_common.command import Command
+
+    def clone(name, **kwargs):
+        half = envs.add(name)
+        half.commands = [Command(status="FAILED", op="CREATE")]
+        if deletable:
+            half.delete.side_effect = lambda: envs.envs.pop(name)
+        else:
+            half.delete.side_effect = RuntimeError("503")
+        return half
+
+    envs.api.create_environment.side_effect = clone
+    envs.api._environment_engine._await_environment_command.side_effect = RuntimeError(
+        "build failed"
+    )
+
+
 def _install_as_scott(*args):
     users_api = mock.MagicMock()
     users_api._get_current_user.return_value.username = "scott"
@@ -130,7 +149,7 @@ def test_env_install_into_a_shared_environment_clones_your_own_copy(mock_project
 
     assert result.exit_code == 0, result.output
     envs.api.create_environment.assert_called_once_with(
-        "fraud-app-env-scott", source_environment_name="fraud", await_creation=True
+        "fraud-app-env-scott", source_environment_name="fraud", await_creation=False
     )
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once_with(
         "Users/scott/r.txt", await_installation=True
@@ -217,12 +236,7 @@ def test_env_install_deletes_a_clone_that_failed_and_clones_again(mock_project):
     envs = Environments(mock_project, "fraud")
     envs.envs["fraud"].install_requirements.side_effect = environment_refused()
 
-    def clone_fails(name, **kwargs):
-        half = envs.add(name)
-        half.delete.side_effect = lambda: envs.envs.pop(name)
-        raise RuntimeError("build failed")
-
-    envs.api.create_environment.side_effect = clone_fails
+    _clone_fails_in_its_build(envs, deletable=True)
     result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
     assert result.exit_code == 1
     assert (
@@ -231,6 +245,7 @@ def test_env_install_deletes_a_clone_that_failed_and_clones_again(mock_project):
     assert "fraud-app-env-scott" not in envs.envs
 
     envs.api.create_environment.side_effect = lambda name, **kwargs: envs.add(name)
+    envs.api._environment_engine._await_environment_command.side_effect = None
     result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
     assert result.exit_code == 0, result.output
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
@@ -262,7 +277,7 @@ def test_env_install_clones_again_over_a_copy_whose_build_failed(mock_project):
     broken.delete.assert_called_once()
     broken.install_requirements.assert_not_called()
     envs.api.create_environment.assert_called_once_with(
-        "fraud-app-env-scott", source_environment_name="fraud", await_creation=True
+        "fraud-app-env-scott", source_environment_name="fraud", await_creation=False
     )
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
 
@@ -287,11 +302,7 @@ def test_a_failed_clone_it_cannot_delete_is_named_with_how_to_delete_it(mock_pro
     envs = Environments(mock_project, "fraud")
     envs.envs["fraud"].install_requirements.side_effect = environment_refused()
 
-    def clone_fails(name, **kwargs):
-        envs.add(name).delete.side_effect = RuntimeError("503")
-        raise RuntimeError("build failed")
-
-    envs.api.create_environment.side_effect = clone_fails
+    _clone_fails_in_its_build(envs, deletable=False)
     result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
 
     assert result.exit_code == 1
@@ -336,3 +347,35 @@ def test_env_install_keeps_a_finished_copy_after_a_failed_install(mock_project):
     copy.delete.assert_not_called()
     envs.api.create_environment.assert_not_called()
     copy.install_requirements.assert_called_once()
+
+
+def test_env_install_deletes_nothing_when_the_clone_request_fails(mock_project):
+    # Another run made the copy first: its build must survive this run's refusal.
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+
+    def made_by_another_run(name, **kwargs):
+        envs.add(name)
+        raise RuntimeError("409 environment already exists")
+
+    envs.api.create_environment.side_effect = made_by_another_run
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 1
+    assert "already exists" in result.output
+    envs.envs["fraud-app-env-scott"].delete.assert_not_called()
+
+
+def test_env_install_keeps_a_copy_still_building_after_a_timeout(mock_project):
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+    envs.api._environment_engine._await_environment_command.side_effect = RuntimeError(
+        "Timed out after 1800s waiting for environment"
+    )
+
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 1
+    assert "The copy is kept: it may still be building" in result.output
+    envs.envs["fraud-app-env-scott"].delete.assert_not_called()
+    envs.envs["fraud-app-env-scott"].install_requirements.assert_not_called()

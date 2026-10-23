@@ -187,3 +187,22 @@ class TestEnvironment:
     )
     def test_creator_reads_who_created_the_environment(self, body, creator):
         assert environment.Environment.from_response_json(body).creator == creator
+
+    @pytest.mark.parametrize(
+        ("body", "names"),
+        [
+            (
+                {
+                    "name": "fraud",
+                    "libraries": {
+                        "count": 2,
+                        "items": [{"library": "polars"}, {"library": "pandas"}],
+                    },
+                },
+                ["polars", "pandas"],
+            ),
+            ({"name": "fraud"}, None),
+        ],
+    )
+    def test_library_names_lists_what_the_environment_has(self, body, names):
+        assert environment.Environment.from_response_json(body).library_names == names

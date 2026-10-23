@@ -93,6 +93,13 @@ class Environment:
         return self._preinstalled
 
     @property
+    def library_names(self) -> list[str] | None:
+        """Names of the libraries installed in the environment; `None` when the response carried none."""
+        if not isinstance(self._libraries, dict):
+            return None
+        return [item.get("library") for item in self._libraries.get("items") or []]
+
+    @property
     def commands(self) -> list | None:
         """The environment's own commands, such as its build; `None` when the response carried none."""
         return self._commands

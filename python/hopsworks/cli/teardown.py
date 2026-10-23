@@ -471,11 +471,37 @@ class Deleter:
             raise
         return "deleted"
 
+    def expand(self, assets: list[Asset]) -> list[Asset]:
+        """Replace each `<env>-app-env-*` environment with the copies the project has, so the confirmation names them.
+
+        A copy goes only where the system made it: under `owned_by`, its description names the system.
+
+        Args:
+            assets: The planned assets.
+
+        Returns:
+            The assets, each copy by its name.
+        """
+        if not any(a.kind == "environment" and a.name.endswith("-*") for a in assets):
+            return assets
+        envs = self.project.get_environment_api().get_environments() or []
+        out: list[Asset] = []
+        for asset in assets:
+            if not (asset.kind == "environment" and asset.name.endswith("-*")):
+                out.append(asset)
+                continue
+            owner = _names(asset.owned_by) if asset.owned_by else None
+            out.extend(
+                Asset("environment", e.name)
+                for e in envs
+                if e.name.startswith(asset.name[:-1])
+                and (
+                    owner is None or owner.search(getattr(e, "description", None) or "")
+                )
+            )
+        return out
+
     def _environment(self, asset: Asset) -> str:
-        if asset.name.endswith("-*"):
-            prefix = asset.name[:-1]
-            envs = self.project.get_environment_api().get_environments() or []
-            return self._each(asset, [e for e in envs if e.name.startswith(prefix)])
         env = self.project.get_environment_api().get_environment(asset.name)
         if env is None:
             return "gone"

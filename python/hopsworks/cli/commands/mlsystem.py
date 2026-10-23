@@ -359,6 +359,7 @@ def system_delete(
             others = _other_docs(entry)
             deleter = teardown.Deleter(project, other_slugs=tuple(others))
             planned, kept = teardown.plan(doc, slug, others)
+            planned = deleter.expand(planned)
             steps = [(str(a), lambda a=a: deleter.delete(a)) for a in planned]
             if repo:
                 found = teardown.repo_of(doc)
