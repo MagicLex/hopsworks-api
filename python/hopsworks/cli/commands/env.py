@@ -71,6 +71,7 @@ def own_copy(api: Any, source: str, name: str) -> Any:
     A copy whose build failed is deleted and cloned again. A clone is deleted
     only once its own build failed: a refused request, a timeout or a lost
     answer leaves it, since it may be another run's copy or still building.
+    Runs of one user share the copy: one waits for the copy another clones.
 
     Args:
         api: The project's environment API.
@@ -96,35 +97,49 @@ def own_copy(api: Any, source: str, name: str) -> Any:
         return env
     if env is not None:
         output.warn("Your copy %s did not finish building: cloning it again.", name)
-        try:
-            env.delete()
-        except Exception as exc:  # noqa: BLE001
-            raise click.ClickException(
-                f"Your copy '{name}' did not build and could not be deleted: {exc}. "
-                f"Delete it with `hops env delete {name} --yes`, then run this again."
-            ) from exc
-    output.info(
-        "Only its creator or a Data owner can change environment %s: cloning it "
-        "to your own copy %s; this takes a few minutes.",
-        source,
-        name,
-    )
-    try:
-        env = api.create_environment(
-            name, source_environment_name=source, await_creation=False
+        # Read again right before the delete: another run may have cloned it again.
+        env = _read(api, name)
+        if env is not None and _build_failed(env):
+            try:
+                env.delete()
+            except Exception as exc:  # noqa: BLE001
+                raise click.ClickException(
+                    f"Your copy '{name}' did not build and could not be deleted: {exc}. "
+                    f"Delete it with `hops env delete {name} --yes`, then run this again."
+                ) from exc
+            env = None
+    if env is None:
+        output.info(
+            "Only its creator or a Data owner can change environment %s: cloning it "
+            "to your own copy %s; this takes a few minutes.",
+            source,
+            name,
         )
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(
-            f"Could not clone environment '{source}' to '{name}': {exc}"
-        ) from exc
+        try:
+            env = api.create_environment(
+                name, source_environment_name=source, await_creation=False
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Another run of yours may have cloned it first.
+            env = _read(api, name)
+            if env is None or _build_failed(env):
+                raise click.ClickException(
+                    f"Could not clone environment '{source}' to '{name}': {exc}"
+                ) from exc
     try:
-        api.await_creation(name)
+        try:
+            api.await_creation(name)
+        except Exception as exc:
+            # Another run deleted the copy while it built and may be cloning it again.
+            if _status(exc) != 404:
+                raise
+            env = _read(api, name)
+            if env is None or _build_failed(env):
+                raise
+            api.await_creation(name)
     except Exception as exc:  # noqa: BLE001
         failure = f"Could not clone environment '{source}' to '{name}': {exc}"
-        try:
-            half = api.get_environment(name)
-        except Exception:  # noqa: BLE001
-            half = None
+        half = _read(api, name)
         if half is None or not _build_failed(half):
             raise click.ClickException(
                 f"{failure}. The copy is kept: it may still be building; run this again later."
@@ -141,6 +156,17 @@ def own_copy(api: Any, source: str, name: str) -> Any:
             )
         raise click.ClickException(failure) from exc
     return env
+
+
+def _read(api: Any, name: str) -> Any:
+    try:
+        return api.get_environment(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _status(exc: Exception) -> int | None:
+    return getattr(getattr(exc, "response", None), "status_code", None)
 
 
 def _build_failed(env: Any) -> bool:

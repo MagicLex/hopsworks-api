@@ -117,6 +117,21 @@ def environment_refused(code: int = 300029) -> Exception:
     )
 
 
+def environment_missing(name: str) -> Exception:
+    """The 404 Hopsworks answers for an environment that is gone."""
+    import requests
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = requests.Response()
+    response.status_code = 404
+    response.reason = "Not Found"
+    response._content = json.dumps({"errorMsg": "Environment not found."}).encode()
+    return RestAPIError(
+        f"https://h/hopsworks-api/api/project/119/python/environments/{name}",
+        response,
+    )
+
+
 class Environments:
     """The project's environments by name, as `get_environment_api()` serves them; a clone or create adds one."""
 
