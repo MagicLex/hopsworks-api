@@ -317,3 +317,22 @@ def test_env_delete_of_an_unknown_environment_says_so(mock_project):
 
     assert result.exit_code == 1
     assert "No environment named 'nope'" in result.output
+
+
+def test_env_install_keeps_a_finished_copy_after_a_failed_install(mock_project):
+    from hopsworks_common.command import Command
+
+    envs = Environments(mock_project, "fraud", "fraud-app-env-scott")
+    envs.envs["fraud"].install_requirements.side_effect = environment_refused()
+    copy = envs.envs["fraud-app-env-scott"]
+    copy.commands = [
+        Command(status="FAILED", op="INSTALL"),
+        Command(status="SUCCESS", op="CREATE"),
+    ]
+
+    result = _install_as_scott("env", "install", "fraud", "-f", "Users/scott/r.txt")
+
+    assert result.exit_code == 0, result.output
+    copy.delete.assert_not_called()
+    envs.api.create_environment.assert_not_called()
+    copy.install_requirements.assert_called_once()

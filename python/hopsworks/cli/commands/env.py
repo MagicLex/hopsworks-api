@@ -94,7 +94,7 @@ def own_copy(api: Any, source: str, name: str) -> Any:
     if env is not None and not _build_failed(env):
         return env
     if env is not None:
-        output.warn("Your copy %s did not build: cloning it again.", name)
+        output.warn("Your copy %s did not finish building: cloning it again.", name)
         try:
             env.delete()
         except Exception as exc:  # noqa: BLE001
@@ -131,7 +131,8 @@ def own_copy(api: Any, source: str, name: str) -> Any:
 
 
 def _build_failed(env: Any) -> bool:
-    return any(c.status == "FAILED" for c in env.commands or [])
+    # Only the build: a failed install into a finished copy keeps the copy.
+    return any(c.op == "CREATE" and c.status == "FAILED" for c in env.commands or [])
 
 
 def _api(ctx: click.Context) -> Any:
