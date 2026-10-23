@@ -604,8 +604,20 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     output.success("✓ Deleted app %s", name)
     if env_name != copy:
         return
+    project = session.get_project(ctx)
     try:
-        env = session.get_project(ctx).get_environment_api().get_environment(copy)
+        # `hops env install <name>` makes a copy of the same name, which other apps may run on.
+        users = [
+            other.name
+            for other in project.get_app_api().get_apps() or []
+            if getattr(other, "environment_name", None) == copy and other.name != name
+        ]
+        if users:
+            output.info(
+                "Kept environment %s: app %s runs on it.", copy, ", ".join(users)
+            )
+            return
+        env = project.get_environment_api().get_environment(copy)
         if env is not None:
             env.delete()
     except Exception as exc:  # noqa: BLE001

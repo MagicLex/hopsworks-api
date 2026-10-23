@@ -150,6 +150,8 @@ def test_the_inventory_takes_what_the_system_created_downstream_first():
         "feature group billing (every other version churn-example made)",
         "data source acme_snowflake",
         "environment churn-example-train-env",
+        "environments churn-example-app-app-env-* (each user's copy)",
+        "environments churn-example-train-env-app-env-* (each user's copy)",
         "directory Resources/churn-example",
     ]
     # Read, shared or pre-existing: never deleted.
@@ -384,6 +386,32 @@ def test_prefixed_jobs_leave_a_longer_slug_alone():
     deleter = teardown.Deleter(project, other_slugs=("churn-example-v2",))
     assert deleter.delete(teardown.Asset("job", "churn-example-*")) == "deleted"
     assert deleted == ["churn-example-eda"]
+
+
+def test_each_users_copy_of_an_environment_goes_and_nothing_else():
+    from hopsworks.cli import teardown
+
+    deleted = []
+    envs = [
+        SimpleNamespace(name=n, delete=lambda n=n: deleted.append(n))
+        for n in (
+            "churn-example-app-app-env",
+            "churn-example-app-app-env-scott",
+            "churn-example-app-app-env-alice",
+            "churn-example-v2-app-app-env-scott",
+        )
+    ]
+    project = SimpleNamespace(
+        get_environment_api=lambda: SimpleNamespace(get_environments=lambda: envs)
+    )
+    deleter = teardown.Deleter(project)
+    asset = teardown.Asset("environment", "churn-example-app-app-env-*")
+    assert deleter.delete(asset) == "deleted"
+    assert deleted == [
+        "churn-example-app-app-env-scott",
+        "churn-example-app-app-env-alice",
+    ]
+    assert deleter.delete(teardown.Asset("environment", "other-app-env-*")) == "gone"
 
 
 def test_delete_removes_the_code_last_and_a_retry_after_it_finishes(

@@ -820,6 +820,19 @@ def test_app_delete_deletes_your_copy_of_its_environment(mock_project):
     assert "Deleted environment shop-app-env-scott" in result.output
 
 
+def test_app_delete_keeps_your_copy_while_another_app_runs_on_it(mock_project):
+    # `hops env install shop` makes shop-app-env-scott too, which another app may use.
+    other = _fake_app(name="dash", environment_name="shop-app-env-scott")
+    mock_project.get_app_api.return_value.get_apps.return_value = [other]
+    result, a, envs = _delete_as_scott(
+        mock_project, "shop-app-env-scott", "shop-app-env-scott"
+    )
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_not_called()
+    assert "Kept environment shop-app-env-scott: app dash runs on it." in result.output
+
+
 def test_app_delete_keeps_a_shared_environment_and_another_users_copy(mock_project):
     for env_name in ("shop-app-env", "shop-app-env-alice"):
         result, a, envs = _delete_as_scott(

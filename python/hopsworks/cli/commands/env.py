@@ -151,9 +151,9 @@ def env_clone(
 ) -> None:
     """Clone SOURCE into a new environment NEW_NAME.
 
-    Blocks until the backend finishes provisioning. This usually takes
-    several minutes — the new environment is built from the base image
-    and any post-install steps run before the call returns.
+    A project environment is cloned with its libraries; a built-in one is
+    created from its base image. Blocks until the backend finishes
+    provisioning, which usually takes several minutes.
 
     Args:
         ctx: Click context.
@@ -161,6 +161,21 @@ def env_clone(
         source: Existing environment to clone from.
         description: Optional description for the new environment.
     """
+    api = _api(ctx)
+    try:
+        source_env = api.get_environment(source)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not find environment '{source}': {exc}"
+        ) from exc
+    if source_env is None:
+        raise click.ClickException(
+            f"No environment named '{source}'. Run `hops env list` to see what exists."
+        )
+    if source_env.preinstalled is False:
+        origin = {"source_environment_name": source}
+    else:
+        origin = {"base_environment_name": source}
     output.warn(
         "Cloning '%s' to '%s' — this can take several minutes. Waiting for "
         "the backend to finish provisioning before returning.",
@@ -168,11 +183,11 @@ def env_clone(
         new_name,
     )
     try:
-        env = _api(ctx).create_environment(
+        env = api.create_environment(
             new_name,
             description=description,
-            base_environment_name=source,
             await_creation=True,
+            **origin,
         )
     except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
         raise click.ClickException(f"Clone failed: {exc}") from exc

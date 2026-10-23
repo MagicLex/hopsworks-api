@@ -58,6 +58,8 @@ class Asset:
     def __str__(self) -> str:
         if self.kind == "job" and self.name.endswith("-*"):
             return f"jobs {self.name} (any not named above)"
+        if self.kind == "environment" and self.name.endswith("-*"):
+            return f"environments {self.name} (each user's copy)"
         if self.owned_by and self.kind == "feature group" and self.version is None:
             return f"{self.kind} {self.name} (every other version {self.owned_by} made)"
         shown = f"{self.kind} {self.name}" + (
@@ -194,6 +196,14 @@ def inventory(doc: dict, slug: str) -> list[Asset]:
         # as this system's only when its description names the system.
         if versions:
             groups.append(Asset("feature group", group, owned_by=slug))
+    # A Data scientist's own copies of the app's and the system's environments
+    # (`hops app deploy`, `hops env install`): `<env>-app-env-<user>`.
+    for asset in list(found):
+        if asset.kind == "app":
+            add(Asset("environment", f"{asset.name}-app-env-*"))
+        elif asset.kind == "environment" and not asset.name.endswith("-*"):
+            base = asset.name.removesuffix("-app-env")
+            add(Asset("environment", f"{base}-app-env-*"))
     # Jobs follow the <slug>-<purpose> naming; some are named only in prose.
     add(Asset("job", f"{slug}-*"))
     add(Asset("directory", f"Resources/{slug}"))
@@ -462,6 +472,10 @@ class Deleter:
         return "deleted"
 
     def _environment(self, asset: Asset) -> str:
+        if asset.name.endswith("-*"):
+            prefix = asset.name[:-1]
+            envs = self.project.get_environment_api().get_environments() or []
+            return self._each(asset, [e for e in envs if e.name.startswith(prefix)])
         env = self.project.get_environment_api().get_environment(asset.name)
         if env is None:
             return "gone"

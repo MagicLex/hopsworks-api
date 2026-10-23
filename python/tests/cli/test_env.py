@@ -166,3 +166,43 @@ def test_env_install_any_other_refusal_is_reported_without_a_copy(mock_project):
     assert result.exit_code == 1
     assert "Install failed" in result.output
     envs.api.create_environment.assert_not_called()
+
+
+def test_env_clone_of_a_project_environment_sends_it_as_the_source(mock_project):
+    envs = Environments(mock_project, "fraud")
+    envs.envs["fraud"].preinstalled = False
+
+    result = CliRunner().invoke(cli, ["env", "clone", "fraud-2", "--from", "fraud"])
+
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "fraud-2",
+        description=None,
+        await_creation=True,
+        source_environment_name="fraud",
+    )
+
+
+def test_env_clone_of_a_built_in_creates_from_its_base_image(mock_project):
+    envs = Environments(mock_project, "python-feature-pipeline")
+    envs.envs["python-feature-pipeline"].preinstalled = True
+
+    result = CliRunner().invoke(cli, ["env", "clone", "mine"])
+
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "mine",
+        description=None,
+        await_creation=True,
+        base_environment_name="python-feature-pipeline",
+    )
+
+
+def test_env_clone_of_an_unknown_environment_says_so(mock_project):
+    envs = Environments(mock_project)
+
+    result = CliRunner().invoke(cli, ["env", "clone", "x", "--from", "nope"])
+
+    assert result.exit_code == 1
+    assert "No environment named 'nope'" in result.output
+    envs.api.create_environment.assert_not_called()

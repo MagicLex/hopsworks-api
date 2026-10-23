@@ -161,3 +161,22 @@ class TestEnvironment:
         # Assert
         mock_await_env.assert_called_once_with("myenv", 42)
         mock_await_lib.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("body", "preinstalled"),
+        [
+            (
+                {"name": "python-feature-pipeline", "isPreinstalledDockerImage": True},
+                True,
+            ),
+            ({"name": "fraud", "isPreinstalledDockerImage": False}, False),
+            ({"name": "fraud"}, None),
+        ],
+    )
+    def test_preinstalled_reads_whether_the_environment_is_built_in(
+        self, body, preinstalled
+    ):
+        assert (
+            environment.Environment.from_response_json(body).preinstalled
+            is preinstalled
+        )

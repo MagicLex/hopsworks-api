@@ -41,9 +41,11 @@ class Environment:
         commands=None,
         href=None,
         type=None,
+        is_preinstalled_docker_image=None,
         **kwargs,
     ):
         self._name = name
+        self._preinstalled = is_preinstalled_docker_image
         self._description = description
         self._python_version = python_version
         self._python_conflicts = python_conflicts
@@ -82,6 +84,11 @@ class Environment:
     def description(self):
         """Description of the environment."""
         return self._description
+
+    @property
+    def preinstalled(self) -> bool | None:
+        """Whether this is a built-in environment of the cluster, not one of the project's; `None` when unknown."""
+        return self._preinstalled
 
     @public
     @usage._method_logger
