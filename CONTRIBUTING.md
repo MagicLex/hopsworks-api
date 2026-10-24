@@ -18,6 +18,15 @@
     pytest tests
     ```
 
+    Tests that need Spark with delta-spark, or a real Hopsworks cluster, are not in `tests`. They live in `python/tests_integration` and run only when asked, from the `python` directory:
+
+    ```bash
+    pytest tests_integration/spark   # needs pyspark and delta-spark, fails without them
+    HOPSWORKS_LIVE_HOST=<host> HOPSWORKS_LIVE_KEY_FILE=<api key file> pytest tests_integration/live -m <marker>
+    ```
+
+    See the module docstring of each lane for what it needs.
+
     The linting and formatting are done via [ruff](https://docs.astral.sh/ruff/), see `tool.ruff` section of `pyproject.toml` for the configuration.
 
     To automate linting and formatting, install [`pre-commit`](https://pre-commit.com/) and then activate its hooks.

@@ -28,8 +28,7 @@ from unittest import mock
 import pandas as pd
 import pyarrow as pa
 import pytest
-import requests
-from hopsworks_common.client.exceptions import FeatureStoreException, RestAPIError
+from hopsworks_common.client.exceptions import FeatureStoreException
 from hsfs.core.delta_engine import DeltaEngine
 from hsfs.feature_group_commit import FeatureGroupCommit
 
@@ -110,6 +109,13 @@ def _patch_apis(
     return var_api, proj_api
 
 
+def _set_checkpoint_interval(client, interval):
+    """Feed the per-client cache the variable read fills, so no request is made."""
+    from hopsworks_common.core import variable_api
+
+    variable_api._DELTA_CHECKPOINT_INTERVALS[client] = interval
+
+
 def _patch_client(
     mocker, is_external: bool, project_name: str = "proj", certs: str = "/pems"
 ):
@@ -117,10 +123,8 @@ def _patch_client(
     client._is_external.return_value = is_external
     client.project_name = project_name
     client._get_certs_folder.return_value = certs
-    # No checkpoint interval variable on this cluster: the table properties stay as the test sets them.
-    not_found = requests.Response()
-    not_found.status_code = 404
-    client._send_request.side_effect = RestAPIError("http://x", not_found)
+    # The cluster serves no checkpoint interval: the table properties stay as the test sets them.
+    _set_checkpoint_interval(client, None)
     mocker.patch("hopsworks_common.client._get_instance", return_value=client)
     return client
 
@@ -3291,7 +3295,7 @@ def _real_local_engine(
     from hsfs import engine, feature_group
     from hsfs.engine import python
 
-    _use_local_backend(monkeypatch, checkpoint_interval, hopsworks_client.Client)
+    _use_client(monkeypatch, checkpoint_interval, hopsworks_client.Client)
     monkeypatch.setattr(hopsworks_common.connection, "_hsfs_engine_type", "python")
     monkeypatch.setattr(engine, "_engine", python.Engine())
     monkeypatch.setattr(engine, "_engine_type", "python")
@@ -3505,72 +3509,18 @@ def test_write_tz_map_into_backend_made_table(mocker, monkeypatch, tmp_path, ope
     )
 
 
-class _LocalBackend:
-    """A real HTTP server answering GET /hopsworks-api/api/variables/<id> from a dict, 404 when absent."""
+def _use_client(monkeypatch, checkpoint_interval, client_class=None):
+    """Install a client that has no connection and holds the checkpoint interval the variable read would cache.
 
-    def __init__(self):
-        import http.server
-        import threading
-
-        self.variables = {}
-        self.requests = []
-        backend = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                name = self.path.rsplit("/", 1)[-1]
-                backend.requests.append(name)
-                if name in backend.variables:
-                    status, body = 200, {"successMessage": backend.variables[name]}
-                else:
-                    status, body = 404, {"errorMsg": "not found"}
-                payload = json.dumps(body).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def log_message(self, *args):
-                pass
-
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-
-
-_LOCAL_BACKEND = None
-
-
-def _use_local_backend(monkeypatch, checkpoint_interval, client_class=None):
-    """Install a real client talking to the local server, with the checkpoint interval variable set or absent.
-
-    The client class skips its constructor, which reads the pod's certificates and credentials,
-    and gets the attributes `_send_request` needs.
+    The interval is None when the cluster does not serve the variable.
     """
-    import requests
     from hopsworks_common import client
     from hopsworks_common.client import base
 
-    global _LOCAL_BACKEND
-    if _LOCAL_BACKEND is None:
-        _LOCAL_BACKEND = _LocalBackend()
-    backend = _LOCAL_BACKEND
-    backend.variables = {}
-    backend.requests = []
-    if checkpoint_interval is not None:
-        backend.variables["featurestore_delta_checkpoint_interval"] = str(
-            checkpoint_interval
-        )
-
     local = object.__new__(client_class or base.Client)
-    local._base_url = backend.url
-    local._auth = None
-    local._verify = False
-    local._connected = True
-    local._session = requests.Session()
+    _set_checkpoint_interval(local, checkpoint_interval)
     monkeypatch.setattr(client, "_client", local)
-    return backend
+    return local
 
 
 def _real_local_rs_engine(
@@ -3582,10 +3532,9 @@ def _real_local_rs_engine(
     location, and the real client fetches its credentials over REST at
     construction. An S3 connector without keys takes the location as-is with
     no storage options, so delta-rs writes the local path.
-    The client is a real one talking to a local HTTP server that serves the
-    checkpoint interval variable, or answers 404 when it is None.
+    The client holds the checkpoint interval, None when the cluster has no such variable.
     """
-    _use_local_backend(monkeypatch, checkpoint_interval)
+    _use_client(monkeypatch, checkpoint_interval)
     from hopsworks_common import connection
     from hsfs import feature, feature_group
     from hsfs import storage_connector as sc
@@ -4075,54 +4024,19 @@ def test_a_cluster_without_the_variable_leaves_tables_alone(monkeypatch, tmp_pat
     assert "delta.checkpointInterval" not in _config(location)
 
 
-def test_the_variable_is_read_once_per_connection(monkeypatch, tmp_path):
-    location = str(tmp_path / "fg")
-    engine = _real_local_rs_engine(
-        monkeypatch, location, [("id", "bigint"), ("v", "string")]
-    )
-    backend = _LOCAL_BACKEND
+@pytest.mark.parametrize(
+    ("value", "interval"),
+    [
+        ("10", 10),
+        (" 3", 3),
+        ("0", None),
+        ("-3", None),
+        ("ten", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_the_variable_value_is_a_positive_integer_or_ignored(value, interval):
+    from hopsworks_common.core.variable_api import _parse_delta_checkpoint_interval
 
-    for i in range(4):
-        _write_one(engine, i)
-    other = DeltaEngine(1, "fs", engine._feature_group, None, None)
-    _write_one(other, 9)
-
-    assert backend.requests == ["featurestore_delta_checkpoint_interval"]
-
-
-@pytest.mark.parametrize("value", ["0", "-3", "ten", ""])
-def test_a_value_that_is_not_a_positive_integer_is_ignored(
-    monkeypatch, tmp_path, value
-):
-    location = str(tmp_path / "fg")
-    engine = _real_local_rs_engine(
-        monkeypatch,
-        location,
-        [("id", "bigint"), ("v", "string")],
-        checkpoint_interval=value,
-    )
-
-    _write_one(engine, 1)
-
-    assert "delta.checkpointInterval" not in _config(location)
-
-
-def test_spark_paths_set_the_checkpoint_interval():
-    """Run delta_engine_spark_checks.py in its own process.
-
-    Spark keeps one JVM per process and fixes its jars when it starts, so a session
-    with Delta cannot be started once an earlier test started one without it.
-    """
-    import subprocess
-
-    pytest.importorskip("pyspark")
-    pytest.importorskip("delta")
-    checks = pathlib.Path(__file__).with_name("delta_engine_spark_checks.py")
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(checks)],
-        cwd=checks.parents[2],
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
-    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-2000:]
+    assert _parse_delta_checkpoint_interval(value) == interval

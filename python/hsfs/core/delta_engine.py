@@ -1564,8 +1564,9 @@ class DeltaEngine:
 
         A reader opening the table replays every commit since the last checkpoint.
         Spark and delta-rs both write one themselves every `delta.checkpointInterval`
-        commits, which this engine sets on every table it creates or writes, so this
-        forces one early.
+        commits. This engine sets that property from the cluster's
+        `featurestore_delta_checkpoint_interval` variable when the variable is available
+        and the table has none, so this forces one early.
 
         Expiring the log entries a checkpoint covers is a separate operation,
         `_cleanup_metadata`, which needs a checkpoint to already exist.

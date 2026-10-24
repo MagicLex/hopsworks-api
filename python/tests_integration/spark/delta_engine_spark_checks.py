@@ -13,15 +13,40 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 #
-"""Spark side of the Delta checkpoint interval tests, run by test_delta_engine.py in its own process."""
+"""Spark side of the Delta checkpoint interval checks, run by test_delta_engine_spark.py in its own process."""
 
+import json
 import os
+import pathlib
 import sys
 
 import pytest
 from hsfs.core.delta_engine import DeltaEngine
 
-from tests.core.test_delta_engine import _last_checkpoint, _use_local_backend
+
+try:
+    import delta  # noqa: F401
+    import pyspark  # noqa: F401
+except ImportError as err:
+    raise RuntimeError(
+        "The Spark lane needs pyspark and delta-spark installed (see the dev extra in pyproject.toml)."
+    ) from err
+
+
+def _last_checkpoint(location):
+    path = pathlib.Path(location) / "_delta_log" / "_last_checkpoint"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def _use_client(monkeypatch, checkpoint_interval):
+    """Install a client with no connection that holds the interval the variable read would cache."""
+    from hopsworks_common import client
+    from hopsworks_common.client import base
+    from hopsworks_common.core import variable_api
+
+    local = object.__new__(base.Client)
+    variable_api._DELTA_CHECKPOINT_INTERVALS[local] = checkpoint_interval
+    monkeypatch.setattr(client, "_client", local)
 
 
 @pytest.fixture(scope="module")
@@ -33,8 +58,6 @@ def local_spark():
     Spark keeps one JVM per process and its extensions are fixed when it starts, so a session
     an earlier module started without Delta is stopped; later modules start their own.
     """
-    pytest.importorskip("pyspark")
-    pytest.importorskip("delta")
     from delta import configure_spark_with_delta_pip
     from pyspark.sql import SparkSession
 
@@ -68,7 +91,7 @@ def _spark_engine(
     from hopsworks_common import connection
     from hsfs import feature, feature_group
 
-    _use_local_backend(monkeypatch, checkpoint_interval)
+    _use_client(monkeypatch, checkpoint_interval)
     monkeypatch.setattr(connection, "_hsfs_engine_type", "spark")
     fg = feature_group.FeatureGroup(
         name="fg",

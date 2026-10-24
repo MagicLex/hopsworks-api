@@ -31,6 +31,21 @@ _logger = logging.getLogger(__name__)
 # Backend variables read once per client, so once per connection: a new connection builds a new client.
 _DELTA_CHECKPOINT_INTERVALS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
+
+def _parse_delta_checkpoint_interval(value) -> int | None:
+    """The variable value as a positive integer, or None (with a warning) when it is not one."""
+    try:
+        interval = int(value)
+    except (TypeError, ValueError):
+        interval = None
+    if interval is None or interval < 1:
+        _logger.warning(
+            f"Ignoring featurestore_delta_checkpoint_interval={value!r}: not a positive integer."
+        )
+        return None
+    return interval
+
+
 LOADBALANCER_SERVICES = {
     "mysqld": "mysqld",
     "online_store_rest_server": "rdrs",
@@ -233,14 +248,6 @@ class VariableApi:
                 raise
             interval = None
         else:
-            try:
-                interval = int(value)
-            except (TypeError, ValueError):
-                interval = None
-            if interval is None or interval < 1:
-                _logger.warning(
-                    f"Ignoring featurestore_delta_checkpoint_interval={value!r}: not a positive integer."
-                )
-                interval = None
+            interval = _parse_delta_checkpoint_interval(value)
         _DELTA_CHECKPOINT_INTERVALS[_client] = interval
         return interval
