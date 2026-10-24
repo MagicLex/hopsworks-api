@@ -41,6 +41,7 @@ import urllib.parse
 import hopsworks
 import pandas as pd
 import pytest
+import requests
 from hopsworks_common import client
 from hopsworks_common.client.exceptions import RestAPIError
 from hopsworks_common.core.variable_api import VariableApi
@@ -68,31 +69,33 @@ def project():
     host = urllib.parse.urlparse(host_value).hostname or host_value
     project_name = _required_env("HOPSWORKS_LIVE_PROJECT")
     project_id = int(_required_env("HOPSWORKS_LIVE_PROJECT_ID"))
-    selected = hopsworks.login(
-        host=host,
-        port=443,
-        project=project_name,
-        api_key_file=_required_env("HOPSWORKS_LIVE_KEY_FILE"),
-        hostname_verification=False,
-        engine="python",
-    )
+    send = requests.Session.send
+
+    def bounded_send(session, request, **kwargs):
+        # The SDK sends without a timeout; give every request of the module, login included, a finite one.
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = REQUEST_TIMEOUT_SECONDS
+        return send(session, request, **kwargs)
+
+    requests.Session.send = bounded_send
     try:
+        selected = hopsworks.login(
+            host=host,
+            port=443,
+            project=project_name,
+            api_key_file=_required_env("HOPSWORKS_LIVE_KEY_FILE"),
+            hostname_verification=False,
+            engine="python",
+        )
         assert selected.id == project_id, (
             f"project {project_name} is id {selected.id}, not {project_id}"
         )
-        session = client._get_instance()._session
-        send = session.send
-
-        def bounded_send(request, **kwargs):
-            # The SDK sends without a timeout; give every request of the test a finite one.
-            if kwargs.get("timeout") is None:
-                kwargs["timeout"] = REQUEST_TIMEOUT_SECONDS
-            return send(request, **kwargs)
-
-        session.send = bounded_send
         yield selected
     finally:
-        hopsworks.logout()
+        try:
+            hopsworks.logout()
+        finally:
+            requests.Session.send = send
 
 
 @pytest.fixture
