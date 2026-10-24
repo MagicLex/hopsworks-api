@@ -22,7 +22,7 @@
 
     ```bash
     pytest tests_integration/spark   # needs pyspark and delta-spark, fails without them
-    HOPSWORKS_LIVE_HOST=<host> HOPSWORKS_LIVE_KEY_FILE=<api key file> pytest tests_integration/live -m <marker>
+    HOPSWORKS_LIVE_HOST=<host> HOPSWORKS_LIVE_KEY_FILE=<api key file> HOPSWORKS_LIVE_PROJECT=<project> HOPSWORKS_LIVE_PROJECT_ID=<id> pytest tests_integration/live -m <marker>
     ```
 
     See the module docstring of each lane for what it needs.
