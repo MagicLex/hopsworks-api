@@ -49,6 +49,8 @@ hops job deploy <name>-data data/<name>/generate.py --env python-feature-pipelin
 
 `--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
+Once the job is deployed, tag it with the group it writes, which is how the lineage map draws the line (a piece has no `system.yaml`): `hops job tag add <name>-data hopsable_writes --value '{"feature_groups": ["<name>"]}'`. When the cluster has no `hopsable_writes` tag schema (HTTP 404, error 370000), say once that an admin creates it and go on: the tag is not a check.
+
 ## Rows from a source (`source: <data source>`)
 
 Load **hops-data-sources** the same way: mount the table as an external feature group when the
