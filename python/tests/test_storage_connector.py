@@ -1615,6 +1615,34 @@ class TestSqlConnector:
         assert options["driver"] == "com.teradata.jdbc.TeraDriver"
         assert connector.connector_options()["database_type"] == "TERADATA"
 
+    def test_postgres_sslmode_reaches_connector_options(self):
+        def options(arguments):
+            return storage_connector.SqlConnector(
+                id=1,
+                name="test_connector",
+                featurestore_id=1,
+                database_type="POSTGRESQL",
+                host="aws-0-eu-west-1.pooler.supabase.com",
+                port=6543,
+                database="postgres",
+                user="postgres.ref",
+                password="pass",
+                arguments=arguments,
+            ).connector_options()
+
+        assert "sslmode" not in options(None)
+        assert "sslmode" not in options([{"name": "ssl", "value": "true"}])
+        assert (
+            options([{"name": " SSLMode ", "value": " verify-full "}])["sslmode"]
+            == "verify-full"
+        )
+        assert (
+            options([{"name": "sslmode", "value": "require"}])["sslmode"] == "require"
+        )
+        assert (
+            options([{"name": "sslmode", "value": "require"}])["user"] == "postgres.ref"
+        )
+
     def test_teradata_connection_arguments_reach_both_engines(self):
         # Spark gets arguments through the JDBC option map. The Arrow Flight path reads
         # connector_options, so dropping them there leaves the Python engine attempting a default

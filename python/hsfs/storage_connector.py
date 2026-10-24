@@ -4155,6 +4155,16 @@ class SqlConnector(StorageConnector):
                 props["wallet_path"] = wallet_path
             if wallet_password:
                 props["wallet_password"] = wallet_password
+        if self._database_type == self.POSTGRESQL:
+            # libpq and the PostgreSQL JDBC driver share the ``sslmode`` name and values, so a Python
+            # read verifies TLS exactly when Spark does. Without it libpq falls back to ``prefer``.
+            sslmode = [
+                str(value).strip()
+                for name, value in self._arguments.items()
+                if name.strip().lower() == "sslmode" and value is not None
+            ]
+            if sslmode and sslmode[-1]:
+                props["sslmode"] = sslmode[-1]
         if self._database_type == self.CLICKHOUSE:
             # clickhouse-connect's name for the JDBC ``ssl=true`` argument.
             props["secure"] = str(self._arguments.get("ssl", "false")).lower() == "true"
