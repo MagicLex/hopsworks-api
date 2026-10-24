@@ -56,7 +56,7 @@ possible.
   not a failure, and it is the same property that keeps in-flight readers safe.
 - **Spark and delta-rs both write checkpoints on their own** every
   `delta.checkpointInterval` commits. Hopsworks sets that property from the
-  cluster's `featurestore_delta_checkpoint_interval` variable (10 by default) only
+  cluster's `featurestore_delta_checkpoint_interval` variable (5 by default) only
   when the variable is available and the table has no `delta.checkpointInterval`.
   A reader replays at most the table's own interval of commits.
 - **`after_ingest_date` needs a date partition column.** Only a partition column
