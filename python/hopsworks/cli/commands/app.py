@@ -25,7 +25,6 @@ from typing import Any
 
 import click
 from hopsworks.cli import output, session
-from hopsworks.cli.commands import env as env_commands
 
 
 @click.group("app")
@@ -574,9 +573,6 @@ def app_stop(ctx: click.Context, name: str) -> None:
 def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete an app.
 
-    Its environment goes too when it is your own copy, `<name>-app-env-<user>`,
-    that you created and no other app runs on.
-
     Args:
         ctx: Click context.
         name: App name.
@@ -591,42 +587,11 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
 
         with contextlib.suppress(Exception):
             a.stop()
-    env_name = getattr(a, "environment_name", None) or ""
-    username = None
-    if env_name.startswith(f"{name}-app-env-"):
-        username = env_commands.current_username()
     try:
         a.delete()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Delete failed: {exc}") from exc
     output.success("✓ Deleted app %s", name)
-    if username is None or env_name != env_commands.copy_name(name, username):
-        return
-    project = session.get_project(ctx)
-    try:
-        # `hops env install <name>` makes a copy of the same name, which other apps may run on.
-        users = [
-            other.name
-            for other in project.get_app_api().get_apps() or []
-            if getattr(other, "environment_name", None) == env_name
-            and other.name != name
-        ]
-        env = project.get_environment_api().get_environment(env_name)
-        if users:
-            output.info(
-                "Kept environment %s: app %s runs on it.", env_name, ", ".join(users)
-            )
-        elif env is not None and env.creator != username:
-            output.info(
-                "Kept environment %s: %s created it, not you.",
-                env_name,
-                env.creator or "someone else",
-            )
-        elif env is not None:
-            env.delete()
-            output.success("✓ Deleted environment %s", env_name)
-    except Exception as exc:  # noqa: BLE001
-        output.warn("Kept environment %s: could not delete it: %s", env_name, exc)
 
 
 def _accepted_kwargs(fn: Any, kwargs: dict[str, Any]) -> dict[str, Any]:

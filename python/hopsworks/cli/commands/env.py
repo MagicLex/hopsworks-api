@@ -117,7 +117,10 @@ def own_copy(api: Any, source: str, name: str) -> Any:
         )
         try:
             env = api.create_environment(
-                name, source_environment_name=source, await_creation=False
+                name,
+                source_environment_name=source,
+                created_for_app=source.removesuffix(_COPY_SUFFIX),
+                await_creation=False,
             )
         except Exception as exc:  # noqa: BLE001
             # Another run of yours may have cloned it first.

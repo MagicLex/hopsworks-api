@@ -8,8 +8,6 @@ from unittest import mock
 from click.testing import CliRunner
 from hopsworks.cli.main import cli
 
-from tests.cli.conftest import Environments
-
 
 def _fake_app(**overrides):
     a = mock.MagicMock(name="App")
@@ -798,79 +796,36 @@ def test_app_delete_force_stops_first(mock_project):
     a.delete.assert_called_once()
 
 
-def _delete_as_scott(mock_project, env_name, *names, creator=None):
-    a = _fake_app(name="shop", environment_name=env_name)
-    mock_project.get_app_api.return_value.get_app.return_value = a
-    envs = Environments(mock_project, *names)
-    if creator is not None:
-        envs.envs[env_name].creator = creator
-    users_api = mock.MagicMock()
-    users_api._get_current_user.return_value.username = "scott"
-    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
+def test_app_delete_makes_no_environment_request(authed_config):
+    from types import SimpleNamespace
+
+    from hopsworks.cli import session
+    from hopsworks_common.core import app_api, environment_api, users_api
+
+    from tests.real_hopsworks import API, hopsworks_server
+
+    def answer(method, path, body):
+        if path == "/hopsworks-api/api/users/profile":
+            return 200, {"username": "scott"}
+        if method == "GET" and path == f"{API}/apps/shop":
+            return 200, {"name": "shop", "environmentName": "shop-app-env-scott"}
+        return 200, {}
+
+    project = SimpleNamespace(
+        get_app_api=app_api.AppApi,
+        get_environment_api=environment_api.EnvironmentApi,
+    )
+    with (
+        hopsworks_server(answer) as seen,
+        mock.patch.object(session, "get_project", return_value=project),
+        mock.patch("hopsworks.get_users_api", users_api.UsersApi, create=True),
+    ):
         result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
-    return result, a, envs
 
-
-def test_app_delete_deletes_your_copy_of_its_environment(mock_project):
-    result, a, envs = _delete_as_scott(
-        mock_project, "shop-app-env-scott", "shop-app-env", "shop-app-env-scott"
-    )
     assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_called_once()
-    envs.envs["shop-app-env"].delete.assert_not_called()
-    assert "Deleted environment shop-app-env-scott" in result.output
-
-
-def test_app_delete_keeps_a_copy_of_your_name_someone_else_created(mock_project):
-    result, a, envs = _delete_as_scott(
-        mock_project, "shop-app-env-scott", "shop-app-env-scott", creator="alice"
-    )
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_not_called()
-    assert "Kept environment shop-app-env-scott: alice created it" in result.output
-
-
-def test_app_delete_warns_when_the_copy_cannot_go_since_the_app_is_gone(mock_project):
-    mock_project.get_environment_api.return_value.get_environment.side_effect = (
-        RuntimeError("503")
-    )
-    a = _fake_app(name="shop", environment_name="shop-app-env-scott")
-    mock_project.get_app_api.return_value.get_app.return_value = a
-    users_api = mock.MagicMock()
-    users_api._get_current_user.return_value.username = "scott"
-    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
-        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    assert "Kept environment shop-app-env-scott: could not delete it: 503" in (
-        result.output
-    )
-
-
-def test_app_delete_keeps_your_copy_while_another_app_runs_on_it(mock_project):
-    # `hops env install shop` makes shop-app-env-scott too, which another app may use.
-    other = _fake_app(name="dash", environment_name="shop-app-env-scott")
-    mock_project.get_app_api.return_value.get_apps.return_value = [other]
-    result, a, envs = _delete_as_scott(
-        mock_project, "shop-app-env-scott", "shop-app-env-scott"
-    )
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_not_called()
-    assert "Kept environment shop-app-env-scott: app dash runs on it." in result.output
-
-
-def test_app_delete_keeps_a_shared_environment_and_another_users_copy(mock_project):
-    for env_name in ("shop-app-env", "shop-app-env-alice"):
-        result, a, envs = _delete_as_scott(
-            mock_project, env_name, "shop-app-env", "shop-app-env-alice"
-        )
-        assert result.exit_code == 0, result.output
-        a.delete.assert_called_once()
-        for env in envs.envs.values():
-            env.delete.assert_not_called()
+    assert ("DELETE", f"{API}/jobs/shop", None) in seen
+    assert [p for _, p, _ in seen if "/python/environments" in p] == []
+    assert "environment" not in result.output.lower()
 
 
 def test_app_info_surfaces_not_found(mock_project):

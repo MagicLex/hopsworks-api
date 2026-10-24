@@ -37,6 +37,7 @@ class EnvironmentApi:
         await_creation: bool | None = True,
         timeout: float | None = None,
         source_environment_name: str | None = None,
+        created_for_app: str | None = None,
     ) -> environment.Environment:
         """Create Python environment for the project.
 
@@ -60,6 +61,8 @@ class EnvironmentApi:
                 Ignored when `await_creation` is `False`, because the method then returns without waiting at all.
             source_environment_name: A project environment to clone, with its libraries, in place of `base_environment_name`.
                 The caller owns the clone, so a Data scientist can change a clone of a shared environment they cannot change.
+            created_for_app: Name of the app the environment is created for.
+                Hopsworks removes such an environment once no job, Jupyter server or deployment uses it.
 
         Returns:
             The Environment object.
@@ -89,6 +92,8 @@ class EnvironmentApi:
                     "description": description,
                 },
             }
+        if created_for_app is not None:
+            data["createdForApp"] = created_for_app
         env = environment.Environment.from_response_json(
             _client._send_request(
                 "POST", path_params, headers=headers, data=json.dumps(data)

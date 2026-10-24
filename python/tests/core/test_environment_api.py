@@ -139,3 +139,45 @@ class TestEnvironmentApi:
         # Act, Assert
         with pytest.raises(EnvironmentException, match="Command failed"):
             api.await_creation("shop-app-env-meb10000")
+
+
+class TestCreatedForApp:
+    """Against a real HTTP server: the request that leaves the client."""
+
+    @staticmethod
+    def _create(**kwargs):
+        from tests.real_hopsworks import API, hopsworks_server
+
+        def answer(method, path, body):
+            return 200, {"name": body["name"]}
+
+        with hopsworks_server(answer) as seen:
+            environment_api.EnvironmentApi().create_environment(
+                "shop-app-env-scott", await_creation=False, **kwargs
+            )
+        assert [(m, p) for m, p, _ in seen] == [
+            ("POST", f"{API}/python/environments/shop-app-env-scott")
+        ]
+        return seen[0][2]
+
+    def test_a_clone_carries_the_app_it_was_made_for(self):
+        body = self._create(
+            source_environment_name="shop-app-env", created_for_app="shop"
+        )
+
+        assert body == {
+            "name": "shop-app-env-scott",
+            "sourceEnvironment": "shop-app-env",
+            "createdForApp": "shop",
+        }
+
+    def test_a_create_from_a_base_image_carries_the_app_it_was_made_for(self):
+        body = self._create(created_for_app="shop")
+
+        assert body["createdForApp"] == "shop"
+        assert body["baseImage"]["name"] == "python-feature-pipeline"
+
+    def test_without_an_app_the_request_has_no_created_for_app(self):
+        body = self._create(source_environment_name="shop-app-env")
+
+        assert "createdForApp" not in body
