@@ -129,6 +129,7 @@ class DeltaEngine:
     DELTA_QUERY_TIME_TRAVEL_AS_OF_INSTANT = "timestampAsOf"
     DELTA_QUERY_TIME_TRAVEL_AS_OF_VERSION = "versionAsOf"
     DELTA_ENABLE_CHANGE_DATA_FEED = "delta.enableChangeDataFeed"
+    DELTA_CHECKPOINT_INTERVAL = "delta.checkpointInterval"
     DELTA_DOT_PREFIX = "delta."
     DELTA_GLUE_CATALOG_IMPL = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
     APPEND = "append"
@@ -499,10 +500,12 @@ class DeltaEngine:
         merge_query_str = self._generate_merge_query(source_alias, updates_alias)
 
         if self._spark_session is not None:
+            self._ensure_checkpoint_interval_spark(location)
             fg_source_table.alias(source_alias).merge(
                 delete_df.alias(updates_alias), merge_query_str
             ).whenMatchedDelete().execute()
         else:
+            self._set_table_properties_rs(fg_source_table, {})
             fg_source_table.merge(
                 source=delete_df,
                 predicate=merge_query_str,
@@ -641,6 +644,9 @@ class DeltaEngine:
             builder = builder.property(
                 self.DELTA_NUM_INDEXED_COLS_PROPERTY, str(target)
             )
+        if self.DELTA_CHECKPOINT_INTERVAL not in write_options:
+            for key, value in self._checkpoint_interval_property().items():
+                builder = builder.property(key, value)
         builder.execute()
         actual = list(
             self._spark_session.sql(f"DESCRIBE DETAIL delta.`{location}`")
@@ -657,6 +663,38 @@ class DeltaEngine:
                 "update_clustering() (then optimize(full=True)) or recreate "
                 "the feature group."
             )
+
+    def _checkpoint_interval_property(self) -> dict[str, str]:
+        """The `delta.checkpointInterval` property to set on a table, or {} when the cluster defines none."""
+        interval = self._variable_api._get_featurestore_delta_checkpoint_interval()
+        if interval is None:
+            return {}
+        return {self.DELTA_CHECKPOINT_INTERVAL: str(interval)}
+
+    def _ensure_checkpoint_interval_spark(self, location: str) -> None:
+        """Set `delta.checkpointInterval` on an existing table that has none, once."""
+        properties = self._checkpoint_interval_property()
+        if not properties:
+            return
+        existing = (
+            self._spark_session.sql(f"DESCRIBE DETAIL delta.`{location}`")
+            .select("properties")
+            .collect()[0][0]
+            or {}
+        )
+        if self.DELTA_CHECKPOINT_INTERVAL in existing:
+            return
+        self._spark_session.sql(
+            f"ALTER TABLE delta.`{location}` SET TBLPROPERTIES "
+            f"('{self.DELTA_CHECKPOINT_INTERVAL}' = '{properties[self.DELTA_CHECKPOINT_INTERVAL]}')"
+        )
+
+    def _set_table_properties_rs(self, table, properties: dict[str, str]) -> None:
+        """Set `properties` on a delta-rs table in one commit, adding `delta.checkpointInterval` when the table has none."""
+        if self.DELTA_CHECKPOINT_INTERVAL not in table.metadata().configuration:
+            properties = {**self._checkpoint_interval_property(), **properties}
+        if properties:
+            table.alter.set_table_properties(properties)
 
     def _write_delta_dataset(self, dataset, write_options, operation="upsert"):
         partition_transforms._require_writable(self._feature_group)
@@ -677,7 +715,7 @@ class DeltaEngine:
                 self._create_clustered_delta_table(dataset, location, write_options)
             (
                 dataset.write.format(DeltaEngine.DELTA_SPARK_FORMAT)
-                .options(**write_options)
+                .options(**{**self._checkpoint_interval_property(), **write_options})
                 .partitionBy(
                     self._feature_group.partition_key
                     if self._feature_group.partition_key and not cluster_columns
@@ -690,6 +728,7 @@ class DeltaEngine:
             _logger.debug(
                 f"Insert operation requested for {location}. Using append mode, skipping merge."
             )
+            self._ensure_checkpoint_interval_spark(location)
             (
                 dataset.write.format(DeltaEngine.DELTA_SPARK_FORMAT)
                 .options(**write_options)
@@ -697,6 +736,7 @@ class DeltaEngine:
                 .save(location)
             )
         else:
+            self._ensure_checkpoint_interval_spark(location)
             fg_source_table = _delta_table_for_path(self._spark_session, location)
 
             source_alias = (
@@ -986,12 +1026,17 @@ class DeltaEngine:
         if not is_delta_table:
             dataset = self._cast_to_declared_types(dataset, self._feature_group)
             configuration = {
+                **self._checkpoint_interval_property(),
                 self.DELTA_ENABLE_CHANGE_DATA_FEED: self.change_data_feed_value(
                     (write_options or {}).get(
                         self.DELTA_ENABLE_CHANGE_DATA_FEED, "true"
                     )
-                )
+                ),
             }
+            if self.DELTA_CHECKPOINT_INTERVAL in (write_options or {}):
+                configuration[self.DELTA_CHECKPOINT_INTERVAL] = str(
+                    write_options[self.DELTA_CHECKPOINT_INTERVAL]
+                )
             deltars_write(
                 location,
                 dataset,
@@ -1002,17 +1047,17 @@ class DeltaEngine:
             )
         else:
             dataset = self._cast_to_schema(dataset, fg_source_table.schema().to_arrow())
+            properties = {}
             if (
                 isinstance(write_options, dict)
                 and self.DELTA_ENABLE_CHANGE_DATA_FEED in write_options
             ):
-                fg_source_table.alter.set_table_properties(
-                    {
-                        self.DELTA_ENABLE_CHANGE_DATA_FEED: self.change_data_feed_value(
-                            write_options.get(self.DELTA_ENABLE_CHANGE_DATA_FEED)
-                        )
-                    }
+                properties[self.DELTA_ENABLE_CHANGE_DATA_FEED] = (
+                    self.change_data_feed_value(
+                        write_options.get(self.DELTA_ENABLE_CHANGE_DATA_FEED)
+                    )
                 )
+            self._set_table_properties_rs(fg_source_table, properties)
             if append_requested:
                 deltars_write(
                     fg_source_table,
@@ -1518,9 +1563,9 @@ class DeltaEngine:
         """Write a Delta checkpoint, so readers stop replaying the log from commit zero.
 
         A reader opening the table replays every commit since the last checkpoint.
-        On Spark, Delta writes one itself every `delta.checkpointInterval` commits, so
-        this forces one early; delta-rs writes none at all, so on that engine it is the
-        only thing that bounds the replay.
+        Spark and delta-rs both write one themselves every `delta.checkpointInterval`
+        commits, which this engine sets on every table it creates or writes, so this
+        forces one early.
 
         Expiring the log entries a checkpoint covers is a separate operation,
         `_cleanup_metadata`, which needs a checkpoint to already exist.

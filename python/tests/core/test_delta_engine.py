@@ -28,7 +28,8 @@ from unittest import mock
 import pandas as pd
 import pyarrow as pa
 import pytest
-from hopsworks_common.client.exceptions import FeatureStoreException
+import requests
+from hopsworks_common.client.exceptions import FeatureStoreException, RestAPIError
 from hsfs.core.delta_engine import DeltaEngine
 from hsfs.feature_group_commit import FeatureGroupCommit
 
@@ -116,6 +117,10 @@ def _patch_client(
     client._is_external.return_value = is_external
     client.project_name = project_name
     client._get_certs_folder.return_value = certs
+    # No checkpoint interval variable on this cluster: the table properties stay as the test sets them.
+    not_found = requests.Response()
+    not_found.status_code = 404
+    client._send_request.side_effect = RestAPIError("http://x", not_found)
     mocker.patch("hopsworks_common.client._get_instance", return_value=client)
     return client
 
@@ -2631,6 +2636,7 @@ class TestDeltaEngine:
         """Inject a fake deltalake module and return the key mocks."""
         fake_write = mocker.Mock()
         fake_delta_table = mocker.Mock()
+        fake_delta_table.metadata.return_value.configuration = {}
         fake_delta_table.merge.return_value.when_matched_update_all.return_value.when_not_matched_insert_all.return_value.execute = mocker.Mock()
         # No table columns, so the cast to the table schema leaves the batch as is.
         fake_delta_table.schema.return_value.to_arrow.return_value = pa.schema([])
@@ -2715,6 +2721,7 @@ class TestDeltaEngine:
             pass
 
         fake_table = mocker.Mock()
+        fake_table.metadata.return_value.configuration = {}
         fake_table.schema.return_value.to_arrow.return_value = pa.schema([])
         fake_deltalake = types.SimpleNamespace(
             DeltaTable=mocker.Mock(return_value=fake_table),
@@ -3266,7 +3273,9 @@ def test_new_table_write_keeps_partition_by(mocker, monkeypatch, tmp_path):
     assert DeltaTable(location).metadata().partition_columns == ["p", "i"]
 
 
-def _real_local_engine(monkeypatch, location, features, partition_key=None):
+def _real_local_engine(
+    monkeypatch, location, features, partition_key=None, checkpoint_interval=10
+):
     """A real feature group and DeltaEngine that write a local directory through real delta-rs.
 
     The group has no storage connector, so it resolves as HopsFS storage, and the
@@ -3278,12 +3287,11 @@ def _real_local_engine(monkeypatch, location, features, partition_key=None):
     monkeypatch.delitem(sys.modules, "deltalake.exceptions", raising=False)
     pytest.importorskip("deltalake")
     import hopsworks_common.connection
-    from hopsworks_common import client
     from hopsworks_common.client import hopsworks as hopsworks_client
     from hsfs import engine, feature_group
     from hsfs.engine import python
 
-    monkeypatch.setattr(client, "_client", object.__new__(hopsworks_client.Client))
+    _use_local_backend(monkeypatch, checkpoint_interval, hopsworks_client.Client)
     monkeypatch.setattr(hopsworks_common.connection, "_hsfs_engine_type", "python")
     monkeypatch.setattr(engine, "_engine", python.Engine())
     monkeypatch.setattr(engine, "_engine_type", "python")
@@ -3497,14 +3505,87 @@ def test_write_tz_map_into_backend_made_table(mocker, monkeypatch, tmp_path, ope
     )
 
 
-def _real_local_rs_engine(monkeypatch, location, columns, partition_key=None):
+class _LocalBackend:
+    """A real HTTP server answering GET /hopsworks-api/api/variables/<id> from a dict, 404 when absent."""
+
+    def __init__(self):
+        import http.server
+        import threading
+
+        self.variables = {}
+        self.requests = []
+        backend = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                name = self.path.rsplit("/", 1)[-1]
+                backend.requests.append(name)
+                if name in backend.variables:
+                    status, body = 200, {"successMessage": backend.variables[name]}
+                else:
+                    status, body = 404, {"errorMsg": "not found"}
+                payload = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+
+_LOCAL_BACKEND = None
+
+
+def _use_local_backend(monkeypatch, checkpoint_interval, client_class=None):
+    """Install a real client talking to the local server, with the checkpoint interval variable set or absent.
+
+    The client class skips its constructor, which reads the pod's certificates and credentials,
+    and gets the attributes `_send_request` needs.
+    """
+    import requests
+    from hopsworks_common import client
+    from hopsworks_common.client import base
+
+    global _LOCAL_BACKEND
+    if _LOCAL_BACKEND is None:
+        _LOCAL_BACKEND = _LocalBackend()
+    backend = _LOCAL_BACKEND
+    backend.variables = {}
+    backend.requests = []
+    if checkpoint_interval is not None:
+        backend.variables["featurestore_delta_checkpoint_interval"] = str(
+            checkpoint_interval
+        )
+
+    local = object.__new__(client_class or base.Client)
+    local._base_url = backend.url
+    local._auth = None
+    local._verify = False
+    local._connected = True
+    local._session = requests.Session()
+    monkeypatch.setattr(client, "_client", local)
+    return backend
+
+
+def _real_local_rs_engine(
+    monkeypatch, location, columns, partition_key=None, checkpoint_interval=10
+):
     """A real feature group and delta-rs engine on a local temp-dir table.
 
     A feature group on HopsFS needs an initialised client to resolve its
     location, and the real client fetches its credentials over REST at
     construction. An S3 connector without keys takes the location as-is with
     no storage options, so delta-rs writes the local path.
+    The client is a real one talking to a local HTTP server that serves the
+    checkpoint interval variable, or answers 404 when it is None.
     """
+    _use_local_backend(monkeypatch, checkpoint_interval)
     from hopsworks_common import connection
     from hsfs import feature, feature_group
     from hsfs import storage_connector as sc
@@ -3805,3 +3886,243 @@ def test_metadata_is_the_writes_own_commit_when_another_commit_lands_on_top(
     assert (commit.rows_inserted, commit.rows_updated) == (1, 1)
     merge = next(h for h in DeltaTable(location).history() if h["operation"] == "MERGE")
     assert commit.commit_time == merge["timestamp"]
+
+
+def _config(location):
+    from deltalake import DeltaTable
+
+    return DeltaTable(location).metadata().configuration
+
+
+def _last_checkpoint(location):
+    path = pathlib.Path(location) / "_delta_log" / "_last_checkpoint"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def _write_one(engine, i, **kwargs):
+    return engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [i], "v": ["x"]}), operation="upsert", **kwargs
+    )
+
+
+def test_created_table_carries_the_checkpoint_interval(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=7,
+    )
+
+    _write_one(engine, 1)
+
+    assert _config(location)["delta.checkpointInterval"] == "7"
+    assert _config(location)["delta.enableChangeDataFeed"] == "true"
+
+
+def test_empty_table_carries_the_checkpoint_interval(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=7,
+    )
+
+    engine._save_empty_table()
+
+    assert _config(location)["delta.checkpointInterval"] == "7"
+
+
+def test_a_checkpoint_follows_every_interval_of_writes(monkeypatch, tmp_path):
+    interval = 3
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=interval,
+    )
+    from deltalake import DeltaTable
+
+    for i in range(interval + 1):
+        _write_one(engine, i)
+
+    version = DeltaTable(location).version()
+    assert version == interval
+    last = _last_checkpoint(location)
+    assert last["version"] == interval - 1
+    log = pathlib.Path(location) / "_delta_log"
+    assert (log / f"{last['version']:020d}.checkpoint.parquet").exists()
+
+
+def test_existing_table_without_the_property_gets_it_on_its_first_write(
+    monkeypatch, tmp_path
+):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=4,
+    )
+    from deltalake import DeltaTable, write_deltalake
+
+    write_deltalake(
+        location,
+        pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]}),
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+    assert "delta.checkpointInterval" not in _config(location)
+
+    commit = _write_one(engine, 2)
+
+    assert _config(location)["delta.checkpointInterval"] == "4"
+    # Version 0 is the old client's write, 1 sets the property, 2 is the merge.
+    assert DeltaTable(location).version() == 2
+    _assert_commit_is_last_data_commit(commit, location, "MERGE", 1, 0)
+
+    _write_one(engine, 3)
+    assert DeltaTable(location).version() == 3
+
+
+def test_existing_table_with_an_explicit_interval_keeps_it(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=4,
+    )
+    from deltalake import DeltaTable, write_deltalake
+
+    write_deltalake(
+        location,
+        pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]}),
+        configuration={
+            "delta.enableChangeDataFeed": "true",
+            "delta.checkpointInterval": "50",
+        },
+    )
+
+    _write_one(engine, 2)
+
+    assert _config(location)["delta.checkpointInterval"] == "50"
+    assert DeltaTable(location).version() == 1
+
+
+def test_explicit_append_sets_the_property_on_an_old_table(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=4,
+    )
+    from deltalake import write_deltalake
+
+    write_deltalake(
+        location,
+        pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]}),
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+
+    commit = engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [2], "v": ["b"]}), operation="insert"
+    )
+
+    assert _config(location)["delta.checkpointInterval"] == "4"
+    _assert_commit_is_last_data_commit(commit, location, "WRITE", 1, 0)
+
+
+def test_delete_sets_the_property_on_an_old_table(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=4,
+    )
+    from deltalake import write_deltalake
+
+    write_deltalake(
+        location,
+        pa.table({"id": pa.array([1, 2], pa.int64()), "v": ["a", "b"]}),
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+    engine._feature_group_api = SimpleNamespace(_commit=lambda fg, commit: commit)
+
+    engine._delete_record(pd.DataFrame({"id": [1], "v": ["a"]}))
+
+    assert _config(location)["delta.checkpointInterval"] == "4"
+    from deltalake import DeltaTable
+
+    assert DeltaTable(location).to_pyarrow_table().num_rows == 1
+
+
+def test_a_cluster_without_the_variable_leaves_tables_alone(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=None,
+    )
+
+    _write_one(engine, 1)
+    _write_one(engine, 2)
+
+    assert "delta.checkpointInterval" not in _config(location)
+
+
+def test_the_variable_is_read_once_per_connection(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("v", "string")]
+    )
+    backend = _LOCAL_BACKEND
+
+    for i in range(4):
+        _write_one(engine, i)
+    other = DeltaEngine(1, "fs", engine._feature_group, None, None)
+    _write_one(other, 9)
+
+    assert backend.requests == ["featurestore_delta_checkpoint_interval"]
+
+
+@pytest.mark.parametrize("value", ["0", "-3", "ten", ""])
+def test_a_value_that_is_not_a_positive_integer_is_ignored(
+    monkeypatch, tmp_path, value
+):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=value,
+    )
+
+    _write_one(engine, 1)
+
+    assert "delta.checkpointInterval" not in _config(location)
+
+
+def test_spark_paths_set_the_checkpoint_interval():
+    """Run delta_engine_spark_checks.py in its own process.
+
+    Spark keeps one JVM per process and fixes its jars when it starts, so a session
+    with Delta cannot be started once an earlier test started one without it.
+    """
+    import subprocess
+
+    pytest.importorskip("pyspark")
+    pytest.importorskip("delta")
+    checks = pathlib.Path(__file__).with_name("delta_engine_spark_checks.py")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(checks)],
+        cwd=checks.parents[2],
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-2000:]
