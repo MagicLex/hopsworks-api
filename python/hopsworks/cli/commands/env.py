@@ -65,7 +65,9 @@ def current_username() -> str:
         raise click.ClickException(f"Could not resolve your username: {exc}") from exc
 
 
-def own_copy(api: Any, source: str, name: str) -> Any:
+def own_copy(
+    api: Any, source: str, name: str, created_for_app: str | None = None
+) -> Any:
     """The caller's copy of `source`, cloned first when it does not exist.
 
     A copy whose build failed is deleted and cloned again. A clone is deleted
@@ -77,6 +79,8 @@ def own_copy(api: Any, source: str, name: str) -> Any:
         api: The project's environment API.
         source: The environment to clone.
         name: The copy's name, from `copy_name`.
+        created_for_app: The app the copy is made for. Only app paths set it:
+            Hopsworks removes a tagged copy once nothing uses it.
 
     Returns:
         The copy.
@@ -119,7 +123,7 @@ def own_copy(api: Any, source: str, name: str) -> Any:
             env = api.create_environment(
                 name,
                 source_environment_name=source,
-                created_for_app=source.removesuffix(_COPY_SUFFIX),
+                created_for_app=created_for_app,
                 await_creation=False,
             )
         except Exception as exc:  # noqa: BLE001

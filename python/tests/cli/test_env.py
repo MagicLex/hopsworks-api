@@ -153,7 +153,7 @@ def test_env_install_into_a_shared_environment_clones_your_own_copy(mock_project
     envs.api.create_environment.assert_called_once_with(
         "fraud-app-env-scott",
         source_environment_name="fraud",
-        created_for_app="fraud",
+        created_for_app=None,
         await_creation=False,
     )
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once_with(
@@ -284,7 +284,7 @@ def test_env_install_clones_again_over_a_copy_whose_build_failed(mock_project):
     envs.api.create_environment.assert_called_once_with(
         "fraud-app-env-scott",
         source_environment_name="fraud",
-        created_for_app="fraud",
+        created_for_app=None,
         await_creation=False,
     )
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
@@ -458,7 +458,7 @@ def test_env_install_keeps_a_copy_still_building_after_a_timeout(mock_project):
     envs.envs["fraud-app-env-scott"].install_requirements.assert_not_called()
 
 
-def test_the_copy_after_300029_carries_the_app_it_is_made_for(authed_config):
+def test_the_env_install_copy_after_300029_carries_no_app(authed_config):
     from types import SimpleNamespace
 
     from hopsworks.cli import session
@@ -519,10 +519,4 @@ def test_the_copy_after_300029_carries_the_app_it_is_made_for(authed_config):
         for method, path, body in seen
         if method == "POST" and path == f"{API}/python/environments/fraud-app-env-scott"
     ]
-    assert clones == [
-        {
-            "name": "fraud-app-env-scott",
-            "sourceEnvironment": "fraud",
-            "createdForApp": "fraud",
-        }
-    ]
+    assert clones == [{"name": "fraud-app-env-scott", "sourceEnvironment": "fraud"}]
