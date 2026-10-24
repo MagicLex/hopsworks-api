@@ -63,7 +63,14 @@ class ValidationReportApi:
         payload = validation_report.json()
 
         return ValidationReport.from_response_json(
-            _client._send_request("PUT", path_params, headers=headers, data=payload)
+            # Each PUT stores a new report and triggers its alerts, so it is sent once.
+            _client._send_request(
+                "PUT",
+                path_params,
+                headers=headers,
+                data=payload,
+                retry_while_unavailable=False,
+            )
         )
 
     def _delete(self, validation_report_id: int) -> None:

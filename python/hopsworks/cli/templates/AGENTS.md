@@ -26,7 +26,7 @@ Ask the user what they want to do:
  - Explore and search for available data (use hops CLI)
  - Build an ML system (use the hops-reqs skill if they choose this)
  - Analytics with a dashboard (use the hops-superset skill)
- - Build an app or streamlit program (use the hops-app skill)
+ - Build an app (use the hops-app skill)
  - Build an AI task or workflow (use hops-agent-task skill)
  - Build an agent deployment (interactive agent) (use hops-agent-deployment skill)
 

@@ -337,13 +337,13 @@ missing variable, so guard local development on `inHopsworks()`.
 ## Commands / API
 
 ```bash
-hops app create <name> --path /Projects/<p>/Users/<u>/app.py --start   # db access on by default
+hops app create <name> --path /Projects/<p>/Users/<u>/app.py --entrypoint-command "python app.py" --start   # db access on by default
 hops app create <name> ... --no-db-access                              # opt out
 hops app info <name>                                                   # "Database access" row
 ```
 
 ```python
-apps.create_app(name=..., app_path=..., db_access=True)   # default
+apps.create_app(name=..., app_path=..., entrypoint_command="python app.py", db_access=True)   # default
 app.db_access
 ```
 

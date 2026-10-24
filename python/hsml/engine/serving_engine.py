@@ -26,7 +26,7 @@ import time
 import uuid
 import warnings
 
-from hopsworks_common import client
+from hopsworks_common import client, events
 from hopsworks_common.client.exceptions import ModelServingException, RestAPIError
 from hopsworks_common.client.istio.utils.infer_type import InferInput
 from hopsworks_common.constants import (
@@ -101,6 +101,22 @@ def _render_chunk(chunk) -> str:
 
 # RESTCodes.ServingErrorCode.SCHEMA_NOT_FOUND: the id is not a published schema
 _SCHEMA_NOT_FOUND = 240037
+
+
+def _no_reason(reason: str | None) -> bool:
+    """True for a failure reason that names no cause: none, empty, or ending in "null"."""
+    reason = (reason or "").strip()
+    return reason in ("", "null") or reason.endswith(". null")
+
+
+def _predictor_log_tail(deployment_instance) -> str:
+    """The last predictor log lines for a failed start, or "" when they cannot be read."""
+    try:
+        logs = deployment_instance.read_logs(component="predictor", tail=30)
+    except Exception:  # noqa: BLE001
+        return ""
+    logs = "\n".join(logs.strip().splitlines()[-30:]) if isinstance(logs, str) else ""
+    return f"\nLast predictor log lines:\n{logs}" if logs else ""
 
 
 # The scaling fields a backend older than 5.2 does not know and silently drops (HWORKS-3106, HWORKS-3113).
@@ -211,7 +227,13 @@ class ServingEngine:
                     status == PREDICTOR_STATE.STATUS_RUNNING
                     and state.status == PREDICTOR_STATE.STATUS_FAILED
                 ):
-                    error_msg = state.condition.reason
+                    reason = (state.condition.reason or "").strip()
+                    if _no_reason(reason):
+                        error_msg = (
+                            f"deployment failed (condition {state.condition.type})"
+                        )
+                    else:
+                        error_msg = reason
                     if (
                         state.condition.type
                         == PREDICTOR_STATE.CONDITION_TYPE_INITIALIZED
@@ -219,16 +241,16 @@ class ServingEngine:
                         == PREDICTOR_STATE.CONDITION_TYPE_STARTED
                     ):
                         component = (
-                            "transformer"
-                            if "transformer" in state.condition.reason
-                            else "predictor"
+                            "transformer" if "transformer" in reason else "predictor"
                         )
                         error_msg += (
                             ". Please, check the server logs using `.get_logs(component='"
                             + component
                             + "')`"
                         )
-                    raise ModelServingException(error_msg)
+                    raise ModelServingException(
+                        error_msg + _predictor_log_tail(deployment_instance)
+                    )
             raise ModelServingException(
                 "Deployment has not reached the desired status within the expected awaiting time. Check the current status by using `.get_state()`, "
                 "explore the server logs using `.get_logs()` or set a higher value for await_"
@@ -236,6 +258,14 @@ class ServingEngine:
             )
         return None
 
+    @events.tracking(
+        "deployment",
+        "update",
+        long=True,
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _start(self, deployment_instance, await_status: int) -> bool:
         started = time.monotonic()
         (done, state) = self._check_status(
@@ -259,6 +289,7 @@ class ServingEngine:
                 if desc is not None:
                     pbar.set_description(desc)
 
+            started = False
             try:
                 update_progress(state, num_instances=0)
 
@@ -273,6 +304,7 @@ class ServingEngine:
                 self._serving_api._post(
                     deployment_instance, DEPLOYMENT.ACTION_START
                 )  # start deployment
+                started = True
 
                 state = self._poll_deployment_status(  # wait for status
                     deployment_instance,
@@ -281,7 +313,9 @@ class ServingEngine:
                     update_progress,
                 )
             except RestAPIError as re:
-                self._stop(deployment_instance, await_status=0)
+                # A refused start left nothing to roll back.
+                if started:
+                    self._stop(deployment_instance, await_status=0)
                 raise re
 
         # await_running=0 returns before the state is polled again
@@ -297,6 +331,14 @@ class ServingEngine:
             else:
                 print("Start making predictions by using `.predict()`")
 
+    @events.tracking(
+        "deployment",
+        "update",
+        long=True,
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _stop(self, deployment_instance, await_status: int) -> bool:
         (done, state) = self._check_status(
             deployment_instance, PREDICTOR_STATE.STATUS_STOPPED
@@ -398,7 +440,7 @@ class ServingEngine:
                 print("Deployments is already running and updating")
                 return (True, state)
             if state.status == PREDICTOR_STATE.STATUS_FAILED:
-                print("Deployment is in failed state. " + state.condition.reason)
+                print(f"Deployment is in failed state. {state.condition.reason}")
                 return (True, state)
             if state.status == PREDICTOR_STATE.STATUS_STOPPING:
                 raise ModelServingException(
@@ -681,6 +723,13 @@ class ServingEngine:
             for p in archive_paths
         ]
 
+    @events.tracking(
+        "deployment",
+        "create",
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _create(self, deployment_instance):
         try:
             self._put_and_check(deployment_instance)
@@ -818,6 +867,13 @@ class ServingEngine:
 
         raise ValueError("Unknown deployment status: " + state.status)
 
+    @events.tracking(
+        "deployment",
+        "update",
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _save(self, deployment_instance, await_update: int, new_version: bool = False):
         # Local paths on script_file / config_file are auto-uploaded under
         # /Projects/<p>/Deployments/<name>/resources/ and rewritten to
@@ -1024,18 +1080,36 @@ class ServingEngine:
             )
             setattr(obj, field, resolved)
 
+    @events.tracking(
+        "deployment",
+        "delete",
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _delete(self, deployment_instance, force=False):
+        name = deployment_instance.name
         state = deployment_instance.get_state()
         if state is None:
-            return
-
-        if (
-            not force
-            and state.status != PREDICTOR_STATE.STATUS_STOPPED
-            and state.status != PREDICTOR_STATE.STATUS_CREATED
-        ):
             raise ModelServingException(
-                "Deployment not stopped, please stop it first by using `.stop()` or check its status with .get_state()"
+                f"Deployment '{name}' was not found or its state is unknown: nothing deleted."
+            )
+
+        # With force the backend decides, and its refusal is shown as it comes.
+        if not force and state.status not in (
+            PREDICTOR_STATE.STATUS_STOPPED,
+            PREDICTOR_STATE.STATUS_CREATED,
+        ):
+            if state.status in (
+                PREDICTOR_STATE.STATUS_STARTING,
+                PREDICTOR_STATE.STATUS_UPDATING,
+            ):
+                raise ModelServingException(
+                    f"Deployment '{name}' is {state.status}: wait until it is running, "
+                    "then stop it or force the delete."
+                )
+            raise ModelServingException(
+                f"Deployment '{name}' is {state.status}: stop it first, or force the delete."
             )
 
         self._serving_api._delete(deployment_instance)

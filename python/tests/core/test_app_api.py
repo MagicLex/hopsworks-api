@@ -47,13 +47,19 @@ class TestAppApiCreate:
         mocker.patch.object(api, "get_app", return_value=App(name="created"))
         return api
 
+    def test_create_app_defaults_to_a_custom_app(self, mock_client, api):
+        api.create_app("my_app", entrypoint_command="python app.py")
+
+        body = json.loads(mock_client._send_request.call_args.kwargs["data"])
+        assert body["appKind"] == "CUSTOM"
+
     def test_create_streamlit_app_defaults(self, mock_client, api, mocker):
         mocker.patch(
             "hopsworks_common.core.app_api.util._convert_to_abs",
             return_value="/Projects/demo/Resources/app.py",
         )
 
-        created = api.create_app("my_app", app_path="Resources/app.py")
+        created = api.create_app("my_app", app_path="Resources/app.py", app_kind="STREAMLIT")
 
         assert created.name == "created"
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
@@ -62,19 +68,28 @@ class TestAppApiCreate:
         assert body["appKind"] == "STREAMLIT"
         assert body["appPath"] == "hdfs:///Projects/demo/Resources/app.py"
         assert body["environmentName"] == "python-app-pipeline"
-        assert body["resourceConfig"] == {
-            "memory": 2048,
-            "cores": 1.0,
-            "gpus": 0,
-            "shmSize": 128,
-        }
+        assert body["resourceConfig"] == {"gpus": 0, "shmSize": 128}
         assert "entrypointCommand" not in body
         assert "appPort" not in body
         assert "description" not in body
 
+    def test_create_app_sends_explicit_memory_and_cores(self, mock_client, api):
+        api.create_app(
+            "my_app", app_path="hdfs:///Projects/demo/app.py", memory=4096, cores=2.0,
+            app_kind="STREAMLIT",
+        )
+
+        body = json.loads(mock_client._send_request.call_args.kwargs["data"])
+        assert body["resourceConfig"] == {
+            "memory": 4096,
+            "cores": 2.0,
+            "gpus": 0,
+            "shmSize": 128,
+        }
+
     def test_create_streamlit_app_requires_path(self, mock_client, api):
         with pytest.raises(ValueError, match="app_path is required"):
-            api.create_app("my_app")
+            api.create_app("my_app", app_kind="STREAMLIT")
 
     def test_create_streamlit_git_app_payload(self, mock_client, api):
         api.create_app(
@@ -185,7 +200,7 @@ class TestAppApiCreate:
         assert body["dbAccess"] is True
 
     def test_create_app_without_db_access(self, mock_client, api):
-        api.create_app("dash", app_path="Resources/dash.py", db_access=False)
+        api.create_app("dash", app_path="Resources/dash.py", db_access=False, app_kind="STREAMLIT")
 
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
         assert body["dbAccess"] is False
@@ -193,7 +208,7 @@ class TestAppApiCreate:
     def test_create_app_leaves_idle_scale_to_zero_to_the_cluster_default(
         self, mock_client, api
     ):
-        api.create_app("dash", app_path="Resources/dash.py")
+        api.create_app("dash", app_path="Resources/dash.py", app_kind="STREAMLIT")
 
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
         assert "idleScaleToZero" not in body
@@ -203,14 +218,14 @@ class TestAppApiCreate:
     def test_create_app_with_idle_scale_to_zero_off_sends_it_off(
         self, mock_client, api
     ):
-        api.create_app("dash", app_path="Resources/dash.py", idle_scale_to_zero=False)
+        api.create_app("dash", app_path="Resources/dash.py", idle_scale_to_zero=False, app_kind="STREAMLIT")
 
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
         assert body["idleScaleToZero"] is False
         assert "idleCooldownSeconds" not in body
 
     def test_create_app_idle_timeouts_alone_turn_the_option_on(self, mock_client, api):
-        api.create_app("dash", app_path="Resources/dash.py", idle_cooldown_seconds=120)
+        api.create_app("dash", app_path="Resources/dash.py", idle_cooldown_seconds=120, app_kind="STREAMLIT")
 
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
         assert body["idleScaleToZero"] is True
@@ -225,6 +240,7 @@ class TestAppApiCreate:
             idle_scale_to_zero=True,
             idle_cooldown_seconds=120,
             cold_start_timeout_seconds=45,
+            app_kind="STREAMLIT",
         )
 
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
@@ -235,7 +251,7 @@ class TestAppApiCreate:
     def test_create_app_with_idle_scale_to_zero_leaves_the_defaults_to_the_backend(
         self, mock_client, api
     ):
-        api.create_app("dash", app_path="Resources/dash.py", idle_scale_to_zero=True)
+        api.create_app("dash", app_path="Resources/dash.py", idle_scale_to_zero=True, app_kind="STREAMLIT")
 
         body = json.loads(mock_client._send_request.call_args.kwargs["data"])
         assert body["idleScaleToZero"] is True
@@ -251,6 +267,7 @@ class TestAppApiCreate:
                 app_path="Resources/dash.py",
                 idle_scale_to_zero=False,
                 idle_cooldown_seconds=120,
+                app_kind="STREAMLIT",
             )
 
     def test_app_reads_idle_fields_from_the_response(self):

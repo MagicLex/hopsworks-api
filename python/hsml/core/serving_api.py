@@ -304,6 +304,8 @@ class ServingApi:
                 query_params=query_params,
                 headers=headers,
                 data=deployment_instance.json(),
+                # newVersion stores a new deployment version on each PUT, so it is sent once.
+                retry_while_unavailable=not new_version,
             )
         )
         deployment_instance.model_registry_id = _client._project_id
@@ -546,12 +548,15 @@ class ServingApi:
                 with_base_path_params = True
 
         # send inference request
+        # Never retried: a 502/503/504 here is the deployment's answer (an OOMKilled predictor),
+        # which predict() reports with its get_logs() hint, whichever client sends it.
         return _client._send_request(
             "POST",
             path_params,
             headers=headers,
             data=json.dumps(data),
             with_base_path_params=with_base_path_params,
+            retry_while_unavailable=False,
         )
 
     def _send_inference_request_via_grpc_protocol(
@@ -590,7 +595,12 @@ class ServingApi:
             return
         path_params = self._get_istio_model_metadata_path(deployment_instance)
         try:
-            _client._send_request("GET", path_params, with_base_path_params=False)
+            _client._send_request(
+                "GET",
+                path_params,
+                with_base_path_params=False,
+                retry_while_unavailable=False,
+            )
         except RestAPIError as e:
             _logger.debug(
                 "Warm-up request to %s answered %s", path_params, e.response.status_code

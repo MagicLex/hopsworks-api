@@ -9,34 +9,56 @@ You build what the `/hops` menu decided. The prompt gives `action`, `name`, `des
 `change`, `source` and `where`. Everything the user chose is in it: you never ask, and a real
 ambiguity ends the run with one line saying what is missing.
 
-Load **hops-app** (`.claude/skills/hops-app/` in the repository, else `~/.claude/skills/hops-app/`):
-its "Apps built by `/hops app`" and "Fix loop" sections and `references/app_skeleton/`.
+Load **hops-app** and the parts of it you follow, and **hops-design** before you write any UI:
+
+```bash
+hops skills info hops-app                                # its "Fix loop"; the path at the top
+hops skills info hops-app references/hops-app-built.md   # what to build and how to deploy it
+hops skills info hops-app references/data.md             # how the app reads Hopsworks
+hops skills info hops-app references/look.md             # the design system in app.css, and the look check
+hops skills info hops-design
+```
+
+Project files the app's build needs (a CSV, an image in `Resources/`): read them as
+the **hops** skill's *Project files* rule (in a Hopsable sandbox, `$HOPS_TEMPLATES/SKILL.md`) says. The deploy uploads the app's own directory.
+
+The skeleton is `references/app_skeleton/` next to the SKILL.md whose path the first command
+prints. A new app starts as a copy of it (`cp -r <that folder> apps/<name>`), so the hops-design
+tokens and components (`static/app.css`), the chart theme and the vendored Chart.js are in place
+before the first page is written.
+
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when that line lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops app list` first: when it lists `<name>` as `RUNNING`, the piece exists; return that in one line and stop. Your exit check at the end is `hops app info <name>` showing `State` `RUNNING`.
 
 ## Actions
 
-- **create:** write the app from the skeleton: a FastAPI backend with `/health` and a JSON API under
-  `/api`, a static ES-module UI with relative URLs and no CDN, and the description as the module
-  docstring of `app.py`. Source at `Users/<user>/apps/<name>/` (`~/apps/<name>/` in a terminal;
-  `./apps/<name>/` from an external client, uploaded with `hops files upload` after
-  `hops files mkdir Users/<user>/apps`), or the git repository when `source: git`. Environment by
-  the reuse rule: `python-agent-pipeline` has FastAPI and uvicorn; otherwise a clone
-  `<name>-app-env` from `app-requirements.txt`. Then:
+- **create:** copy the skeleton, then write the app over it: a FastAPI backend with `/health` and a
+  JSON API under `/api`, a static ES-module UI with relative URLs and no CDN, and the description as the module
+  docstring of `app.py`, in `./apps/<name>/` (`~/apps/<name>/` in a terminal), or the git
+  repository when `source: git`. `python-agent-pipeline` has FastAPI and uvicorn; a library it
+  lacks goes into `app-requirements.txt`. Then deploy, the only deploy step:
 
   ```bash
-  hops app create <name> --path /Projects/<project>/Users/<user>/apps/<name>/app.py \
-    --app-kind custom --entrypoint-command "python app.py" --app-port 8080 \
-    --readiness-probe-path /health --environment <env> --start
-  hops app url <name>
+  hops app deploy <name> apps/<name> --check <one api route the description implies>
   ```
 
-  `serving=yes` means the readiness probe on `/health` passed. `hops app info <name>` must show
-  `Routing: root`: in the compatibility prefix mode the proxy forwards
+  An app that calls a model deployment is deployed only once that deployment is up: run
+  `hops deployment info <d>` every 10 s until its Status is `Running` (at most 10 minutes), then
+  `hops deployment info <d> --stable 30`. A deployment that is stopped, never reaches Running or
+  fails the stable check ends the run with that cause: never start it yourself, never deploy the
+  app over it. `--check` asks a 502 or 503 again for up to 60 s, the time a cold deployment
+  behind a fresh app takes to answer.
+
+  It uploads the directory to `Users/<user>/apps/<name>/`, runs the app in a clone
+  `<name>-app-env` when `app-requirements.txt` exists, creates or redeploys the app, and returns
+  once the new execution serves `/health`, the URL on the last line. A non-zero exit names the
+  next step. `hops app info <name>` must show `Routing: root`: in the compatibility prefix mode the proxy forwards
   `/hopsworks-api/pythonapp/<project>/<name>/...` unchanged, so an app written for `/` answers 404
   to every browser request while `/health` and a port-forward still pass. In a Hopsworks terminal,
   smoke-test the pod through `kubectl port-forward`: the page and one call of each API route the
   description implies (the proxy URL needs a browser session).
 - **edit:** change the source as `change` says, update the docstring so the next edit starts from
-  what the app now is, upload or push, `hops app redeploy <name>`, and rerun the smoke tests.
+  what the app now is, `hops app deploy <name> apps/<name>` (push, for git), and rerun the smoke
+  tests.
 - **delete:** `hops app delete <name> --yes`, remove the source directory, and the environment
   clone when one was created for this app.
 
@@ -51,20 +73,29 @@ deployment.
 ## Look
 
 The UI is what the user sees of the whole system, so it has to look finished. Start from the
-skeleton's `static/app.css` and keep its tokens and components (the header band, cards, stat
-tiles, tables with score bars, badges, loading and empty states); add to it rather than
+skeleton's `static/app.css` and keep its tokens and components (the header band, the stats row,
+charts, tables with score bars, status dots, loading and empty states); add to it rather than
 restyling. Every view shows a loading state, an empty state and an error in words, numbers are
 formatted (percentages, thousands separators, dates), and the layout works from a phone width up.
 Nothing moves when the user interacts: a list or panel that reloads keeps its current content,
 dimmed with `aria-busy`, until the new content replaces it (placeholders only on the first load),
 and the page reserves the scrollbar gutter, so a filter or a selection never makes the layout jump.
-No CDN and no build step: fonts are the system stack, charts are inline SVG or CSS.
+Every URL the page's JavaScript fetches is relative (`getJSON("api/top")`), never `/api/...` or
+the app's full URL: under the proxy mount an absolute path reaches Hopsworks, which answers with
+its own HTML page, not the app. No CDN and no build step: fonts are the design system's stack,
+and every chart is Chart.js with the skeleton's `static/chart-theme.js`, never hand-drawn SVG. Follow **hops-design**: a white page,
+sections grouped by spacing and hairlines with no box per section, stats that fit their cell.
+Colours and fonts come from the tokens in `app.css` (`var(--accent)`, `var(--muted)`, ...), never a
+new value: the look pass flags a colour or a font outside the design system.
+Look at the page at about 600px and 900px wide once it first shows all its sections, and again
+before each deploy (a screenshot tool when one is available); fix what spills, clips or leaves
+a gap. That pass also checks the JavaScript: it loads the page and reports script errors, so
+there is no separate syntax check (a Hopsable sandbox has no Node.js).
 
 ## Fix loop
 
-On a failed start, a stop in serving, or a failed smoke test: `hops app logs <name>`, name the cause
-in one line, change the source, upload, then `hops app redeploy <name>` for a running app or
-`hops app start <name>` for one that failed, and smoke-test again. A missing library is a pin in
+On a failed deploy, a stop in serving, or a failed smoke test: `hops app logs <name>`, name the
+cause in one line, change the source, `hops app deploy <name> apps/<name>`, and smoke-test again. A missing library is a pin in
 the clone, never a workaround in the code; running out of memory raises `--memory` once. At most
 five attempts, then stop with the last lines of the logs and what was tried.
 

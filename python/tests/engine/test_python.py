@@ -2521,6 +2521,40 @@ class TestPython:
         for name in ("train", "test"):
             assert first[name]["col"].tolist() == second[name]["col"].tolist()
 
+    @pytest.mark.parametrize("frame", ["pandas", "polars"])
+    def test_a_seeded_split_ignores_the_read_order(self, mocker, frame):
+        # Arrow Flight returns rows in no fixed order between reads.
+        mocker.patch("hopsworks_common.client._get_instance")
+        python_engine = python.Engine()
+        rows = {
+            "col": list(range(1000)),
+            "other": [i % 7 for i in range(1000)],
+            "embedding": [[i * 0.5, 1.0] for i in range(1000)],
+        }
+        df = pd.DataFrame(rows)
+        shuffled = df.sample(frac=1, random_state=5).reset_index(drop=True)
+        if frame == "polars":
+            df, shuffled = pl.from_pandas(df), pl.from_pandas(shuffled)
+        td = training_dataset.TrainingDataset(
+            name="test",
+            version=1,
+            data_format="CSV",
+            featurestore_id=99,
+            splits={"train": 0.8, "test": 0.2},
+            train_split="train",
+            seed=123,
+            id=10,
+        )
+
+        first = python_engine._random_split(df, td)
+        second = python_engine._random_split(shuffled, td)
+
+        for name in ("train", "test"):
+            assert sorted(first[name]["col"].to_list()) == sorted(
+                second[name]["col"].to_list()
+            )
+        assert len(first["test"]) == 200
+
     def test_random_split_depends_on_seed(self, mocker):
         # Different seeds must yield different splits, proving the seed is
         # actually honored rather than ignored or hard-coded.
@@ -5374,6 +5408,54 @@ class TestPython:
             )
 
             caplog.clear()
+
+    def test_get_feature_logging_df_missing_columns_create_the_delta_table(
+        self, monkeypatch, tmp_path, logging_features, logging_test_dataframe
+    ):
+        # Prepare: fv.log with the job transport creates the logging table on its first write.
+        from tests.core.test_delta_engine import _real_local_engine
+
+        logging_features, meta_data_logging_columns, column_names = logging_features
+        logging_feature_group_features = meta_data_logging_columns + logging_features
+        location = str(tmp_path / "log_fg")
+        writer = _real_local_engine(
+            monkeypatch,
+            location,
+            logging_feature_group_features,
+            partition_key=[
+                constants.FEATURE_LOGGING.MODEL_COLUMN_NAME,
+                constants.FEATURE_LOGGING.MODEL_VERSION_COLUMN_NAME,
+            ],
+        )
+        args = TestPython.get_logging_arguments(
+            logging_data=logging_test_dataframe.drop(
+                columns=["request_id", "rp_1", "rp_2", "extra_1", "extra_2"]
+            ),
+            logging_feature_group_features=logging_feature_group_features,
+            column_names=column_names,
+        )
+        args["model_name"] = None
+        args["model_version"] = None
+        from deltalake import DeltaTable
+
+        # Act
+        logging_dataframe, _, _ = python.Engine()._get_feature_logging_df(**args)
+        writer._write_delta_rs_dataset(logging_dataframe, operation="insert")
+
+        # Assert
+        table = DeltaTable(location).to_pyarrow_table()
+        assert table.num_rows == len(logging_test_dataframe)
+        for name in [
+            constants.FEATURE_LOGGING.MODEL_COLUMN_NAME,
+            constants.FEATURE_LOGGING.MODEL_VERSION_COLUMN_NAME,
+            constants.FEATURE_LOGGING.REQUEST_ID_COLUMN_NAME,
+            "extra_1",
+        ]:
+            assert table.schema.field(name).type == pa.string(), name
+            assert table.column(name).null_count == table.num_rows, name
+        for name in ["rp_1", "rp_2", "extra_2"]:
+            assert table.schema.field(name).type == pa.int32(), name
+            assert table.column(name).null_count == table.num_rows, name
 
     def test_get_feature_logging_df_logging_data_missing_columns_and_additional_dict(
         self, mocker, caplog, logging_features, logging_test_dataframe

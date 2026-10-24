@@ -15,14 +15,9 @@
 #
 
 import copy
-from unittest.mock import call
 
 import pytest
 from hsml import resources
-from hsml.constants import RESOURCES
-
-
-SERVING_RESOURCE_LIMITS = {"cores": 2, "memory": 1024, "gpus": 0}
 
 
 class TestResources:
@@ -138,61 +133,22 @@ class TestResources:
 
     # - constructor
 
-    def test_constructor_component_resources_default(self, mocker, backend_fixtures):
-        # Arrange
-        json = backend_fixtures["resources"][
-            "get_component_resources_num_instances_requests_and_limits"
-        ]["response"]
-        mock_fill_missing_resources = mocker.patch(
-            "hsml.resources.ComponentResources._fill_missing_resources"
-        )
-        mock_resources_init = mocker.spy(resources.Resources, "__init__")
-
+    def test_constructor_component_resources_default(self):
         # Act
-        pr = resources.PredictorResources(num_instances=json["num_instances"])
+        pr = resources.PredictorResources(num_instances=1)
 
         # Assert
-        assert pr.num_instances == json["num_instances"]
-        assert mock_fill_missing_resources.call_count == 2
-        assert (
-            mock_fill_missing_resources.call_args_list[0][0][1] == RESOURCES.MIN_CORES
-        )
-        assert (
-            mock_fill_missing_resources.call_args_list[0][0][2] == RESOURCES.MIN_MEMORY
-        )
-        assert mock_fill_missing_resources.call_args_list[0][0][3] == RESOURCES.GPUS
-        assert (
-            mock_fill_missing_resources.call_args_list[1][0][1] == RESOURCES.MAX_CORES
-        )
-        assert (
-            mock_fill_missing_resources.call_args_list[1][0][2] == RESOURCES.MAX_MEMORY
-        )
-        assert mock_fill_missing_resources.call_args_list[1][0][3] == RESOURCES.GPUS
-        expected_calls = [
-            call(
-                pr.requests, RESOURCES.MIN_CORES, RESOURCES.MIN_MEMORY, RESOURCES.GPUS
-            ),
-            call(pr.limits, RESOURCES.MAX_CORES, RESOURCES.MAX_MEMORY, RESOURCES.GPUS),
-        ]
-        mock_resources_init.assert_has_calls(expected_calls)
+        assert pr.requests is None
+        assert pr.limits is None
 
-    def test_constructor_component_resources(self, mocker, backend_fixtures):
+    def test_constructor_component_resources(self, backend_fixtures):
         # Arrange
         json = backend_fixtures["resources"][
             "get_component_resources_num_instances_requests_and_limits"
         ]["response"]
 
-        requests_object = resources.Resources.from_json(json["requests"])
-        limits_object = resources.Resources.from_json(json["limits"])
-        mock_util_get_obj_from_json = mocker.patch(
-            "hopsworks_common.util._get_obj_from_json",
-            side_effect=[requests_object, limits_object],
-        )
-        mock_fill_missing_resources = mocker.patch(
-            "hsml.resources.ComponentResources._fill_missing_resources"
-        )
-
         # Act
+        expected = copy.deepcopy(json)
         pr = resources.PredictorResources(
             num_instances=json["num_instances"],
             requests=json["requests"],
@@ -200,32 +156,56 @@ class TestResources:
         )
 
         # Assert
-        assert pr.num_instances == json["num_instances"]
-        assert pr.requests == requests_object
-        assert pr.limits == limits_object
-        assert mock_fill_missing_resources.call_count == 2
-        assert (
-            mock_fill_missing_resources.call_args_list[0][0][1] == RESOURCES.MIN_CORES
-        )
-        assert (
-            mock_fill_missing_resources.call_args_list[0][0][2] == RESOURCES.MIN_MEMORY
-        )
-        assert mock_fill_missing_resources.call_args_list[0][0][3] == RESOURCES.GPUS
-        assert (
-            mock_fill_missing_resources.call_args_list[1][0][1] == RESOURCES.MAX_CORES
-        )
-        assert (
-            mock_fill_missing_resources.call_args_list[1][0][2] == RESOURCES.MAX_MEMORY
-        )
-        assert (
-            mock_fill_missing_resources.call_args_list[1][0][3] == requests_object.gpus
-        )
-        assert mock_util_get_obj_from_json.call_count == 2
-        expected_calls = [
-            call(json["requests"], resources.Resources),
-            call(json["limits"], resources.Resources),
-        ]
-        mock_util_get_obj_from_json.assert_has_calls(expected_calls)
+        assert pr.num_instances == expected["num_instances"]
+        assert pr.requests.to_dict() == expected["requests"]
+        assert pr.limits.to_dict() == expected["limits"]
+
+    # - to dict
+
+    @pytest.mark.parametrize(
+        "cls,key",
+        [
+            (resources.PredictorResources, "predictorResources"),
+            (resources.TransformerResources, "transformerResources"),
+        ],
+    )
+    def test_to_dict_unset_is_omitted(self, cls, key):
+        assert cls(num_instances=1).to_dict()[key] == {}
+
+    @pytest.mark.parametrize(
+        "cls,key",
+        [
+            (resources.PredictorResources, "predictorResources"),
+            (resources.TransformerResources, "transformerResources"),
+        ],
+    )
+    def test_to_dict_sends_each_half_as_given(self, cls, key):
+        requests = {"cores": 0.5, "memory": 64, "gpus": 0}
+        limits = {"cores": 1, "memory": 128}
+
+        both = cls(requests=dict(requests), limits=dict(limits)).to_dict()[key]
+        only_limits = cls(limits=dict(limits)).to_dict()[key]
+        only_requests = cls(requests=dict(requests)).to_dict()[key]
+
+        assert both == {"requests": requests, "limits": limits}
+        assert only_limits == {"limits": limits}
+        assert only_requests == {"requests": requests}
+
+    def test_to_dict_omits_unset_fields_of_a_half(self):
+        pr = resources.PredictorResources(limits=resources.Resources(memory=3072))
+
+        assert pr.to_dict()["predictorResources"] == {"limits": {"memory": 3072}}
+
+    def test_read_back_to_dict_keeps_backend_values(self, backend_fixtures):
+        json = backend_fixtures["resources"][
+            "get_component_resources_requested_instances_and_predictor_resources"
+        ]["response"]
+
+        expected = copy.deepcopy(json["predictor_resources"])
+
+        pr = resources.PredictorResources.from_response_json(json)
+
+        assert pr.to_dict()["predictorResources"] == expected
 
     def test_num_instances_property_warns(self):
         pr = resources.PredictorResources(num_instances=1)
@@ -322,59 +302,6 @@ class TestResources:
         assert kwargs["limits"].memory == json["limits"]["memory"]
         assert kwargs["limits"].gpus == json["limits"]["gpus"]
 
-    # - fill missing dependencies
-
-    def test_fill_missing_dependencies_none(self, mocker):
-        # Arrange
-        class MockResources:
-            cores = None
-            memory = None
-            gpus = None
-
-        mock_resource = MockResources()
-
-        # Act
-        resources.ComponentResources._fill_missing_resources(mock_resource, 10, 11, 12)
-
-        # Assert
-        assert mock_resource.cores == 10
-        assert mock_resource.memory == 11
-        assert mock_resource.gpus == 12
-
-    def test_fill_missing_dependencies_all(self):
-        # Arrange
-        class MockResources:
-            cores = 1
-            memory = 2
-            gpus = 3
-
-        mock_resource = MockResources()
-
-        # Act
-        resources.ComponentResources._fill_missing_resources(mock_resource, 10, 11, 12)
-
-        # Assert
-        assert mock_resource.cores == 1
-        assert mock_resource.memory == 2
-        assert mock_resource.gpus == 3
-
-    def test_fill_missing_dependencies_some(self):
-        # Arrange
-        class MockResources:
-            cores = 1
-            memory = None
-            gpus = None
-
-        mock_resource = MockResources()
-
-        # Act
-        resources.ComponentResources._fill_missing_resources(mock_resource, 10, 11, 12)
-
-        # Assert
-        assert mock_resource.cores == 1
-        assert mock_resource.memory == 11
-        assert mock_resource.gpus == 12
-
     # PredictorResources
 
     def test_from_response_json_predictor_resources(self, backend_fixtures):
@@ -451,7 +378,7 @@ class TestResources:
         assert r.limits.memory == json["transformer_resources"]["limits"]["memory"]
         assert r.limits.gpus == json["transformer_resources"]["limits"]["gpus"]
 
-    def test_from_response_json_transformer_resources_default_limits(
+    def test_from_response_json_transformer_resources_without_limits(
         self, backend_fixtures
     ):
         json = backend_fixtures["resources"][
@@ -466,6 +393,4 @@ class TestResources:
         assert r.requests.cores == json["requests"]["cores"]
         assert r.requests.memory == json["requests"]["memory"]
         assert r.requests.gpus == json["requests"]["gpus"]
-        assert r.limits.cores == SERVING_RESOURCE_LIMITS["cores"]
-        assert r.limits.memory == SERVING_RESOURCE_LIMITS["memory"]
-        assert r.limits.gpus == SERVING_RESOURCE_LIMITS["gpus"]
+        assert r.limits is None

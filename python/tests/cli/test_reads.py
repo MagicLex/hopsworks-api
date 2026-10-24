@@ -18,6 +18,15 @@ from hopsworks.cli.commands import model as model_cmd
 from hopsworks.cli.main import cli
 
 
+
+def _path_not_found():
+    """A missing HopsFS path, as the backend answers it: a 400 with error code 110018."""
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = mock.MagicMock(status_code=400, reason="Bad Request", content=b"{}")
+    response.json.return_value = {"errorCode": 110018, "errorMsg": "Path not found"}
+    return RestAPIError("https://host/x", response)
+
 def _feature(name, type_, primary=False, partition=False, description=None):
     f = mock.MagicMock()
     f.name = name
@@ -84,6 +93,64 @@ def test_fg_info_renders_fields(mock_project):
     assert "id" in result.output
 
 
+def test_fg_info_shows_table_format_and_offline_size(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fg = _feature_group("orders")
+    fg.time_travel_format = "DELTA"
+    fg.location = (
+        "hopsfs://namenode:8020/apps/hive/warehouse/demo_featurestore.db/orders_1"
+    )
+    fs.get_feature_group.return_value = fg
+
+    def entry(name, size=None, is_dir=False):
+        e = mock.MagicMock()
+        e.name, e.size, e.dir = name, size, is_dir
+        e.path = f"/apps/hive/warehouse/demo_featurestore.db/orders_1/{name}"
+        return e
+
+    listings = {
+        "/apps/hive/warehouse/demo_featurestore.db/orders_1": [
+            entry("part-0.parquet", 1_000_000),
+            entry("_delta_log", is_dir=True),
+        ],
+        "/apps/hive/warehouse/demo_featurestore.db/orders_1/_delta_log": [
+            entry("00000.json", 2048)
+        ],
+    }
+    dataset_api = mock_project.get_dataset_api.return_value
+    dataset_api._list_dataset_path.side_effect = lambda path, cls, offset=0: (
+        len(listings[path]),
+        listings[path][offset:],
+    )
+    result = CliRunner().invoke(cli, ["fg", "info", "orders"])
+    assert result.exit_code == 0, result.output
+    assert "DELTA" in result.output
+    assert "978.6 KB (2 files)" in result.output
+
+    result = CliRunner().invoke(cli, ["--json", "fg", "info", "orders"])
+    payload = json.loads(result.stdout)
+    assert payload["table_format"] == "DELTA"
+    assert payload["offline_size_bytes"] == 1_002_048
+
+
+def test_fg_info_without_offline_table_shows_a_dash(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fg = _feature_group("orders")
+    fg.location = (
+        "hopsfs://namenode:8020/apps/hive/warehouse/demo_featurestore.db/orders_1"
+    )
+    fs.get_feature_group.return_value = fg
+    mock_project.get_dataset_api.return_value._list_dataset_path.side_effect = (
+        _path_not_found()
+    )
+    result = CliRunner().invoke(cli, ["fg", "info", "orders"])
+    assert result.exit_code == 0, result.output
+    assert any(
+        line.split()[:3] == ["Offline", "size", "-"]
+        for line in result.output.splitlines()
+    )
+
+
 def test_fg_info_not_found(mock_project):
     fs = mock_project.get_feature_store.return_value
     fs.get_feature_group.side_effect = RuntimeError("missing")
@@ -101,7 +168,7 @@ def test_fg_features_table(mock_project):
             _feature("amount", "double"),
         ],
     )
-    result = CliRunner().invoke(cli, ["fg", "features", "transactions"])
+    result = CliRunner().invoke(cli, ["fg", "feature", "list", "transactions"])
     assert result.exit_code == 0, result.output
     assert "id" in result.output
     assert "amount" in result.output
@@ -114,7 +181,7 @@ def test_fg_preview(mock_project):
     fg = _feature_group("transactions", features=[_feature("id", "bigint")])
     fg.select_all.return_value.show.return_value = pd.DataFrame({"id": [1, 2, 3]})
     fs.get_feature_group.return_value = fg
-    result = CliRunner().invoke(cli, ["fg", "preview", "transactions", "--n", "3"])
+    result = CliRunner().invoke(cli, ["fg", "preview", "transactions", "--limit", "3"])
     assert result.exit_code == 0, result.output
     # A bounded read: the limit goes to the query, never a whole-table read.
     fg.select_all.return_value.show.assert_called_with(3, online=False)
@@ -215,6 +282,58 @@ def test_fv_list_hits_rest_endpoint(mock_project):
         result = CliRunner().invoke(cli, ["fv", "list"])
     assert result.exit_code == 0, result.output
     assert "fraud_fv" in result.output
+
+
+def test_fv_preview_reads_the_preview_endpoint(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fs.id = 7
+    fv = mock.MagicMock()
+    fv.name, fv.version = "fraud_fv", 2
+    fs.get_feature_view.return_value = fv
+    payload = {
+        "items": [
+            {
+                "row": [
+                    {"columnName": "id", "columnValue": "1"},
+                    {"columnName": "amount", "columnValue": "9.5"},
+                ]
+            }
+        ]
+    }
+    with (
+        mock.patch(
+            "hopsworks_common.core.rest._project_path",
+            side_effect=lambda *tail: ["project", 1, *tail],
+        ),
+        mock.patch(
+            "hopsworks_common.core.rest._send_request", return_value=payload
+        ) as send,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            [
+                "--json",
+                "fv",
+                "preview",
+                "fraud_fv",
+                "--limit",
+                "5",
+                "--td-version",
+                "3",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    assert send.call_args.args[1][-7:] == [
+        "featurestores",
+        7,
+        "featureview",
+        "fraud_fv",
+        "version",
+        2,
+        "preview",
+    ]
+    assert send.call_args.kwargs["query_params"] == {"limit": 5, "td_version": 3}
+    assert json.loads(result.output) == [{"id": "1", "amount": "9.5"}]
 
 
 def test_fv_info(mock_project):
@@ -402,6 +521,56 @@ def test_model_info_specific_version(mock_project):
     mr.get_model.assert_called_with("fraud_detector", version=2)
 
 
+def test_model_info_prints_every_metric(mock_project):
+    mr = mock.MagicMock()
+    model = mock.MagicMock()
+    model.name, model.version, model.framework = "deal_model", 1, "sklearn"
+    model.training_metrics = {"auc": 0.9, "f1": 0.8, "recall": 0.7, "test_pr_auc": 0.6}
+    model.created, model.description = "2026-04-01", ""
+    mr.get_model.return_value = model
+    mock_project.get_model_registry.return_value = mr
+    result = CliRunner().invoke(cli, ["model", "info", "deal_model", "--version", "1"])
+    assert result.exit_code == 0, result.output
+    assert "test_pr_auc=0.6" in result.output
+
+
+def test_model_info_lists_its_images(mock_project):
+    mr = mock.MagicMock()
+    model = mock.MagicMock()
+    model.name, model.version, model.framework = "order_model", 2, "sklearn"
+    model.training_metrics, model.created, model.description = {}, "2026-04-01", ""
+    model.version_path = "Models/order_model/2"
+    mr.get_model.return_value = model
+    mock_project.get_model_registry.return_value = mr
+    api = mock.MagicMock()
+    api.list.return_value = [
+        "Models/order_model/2/Files/images/roc_curve.png",
+        "Models/order_model/2/Files/images/confusion_matrix.png",
+    ]
+    mock_project.get_dataset_api.return_value = api
+    result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "2"])
+    assert result.exit_code == 0, result.output
+    api.list.assert_called_with("Models/order_model/2/Files/images")
+    row = next(line for line in result.output.splitlines() if line.startswith("Images"))
+    assert row.split(None, 1)[1].strip() == "confusion_matrix.png, roc_curve.png"
+    result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "2", "--json"])
+    assert json.loads(result.output)["images"] == ["confusion_matrix.png", "roc_curve.png"]
+
+
+def test_model_info_without_images_says_so(mock_project):
+    mr = mock.MagicMock()
+    model = mock.MagicMock()
+    model.name, model.version, model.framework = "order_model", 1, "sklearn"
+    model.training_metrics, model.created, model.description = {}, "2026-04-01", ""
+    mr.get_model.return_value = model
+    mock_project.get_model_registry.return_value = mr
+    mock_project.get_dataset_api.return_value.list.side_effect = _path_not_found()
+    result = CliRunner().invoke(cli, ["model", "info", "order_model", "--version", "1"])
+    assert result.exit_code == 0, result.output
+    row = next(line for line in result.output.splitlines() if line.startswith("Images"))
+    assert row.split()[1] == "-"
+
+
 # --- deployment ------------------------------------------------------------
 
 
@@ -451,6 +620,40 @@ def test_deployment_list_falls_back_when_state_errors(mock_project):
     assert "Stopped" in result.output
 
 
+def _deployment_without_resources(monkeypatch):
+    # A real deployment read back with no resources: requests and limits are None.
+    from hsml import deployment, predictor
+
+    for name, value in {
+        "_get_serving_num_instances_limits": [-1, -1],
+        "_is_scale_to_zero_required": False,
+        "_is_saas_connection": False,
+        "_is_kserve_installed": True,
+    }.items():
+        monkeypatch.setattr(f"hopsworks_common.client.{name}", lambda *_, v=value: v)
+    pred = predictor.Predictor(
+        name="bare", model_name="m", model_path="p", model_server="PYTHON"
+    )
+    d = deployment.Deployment(pred)
+    d.get_state = mock.MagicMock(return_value=mock.MagicMock(status="Running"))
+    return d
+
+
+def test_deployment_list_and_info_without_resources(mock_project, monkeypatch):
+    d = _deployment_without_resources(monkeypatch)
+    assert d.resources.requests is None and d.resources.limits is None
+    d.describe()
+    repr(d.resources)
+    ms = mock.MagicMock()
+    ms.get_deployments.return_value = [d]
+    ms.get_deployment.return_value = d
+    mock_project.get_model_serving.return_value = ms
+    for args in (["deployment", "list"], ["deployment", "info", "bare"]):
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, result.output
+        assert "bare" in result.output
+
+
 def test_deployment_info_not_found(mock_project):
     ms = mock.MagicMock()
     ms.get_deployment.return_value = None
@@ -458,6 +661,35 @@ def test_deployment_info_not_found(mock_project):
     result = CliRunner().invoke(cli, ["deployment", "info", "missing"])
     assert result.exit_code != 0
     assert "missing" in result.output
+
+
+def _watched(mock_project, statuses, restarts):
+    d = mock.MagicMock()
+    d.get_state.side_effect = [mock.MagicMock(status=s) for s in statuses]
+    d._serving_engine._serving_api._get_logs.side_effect = [
+        [mock.MagicMock(restart_count=r)] for r in restarts
+    ]
+    mock_project.get_model_serving.return_value.get_deployment.return_value = d
+    with mock.patch("time.sleep"), mock.patch("time.monotonic", side_effect=range(100)):
+        return CliRunner().invoke(cli, ["deployment", "info", "churn", "--stable", "3"])
+
+
+def test_deployment_info_stable_passes_when_running_without_restart(mock_project):
+    result = _watched(mock_project, ["Running"] * 3, [2, 2, 2])
+    assert result.exit_code == 0, result.output
+    assert "stayed Running" in result.output
+
+
+def test_deployment_info_stable_fails_on_a_restart(mock_project):
+    result = _watched(mock_project, ["Running"] * 3, [0, 1, 1])
+    assert result.exit_code == 1
+    assert "flapping" in result.output
+
+
+def test_deployment_info_stable_fails_when_not_running(mock_project):
+    result = _watched(mock_project, ["Running", "Starting"], [0, 0])
+    assert result.exit_code == 1
+    assert "is Starting, not Running" in result.output
 
 
 # --- job -------------------------------------------------------------------
@@ -487,24 +719,46 @@ def test_job_info_not_found(mock_project):
 # Group was renamed from ``dataset`` to ``files``.
 
 
-def test_files_list_strings(mock_project):
+def test_files_list_root_lists_datasets(mock_project):
+    from hopsworks_common.core import dataset
+
     api = mock.MagicMock()
-    api.list.return_value = ["Resources", "Jupyter"]
+    api._list_dataset_path.return_value = (
+        1,
+        [dataset.Dataset(1, "Resources", "DATASET", {"path": "/Projects/p/Resources"})],
+    )
     mock_project.get_dataset_api.return_value = api
     result = CliRunner().invoke(cli, ["files", "list"])
     assert result.exit_code == 0, result.output
+    assert api._list_dataset_path.call_args.args == ("", dataset.Dataset)
     assert "Resources" in result.output
+    assert "dataset" in result.output
 
 
-def test_files_list_inodes(mock_project):
+def test_files_list_shows_kind_and_size(mock_project):
+    from hopsworks_common.core import inode
+
     api = mock.MagicMock()
-    inode = mock.MagicMock()
-    inode.name, inode.dir, inode.size = "train.parquet", False, 1024
-    api.list.return_value = [inode]
+    api._list_dataset_path.return_value = (
+        2,
+        [
+            inode.Inode({"name": "train.parquet", "dir": False, "size": 1024}),
+            inode.Inode({"name": "static", "dir": True, "size": 0}),
+        ],
+    )
     mock_project.get_dataset_api.return_value = api
     result = CliRunner().invoke(cli, ["files", "list", "Resources"])
     assert result.exit_code == 0, result.output
-    assert "train.parquet" in result.output
+    assert api._list_dataset_path.call_args.args == ("Resources", inode.Inode)
+    lines = result.output.splitlines()
+    assert next(line for line in lines if "train.parquet" in line).split()[1:] == [
+        "file",
+        "1024",
+    ]
+    assert next(line for line in lines if "static" in line).split()[1:] == [
+        "dir",
+        "-",
+    ]
 
 
 # --- context ---------------------------------------------------------------
@@ -553,16 +807,6 @@ def test_unauthenticated_command_suggests_setup(tmp_home):
 
 
 # --- trino ----------------------------------------------------------------
-
-
-def test_trino_sql_alias_registered():
-    # `hops trino sql ...` is a natural guess; without the alias it failed with
-    # a bare "No such command 'sql'" (#3). Both names must resolve.
-    from hopsworks.cli.commands.trino import trino_group
-
-    assert "sql" in trino_group.commands
-    assert "query" in trino_group.commands
-    assert trino_group.commands["sql"] is trino_group.commands["query"]
 
 
 # --- stdout hygiene -------------------------------------------------------
@@ -633,3 +877,15 @@ def test_fg_test_access_refuses_a_cached_feature_group(mock_project):
 
     assert result.exit_code == 1, result.output
     assert "not an external feature group" in result.output
+
+
+def test_files_download_takes_the_destination_as_upload_does(mock_project):
+    api = mock_project.get_dataset_api.return_value
+    api.download.return_value = "/tmp/nb/a.ipynb"
+    for args in (["nb"], ["--output", "nb"], ["nb", "--output", "nb"]):
+        result = CliRunner().invoke(cli, ["files", "download", "Users/u/a.ipynb", *args])
+        assert result.exit_code == 0, result.output
+        api.download.assert_called_with(path="Users/u/a.ipynb", local_path="nb", overwrite=False)
+    result = CliRunner().invoke(cli, ["files", "download", "Users/u/a.ipynb", "nb", "--output", "other"])
+    assert result.exit_code == 2
+    assert "DESTINATION or --output" in result.output

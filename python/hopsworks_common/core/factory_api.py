@@ -55,8 +55,13 @@ def _create(definition: str, name: str | None = None) -> dict:
 
 def _update(name: str, definition: str) -> dict:
     """A new version of a project factory's definition."""
+    # Each PUT stores a new version, so it is sent once.
     return client._get_instance()._send_request(
-        "PUT", _path(name), headers=YAML, data=definition.encode("utf-8")
+        "PUT",
+        _path(name),
+        headers=YAML,
+        data=definition.encode("utf-8"),
+        retry_while_unavailable=False,
     )
 
 

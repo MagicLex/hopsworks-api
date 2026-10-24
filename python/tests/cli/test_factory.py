@@ -145,8 +145,8 @@ def test_answers_are_checked_as_the_form_checks_them():
         "What should it answer? is required.",
         "Cadence must be one of daily, weekly.",
         "Weeks is out of range.",
-        "Tables 1: Table is required.",
-        "Tables 1: Refresh must be one of daily, weekly.",
+        "Tables 1: Table (`table`) is required.",
+        "Tables 1: Refresh (`cadence`) must be one of daily, weekly.",
     ]
 
 
@@ -398,7 +398,9 @@ def test_validate_runs_without_a_cluster(tmp_path):
     assert refused.exit_code != 0 and "kind must be Factory" in refused.output
 
 
-def test_import_reviews_the_instructions_then_creates(tmp_path, monkeypatch, logged_in):
+def test_import_reviews_the_instructions_then_creates(
+    tmp_path, monkeypatch, logged_in, tty
+):
     path = tmp_path / "review.yaml"
     path.write_text(REVIEW)
     created = []
@@ -483,7 +485,7 @@ def _recording(monkeypatch, tmp_path):
 
 
 def test_run_asks_each_question_then_resumes_from_system_yaml(
-    tmp_path, monkeypatch, logged_in
+    tmp_path, monkeypatch, logged_in, tty
 ):
     registered, launched = _recording(monkeypatch, tmp_path)
     typed = [
@@ -524,7 +526,7 @@ def test_run_asks_each_question_then_resumes_from_system_yaml(
     assert refused.exit_code != 0
     assert "hops factory run churn-review q3-review" in refused.output
     unknown = CliRunner().invoke(cli, ["factory", "run", "churn-review", "nope"])
-    assert unknown.exit_code != 0 and "no system 'nope'" in unknown.output
+    assert unknown.exit_code != 0 and "No system 'nope'" in unknown.output
     preset = CliRunner().invoke(
         cli, ["factory", "run", "churn-review", "--preset", "q4"]
     )

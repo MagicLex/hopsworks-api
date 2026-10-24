@@ -36,6 +36,7 @@ class EnvironmentApi:
         base_environment_name: str | None = "python-feature-pipeline",
         await_creation: bool | None = True,
         timeout: float | None = None,
+        source_environment_name: str | None = None,
     ) -> environment.Environment:
         """Create Python environment for the project.
 
@@ -57,6 +58,8 @@ class EnvironmentApi:
             timeout: Seconds to wait for the creation to finish before raising.
                 Falls back to the engine's default when unset.
                 Ignored when `await_creation` is `False`, because the method then returns without waiting at all.
+            source_environment_name: A project environment to clone, with its libraries, in place of `base_environment_name`.
+                The caller owns the clone, so a Data scientist can change a clone of a shared environment they cannot change.
 
         Returns:
             The Environment object.
@@ -74,10 +77,18 @@ class EnvironmentApi:
             name,
         ]
         headers = {"content-type": "application/json"}
-        data = {
-            "name": name,
-            "baseImage": {"name": base_environment_name, "description": description},
-        }
+        if source_environment_name is not None:
+            data = {"name": name, "sourceEnvironment": source_environment_name}
+            if description is not None:
+                data["description"] = description
+        else:
+            data = {
+                "name": name,
+                "baseImage": {
+                    "name": base_environment_name,
+                    "description": description,
+                },
+            }
         env = environment.Environment.from_response_json(
             _client._send_request(
                 "POST", path_params, headers=headers, data=json.dumps(data)
@@ -88,6 +99,35 @@ class EnvironmentApi:
             self._environment_engine._await_environment_command(name, timeout)
 
         return env
+
+    @public
+    @usage._method_logger
+    def await_creation(self, name: str, timeout: float | None = None) -> None:
+        """Wait for the creation of an environment to finish.
+
+        Use it after `create_environment(..., await_creation=False)`.
+
+        ```python
+        import hopsworks
+
+        project = hopsworks.login()
+
+        env_api = project.get_environment_api()
+
+        env_api.create_environment("my_custom_environment", await_creation=False)
+        env_api.await_creation("my_custom_environment")
+        ```
+
+        Parameters:
+            name: Name of the environment.
+            timeout: Seconds to wait for the creation to finish before raising.
+                Falls back to the engine's default when unset.
+
+        Raises:
+            hopsworks.client.exceptions.EnvironmentException: If the creation failed or did not finish within `timeout`.
+            hopsworks.client.exceptions.RestAPIError: If the backend encounters an error when handling the request.
+        """
+        self._environment_engine._await_environment_command(name, timeout)
 
     @public
     @usage._method_logger
