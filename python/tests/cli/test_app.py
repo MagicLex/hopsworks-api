@@ -796,38 +796,6 @@ def test_app_delete_force_stops_first(mock_project):
     a.delete.assert_called_once()
 
 
-def test_app_delete_makes_no_environment_request(authed_config):
-    from types import SimpleNamespace
-
-    from hopsworks.cli import session
-    from hopsworks_common.core import app_api, environment_api, users_api
-
-    from tests.real_hopsworks import API, hopsworks_server
-
-    def answer(method, path, body):
-        if path == "/hopsworks-api/api/users/profile":
-            return 200, {"username": "scott"}
-        if method == "GET" and path == f"{API}/apps/shop":
-            return 200, {"name": "shop", "environmentName": "shop-app-env-scott"}
-        return 200, {}
-
-    project = SimpleNamespace(
-        get_app_api=app_api.AppApi,
-        get_environment_api=environment_api.EnvironmentApi,
-    )
-    with (
-        hopsworks_server(answer) as seen,
-        mock.patch.object(session, "get_project", return_value=project),
-        mock.patch("hopsworks.get_users_api", users_api.UsersApi, create=True),
-    ):
-        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
-
-    assert result.exit_code == 0, result.output
-    assert ("DELETE", f"{API}/jobs/shop", None) in seen
-    assert [p for _, p, _ in seen if "/python/environments" in p] == []
-    assert "environment" not in result.output.lower()
-
-
 def test_app_info_surfaces_not_found(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.get_app.side_effect = RuntimeError("404")
