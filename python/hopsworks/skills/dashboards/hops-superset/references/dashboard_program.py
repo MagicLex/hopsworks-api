@@ -375,10 +375,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([{"id": d["id"], "title": d.get("dashboard_title")} for d in dashboards]))
         return 0
     if args.delete:
-        print(json.dumps(delete(api, project.backing_name)))
+        print(json.dumps(delete(api, getattr(project, "backing_name", project.name))))
         return 0
     semantic = project.get_semantic_layer_api() if SEMANTIC_DATASETS or METRIC_DATASETS else None
-    dashboard_id = build(api, project.backing_name, semantic)
+    dashboard_id = build(api, getattr(project, "backing_name", project.name), semantic)
     print(dashboard_url(api, project.get_url(), dashboard_id))
     return 0
 
