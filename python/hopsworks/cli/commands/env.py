@@ -83,7 +83,7 @@ def own_copy(api: Any, source: str, name: str) -> Any:
     """
     if len(name) > _MAX_NAME:
         raise click.ClickException(
-            f"Only its creator or a Data owner can change environment '{source}', and "
+            f"You cannot change environment '{source}', and "
             f"your copy's name '{name}' would be {len(name)} characters, over the "
             f"{_MAX_NAME} Hopsworks allows: use a shorter name."
         )
@@ -110,15 +110,14 @@ def own_copy(api: Any, source: str, name: str) -> Any:
             env = None
     if env is None:
         output.info(
-            "Only its creator or a Data owner can change environment %s: cloning it "
-            "to your own copy %s; this takes a few minutes.",
+            "You cannot change environment %s: copying it to your own copy %s; "
+            "this takes a few minutes.",
             source,
             name,
         )
+        origin = _origin(api, source)
         try:
-            env = api.create_environment(
-                name, source_environment_name=source, await_creation=False
-            )
+            env = api.create_environment(name, await_creation=False, **origin)
         except Exception as exc:  # noqa: BLE001
             # Another run of yours may have cloned it first.
             env = _read(api, name)
@@ -156,6 +155,27 @@ def own_copy(api: Any, source: str, name: str) -> Any:
             )
         raise click.ClickException(failure) from exc
     return env
+
+
+def _origin(api: Any, source: str) -> dict[str, str]:
+    """What `create_environment` copies `source` from.
+
+    A project environment is cloned with its libraries. Hopsworks refuses a
+    built-in one as a clone source, so a copy of it is created from its base image.
+    """
+    try:
+        source_env = api.get_environment(source)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not find environment '{source}': {exc}"
+        ) from exc
+    if source_env is None:
+        raise click.ClickException(
+            f"No environment named '{source}'. Run `hops env list` to see what exists."
+        )
+    if source_env.preinstalled is False:
+        return {"source_environment_name": source}
+    return {"base_environment_name": source}
 
 
 def _read(api: Any, name: str) -> Any:
@@ -243,20 +263,7 @@ def env_clone(
         description: Optional description for the new environment.
     """
     api = _api(ctx)
-    try:
-        source_env = api.get_environment(source)
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(
-            f"Could not find environment '{source}': {exc}"
-        ) from exc
-    if source_env is None:
-        raise click.ClickException(
-            f"No environment named '{source}'. Run `hops env list` to see what exists."
-        )
-    if source_env.preinstalled is False:
-        origin = {"source_environment_name": source}
-    else:
-        origin = {"base_environment_name": source}
+    origin = _origin(api, source)
     output.warn(
         "Cloning '%s' to '%s' — this can take several minutes. Waiting for "
         "the backend to finish provisioning before returning.",
@@ -352,8 +359,8 @@ def env_install(
 ) -> None:
     """Install a requirements.txt into ENV_NAME.
 
-    When ENV_NAME is shared and only its creator or a Data owner can change
-    it, the install goes into your own copy, `<ENV_NAME>-app-env-<user>`
+    When ENV_NAME is built in, or shared and only its creator or a Data owner
+    can change it, the install goes into your own copy, `<ENV_NAME>-app-env-<user>`
     (ENV_NAME without a trailing `-app-env`), cloned from ENV_NAME the first time.
 
     ``--file`` is either a local file — uploaded to HopsFS first, since the
@@ -420,9 +427,8 @@ def env_install(
         except Exception as copy_exc:  # noqa: BLE001
             raise click.ClickException(f"Install failed: {copy_exc}") from copy_exc
         output.warn(
-            "Installed into your copy '%s', not '%s', which only its creator or a "
-            "Data owner can change: a job, app or deployment sees these packages "
-            "only when it runs on '%s'.",
+            "Installed into your copy '%s', not '%s', which you cannot change: a "
+            "job, app or deployment sees these packages only when it runs on '%s'.",
             env_name,
             source,
             env_name,

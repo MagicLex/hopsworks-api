@@ -162,6 +162,32 @@ def test_env_install_into_a_shared_environment_clones_your_own_copy(mock_project
     }
 
 
+def test_env_install_into_a_built_in_environment_creates_your_copy_from_its_base_image(
+    mock_project,
+):
+    envs = Environments(mock_project, "python-feature-pipeline")
+    envs.envs["python-feature-pipeline"].preinstalled = True
+    envs.envs[
+        "python-feature-pipeline"
+    ].install_requirements.side_effect = environment_refused()
+
+    result = _install_as_scott(
+        "env", "install", "python-feature-pipeline", "-f", "Users/scott/r.txt"
+    )
+
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "python-feature-pipeline-app-env-scott",
+        base_environment_name="python-feature-pipeline",
+        await_creation=False,
+    )
+    envs.envs[
+        "python-feature-pipeline-app-env-scott"
+    ].install_requirements.assert_called_once_with(
+        "Users/scott/r.txt", await_installation=True
+    )
+
+
 def test_env_install_reuses_your_copy_of_an_app_environment(mock_project):
     envs = Environments(mock_project, "shop-app-env", "shop-app-env-scott")
     envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
