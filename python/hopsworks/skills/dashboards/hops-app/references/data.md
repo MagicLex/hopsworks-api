@@ -46,8 +46,9 @@ the page. A Node server in the app holds the connection and answers the UI's
 relative `fetch("api/...")` calls with fixed queries, so the browser sends
 parameters, never SQL. `python-agent-pipeline` ships Node.
 
-The connection comes from the SDK: `trino_env.py` logs in, which writes the
-cluster CA to `/tmp/ca_chain.pem`, and writes the coordinator URL, the user
+The connection comes from the SDK: `trino_env.py` logs in and writes the
+path of the cluster CA the SDK keeps, whether to verify Trino's hostname (off
+where `HOPSWORKS_HOSTNAME_VERIFICATION=false`, as outside the cluster), the coordinator URL, the user
 `<project>__<username>`, its password from the secrets store and the schema
 `<project>_featurestore` to `/tmp/trino.json`, readable only by the app's user.
 Never print the password or export it as an environment variable: both leak it
@@ -65,7 +66,8 @@ const trino = Trino.create({
   catalog: "delta",
   schema: conn.schema, // <project>_featurestore
   auth: new BasicAuth(conn.user, conn.password),
-  ssl: { ca: readFileSync(conn.ca) }, // the cluster CA, not in Node's trust store
+  // the cluster CA, not in Node's trust store; no hostname check where the client turns it off
+  ssl: { ca: readFileSync(conn.ca), ...(conn.verifyHostname ? {} : { checkServerIdentity: () => undefined }) },
 });
 
 const query = await trino.query("SELECT * FROM customers_1 LIMIT 100");
@@ -76,17 +78,13 @@ for await (const result of query) {
 ```
 
 The whole app (server with `/health`, `/api/rows` and the static UI) is
-[references/trino_js/](trino_js/). Install `trino-client` into the
-app directory before the upload, so the app starts without the network, and
-copy `app.css` from the skeleton (`<hops-app>` is the directory of the path `hops skills info hops-app` prints):
+[references/trino_js/](trino_js/): its server runs `trino_env.py` at start, and
+`hops app deploy` installs `trino-client` into the app's environment. Copy
+`app.css` from the skeleton (`<hops-app>` is the directory of the path `hops skills info hops-app` prints):
 
 ```bash
 cp -r <hops-app>/references/trino_js apps/customers
 cp <hops-app>/references/app_skeleton/static/app.css apps/customers/static/
 (cd apps/customers && npm install --no-audit --no-fund)
-hops files upload apps/customers Users/<user>/apps/ --overwrite
-hops app create customers --path /Projects/<project>/Users/<user>/apps/customers/server.js \
-  --app-kind custom --app-port 8080 --readiness-probe-path /health \
-  --env python-agent-pipeline --start \
-  --entrypoint-command "bash -lc 'python trino_env.py && APP_TABLE=customers_1 exec node server.js'"
+hops app deploy customers apps/customers --check api/rows
 ```

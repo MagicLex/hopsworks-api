@@ -8,11 +8,12 @@ Part of **hops-app**: the contract **hops-app-builder** follows, read for every 
 - **Shape.** A `custom` app: `app.py` (FastAPI) serves a JSON API under `/api`
   and a static UI from `static/` (`index.html`, `app.js` as plain ES modules,
   `app.css`) in one process on `0.0.0.0:$APP_PORT`, with `/health` for the
-  readiness probe. No build step and no CDN, because the app runs air-gapped;
+  readiness probe. Or a `NODEJS` app: package.json `main` names the server,
+  which serves the same routes on `process.env.PORT`. No build step and no CDN, because the app runs air-gapped;
   every URL in the UI is relative (`fetch("api/top")`, `src="static/app.js"`),
   and `index.html` adds the trailing slash relative URLs need under the proxy
-  mount. A framework that needs a build (React, Vue, Svelte) only for a
-  git-backed app whose repository can hold the built assets. A data view with no
+  mount. A framework that needs a build (React, Vue, Svelte) is built where the
+  agent runs and its output deployed. A data view with no
   custom interaction is a Superset dashboard (hops-superset), not an app. Streamlit only
   when the user names it.
 - **Look.** The skeleton's `app.css` carries the Hopsworks tokens; extend it,

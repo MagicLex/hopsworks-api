@@ -105,7 +105,8 @@ Gradio: call `demo.launch()` with no `server_port` or `root_path`; Hopsworks set
 reads, and a hardcoded port breaks the readiness probe.
 
 Node.js: listen on `process.env.PORT`; `import` resolves the environment's npm
-packages (install them first, e.g. `env.install_npm(["express@latest"])`).
+packages. `hops app deploy` installs package.json `dependencies`, at
+package-lock.json's versions, into `<name>-app-env`, and never uploads `node_modules`.
 
 ```javascript
 // Users/<username>/server.mjs, app_kind="NODEJS"

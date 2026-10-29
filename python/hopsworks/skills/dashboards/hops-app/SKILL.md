@@ -31,7 +31,11 @@ them, or embeds a downloaded model to predict locally. A custom app is any other
 web service (FastAPI, Django, any WSGI/ASGI server) that binds to `0.0.0.0` and the
 injected `$APP_PORT`. Node.js apps get their dependencies from the npm packages
 installed in the environment (see [hops-environments](../../platform/hops-environments/SKILL.md),
-*npm packages*): nothing is `npm install`ed at app start.
+*npm packages*): nothing is `npm install`ed at app start. `hops app deploy`
+installs package.json `dependencies`, at package-lock.json's versions, into
+`<name>-app-env`, and never uploads `node_modules`. `<name>-app-env` is a clone of
+`python-agent-pipeline`, an agent environment: it runs apps, and Hopsworks
+refuses a job on it (error 300021).
 
 ## Contract
 
