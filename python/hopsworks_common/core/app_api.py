@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hopsworks_apigen import public
-from hopsworks_common import client, usage, util
+from hopsworks_common import client, events, usage, util
 from hopsworks_common.client.exceptions import RestAPIError
 
 
@@ -117,15 +117,16 @@ class AppApi:
 
     @public
     @usage._method_logger
+    @events.tracking("app", "create", key=lambda self, name, *a, **k: {"name": name})
     def create_app(
         self,
         name: str,
         app_path: str | None = None,
         environment: str = "python-app-pipeline",
-        memory: int = 2048,
-        cores: float = 1.0,
+        memory: int | None = None,
+        cores: float | None = None,
         env_vars: dict[str, str] | None = None,
-        app_kind: str = "STREAMLIT",
+        app_kind: str = "CUSTOM",
         entrypoint_command: str | None = None,
         app_port: int | None = None,
         description: str | None = None,
@@ -140,6 +141,7 @@ class AppApi:
         idle_scale_to_zero: bool | None = None,
         idle_cooldown_seconds: int | None = None,
         cold_start_timeout_seconds: int | None = None,
+        agent: Any | None = None,
     ) -> app.App:
         """Create a new app.
 
@@ -163,8 +165,8 @@ class AppApi:
             name: Name of the app.
             app_path: Path to the app file in HopsFS.
             environment: Python environment name (default: "python-app-pipeline").
-            memory: Memory in MB (default: 2048).
-            cores: CPU cores (default: 1.0).
+            memory: Memory in MB. None leaves the choice to the cluster.
+            cores: CPU cores. None leaves the choice to the cluster.
             env_vars: Per-runtime env vars applied when the app is started.
                 These override account-level env vars for this app's executions.
             app_kind: What the app is, which decides how it is started.
@@ -212,13 +214,17 @@ class AppApi:
                 Turns the option on when given; the default is the cluster's `pythonapp_idle_cooldown_seconds` (21600, six hours).
             cold_start_timeout_seconds: Seconds the first request waits for the app to wake.
                 Turns the option on when given; the default and ceiling is the cluster's `pythonapp_cold_start_timeout_max_seconds` (300). The ingress read timeout (60 unless raised) may fail the waking request earlier; the pod keeps starting and the next request finds it ready.
+            agent: An agent deployment of the project (an `Agent`, or its id) for an app of your own that embeds the agent's chat.
+                The app is then started as the agent's chat app is: with the agent's in-cluster address in `CHAT_AGENT_URL` (and `CHAT_AGENT_HOST`) and the key in `HOPSWORKS_APP_IDENTITY_KEY` that Hopsworks signs its members' names with, so the chat server the app runs (`hopsworks-agent-chat`, from the `@hopsworks/agent-chat` package in `python-app-pipeline`) knows who is chatting.
+                Off by default: an app without an agent gets neither.
+                For the ready-made chat page, use `Agent.create_chat_app()` instead.
 
         Returns:
             The created App object.
         """
         _client = client._get_instance()
 
-        app_kind_name = str(getattr(app_kind, "name", app_kind) or "STREAMLIT").upper()
+        app_kind_name = str(getattr(app_kind, "name", app_kind) or "CUSTOM").upper()
         app_path = self._trim_to_none(app_path)
         entrypoint_command = self._trim_to_none(entrypoint_command)
         git_url = self._trim_to_none(git_url)
@@ -290,7 +296,7 @@ class AppApi:
                 )
 
         if app_path and not git_repo_app:
-            app_path = util._convert_to_abs(app_path, _client._project_name)
+            app_path = util._convert_to_abs(app_path, _client._project_backing_name)
             if not app_path.startswith("hdfs://"):
                 app_path = "hdfs://" + app_path
 
@@ -301,13 +307,13 @@ class AppApi:
             # so the app serves at its base path. Without it the backend falls back to
             # the compatibility prefix and forwards /hopsworks-api/pythonapp/... as is.
             "proxyPathMode": "ROOT",
-            "resourceConfig": {
-                "memory": memory,
-                "cores": cores,
-                "gpus": 0,
-                "shmSize": 128,
-            },
+            "resourceConfig": {"gpus": 0, "shmSize": 128},
         }
+        # Unset is left out: the backend fills it from the cluster defaults.
+        if memory is not None:
+            config["resourceConfig"]["memory"] = memory
+        if cores is not None:
+            config["resourceConfig"]["cores"] = cores
         if app_path and not git_repo_app:
             config["appPath"] = app_path
         config["appKind"] = app_kind_name
@@ -339,6 +345,8 @@ class AppApi:
                 config["idleCooldownSeconds"] = int(idle_cooldown_seconds)
             if cold_start_timeout_seconds is not None:
                 config["coldStartTimeoutSeconds"] = int(cold_start_timeout_seconds)
+        if agent is not None:
+            config["agentDeploymentId"] = int(getattr(agent, "id", agent))
 
         path_params = ["project", _client._project_id, "jobs", name]
         headers = {"content-type": "application/json"}
@@ -352,6 +360,9 @@ class AppApi:
         created._env_vars = dict(env_vars) if env_vars else None
         return created
 
+    @events.tracking(
+        "app", "update", key=lambda self, app_name, *a, **k: {"name": app_name}
+    )
     def _start(self, app_name: str, env_vars: dict[str, str] | None = None):
         """Start an app execution.
 
@@ -376,6 +387,9 @@ class AppApi:
         headers = {"content-type": "text/plain"}
         return _client._send_request("POST", path_params, headers=headers)
 
+    @events.tracking(
+        "app", "update", key=lambda self, app_name, *a, **k: {"name": app_name}
+    )
     def _stop(self, app_name: str, execution_id: int):
         """Stop an app execution."""
         _client = client._get_instance()
@@ -393,6 +407,9 @@ class AppApi:
             "PUT", path_params, headers=headers, data=json.dumps({"state": "stopped"})
         )
 
+    @events.tracking(
+        "app", "update", key=lambda self, app_name, *a, **k: {"name": app_name}
+    )
     def _redeploy(self, app_name: str):
         """Redeploy a running app."""
         _client = client._get_instance()
@@ -441,6 +458,9 @@ class AppApi:
         headers = {"content-type": "application/json"}
         return _client._send_request("GET", path_params, headers=headers) or {}
 
+    @events.tracking(
+        "app", "delete", key=lambda self, app_name, *a, **k: {"name": app_name}
+    )
     def _delete(self, app_name: str):
         """Delete an app."""
         _client = client._get_instance()

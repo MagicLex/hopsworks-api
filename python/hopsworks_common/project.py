@@ -39,6 +39,7 @@ from hopsworks_common.core import (
 
 
 if TYPE_CHECKING:
+    from hopsworks_agents.eval.sdk import AgentServing
     from hsfs.feature_store import FeatureStore
     from hsml.model_registry import ModelRegistry
     from hsml.model_serving import ModelServing
@@ -73,6 +74,7 @@ class Project:
         datasets=None,
         creation_status=None,
         namespace=None,
+        backing_name=None,
         department_id=None,
         department_name=None,
         **kwargs,
@@ -80,6 +82,7 @@ class Project:
         self._id = project_id
         self._name = project_name
         self._owner = owner
+        self._project_team = project_team
         self._description = description
         self._created = created
 
@@ -95,6 +98,8 @@ class Project:
         self._project_members_api = project_members_api.ProjectMembersApi()
         self._search_api = search_api.SearchApi()
         self._project_namespace = namespace
+        # Older backends return no backingName; there the backing name is the project name.
+        self._backing_name = backing_name or project_name
         self._department = department_name
         self._trino_api = None
         self._trino_catalog_api = None
@@ -119,11 +124,24 @@ class Project:
         """Name of the project."""
         return self._name
 
+    @property
+    def backing_name(self):
+        """Immutable name behind the project's HopsFS folder, HDFS users and databases.
+
+        Equals the project name for projects created before backing names were introduced.
+        """
+        return self._backing_name
+
     @public
     @property
     def owner(self):
         """Owner of the project."""
         return self._owner
+
+    @property
+    def project_team(self):
+        """Members of the project as the project info lists them, with their role and user."""
+        return self._project_team
 
     @public
     @property
@@ -158,7 +176,7 @@ class Project:
     def home_path(self) -> str:
         """Path to the current user's home directory within this project.
 
-        The home directory is located at `/Projects/<project_name>/Users/<username>`
+        The home directory is located at `/Projects/<backing_name>/Users/<username>`
         and is created automatically when a user joins a project.
         """
         _client = client._get_instance()
@@ -166,9 +184,9 @@ class Project:
             # External client stores the username directly
             username = _client._username
         else:
-            # Internal client: HDFS user is formatted as <project_name>__<username>
+            # Internal client: HDFS user is formatted as <backing_name>__<username>
             username = _client._project_user().split("__", 1)[1]
-        return f"/Projects/{self._name}/Users/{username}"
+        return f"/Projects/{self._backing_name}/Users/{username}"
 
     @public
     def get_feature_store(self, name: str | None = None) -> FeatureStore:
@@ -312,6 +330,42 @@ class Project:
             The Datasets Api handle.
         """
         return self._dataset_api
+
+    @public
+    def get_agent_serving(self) -> AgentServing:
+        """Connect to the project's Agent Serving API.
+
+        The agents deployed in the project: send them messages, read their
+        traces and feedback, run evaluation suites against them, and review
+        what the failure analysis found.
+
+        Example: Example for getting the Agent Serving API of a project
+            ```python
+            import hopsworks
+
+            project = hopsworks.login()
+
+            agents = project.get_agent_serving()
+            agent = agents.get_agent("support")
+            print(agent.chat("hello").text)
+            ```
+
+        Returns:
+            The Agent Serving API.
+        """
+        from hopsworks_agents.eval.sdk import AgentServing
+        from hopsworks_agents.eval.sdk._transport import (
+            HopsworksClientSession,
+            Transport,
+        )
+
+        instance = client._get_instance()
+        base_url = getattr(instance, "_base_url", "") or ""
+        host = (
+            base_url.split("/hopsworks-api", 1)[0] if base_url else "https://hopsworks"
+        )
+        transport = Transport(host, self.id, session=HopsworksClientSession(instance))
+        return AgentServing(host, self.id, transport=transport)
 
     @public
     def get_environment_api(self) -> environment_api.EnvironmentApi:

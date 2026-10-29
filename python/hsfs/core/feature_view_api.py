@@ -15,8 +15,6 @@
 #
 from __future__ import annotations
 
-from typing import Any
-
 from hopsworks_common import client
 from hopsworks_common.client.exceptions import RestAPIError
 from hsfs import decorators, feature_view, training_dataset
@@ -167,21 +165,6 @@ class FeatureViewApi:
                     " or `FeatureView.clean`."
                 ) from e
             raise e
-
-    def _get_all(
-        self, latest_version_only: bool = True, with_features: bool = False
-    ) -> list[dict[str, Any]]:
-        path = self._base_path
-        query_params = {}
-        if latest_version_only:
-            query_params["filter_by"] = "latest_version"
-        if with_features:
-            query_params["expand"] = ["features"]
-        return self._client._send_request(
-            "GET",
-            path_params=path,
-            query_params={"expand": ["features"]} if with_features else None,
-        )["items"]
 
     def _delete_by_name(self, name: str, force: bool = False) -> None:
         path = self._base_path + [name]

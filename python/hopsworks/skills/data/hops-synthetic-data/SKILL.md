@@ -7,7 +7,15 @@ description: Generate seeded synthetic data into feature groups with Polars, as 
 
 Generate data that has a known story, so a pipeline or an ML system can be built
 and trained before a real source is connected. The generator is a program of
-the system, seeded and run as a Hopsworks job, never on the laptop.
+the system, seeded, run where the agent runs when its frame fits in memory (rows x columns x
+8 bytes under 1 GB), and as a Hopsworks job for live mode, a larger history, or a run that
+runs out of memory.
+
+## A table for a question, with no model
+
+`/hops` spawns **hops-data-builder** for a table with no model; it reads only
+`hops skills info hops-synthetic-data references/table.md`, which also holds the code rules every
+generator follows.
 
 ## Contract
 - **Input:** the shape (batch tables or events), the entity and its
@@ -21,8 +29,8 @@ the system, seeded and run as a Hopsworks job, never on the laptop.
 
 ## Smoke-test (cheap pre/post-flight)
 ```bash
-hops fg preview usage_events --n 5          # rows landed (offline)
-hops fg preview usage_events --n 5 --online # the stream is fresh (online)
+hops fg preview usage_events --limit 5          # rows landed (offline)
+hops fg preview usage_events --limit 5 --online # the stream is fresh (online)
 hops job history <slug>-events              # the live writer has a RUNNING execution
 ```
 
@@ -35,36 +43,17 @@ hops job history <slug>-events              # the live writer has a RUNNING exec
 - A volume or rate above the tier's default: confirm in one line before generating.
 
 ## The rules
-- **Seeded.** The same seed gives the same data on any cluster; a live tick is
-  seeded from its index, so a restart continues from now with no state.
+- **Code:** seeded, Polars, whole columns, statistics off, as
+  `hops skills info hops-synthetic-data references/table.md` gives them. Read it first.
 - **The story is code.** Signal columns are generated with the declared
   dependency plus noise; the target's positive rate follows
   `requirements.targets.prevalence`. No column is a function of the target the
   real world would not have at prediction time.
-- **Polars, in a Python job in `python-feature-pipeline`.** The columns and the
-  relational steps that shape the story (joins between entities and events,
-  window aggregates) are Polars; the base ships it, so the generator runs there
-  and no environment is cloned. Never a Spark job: Polars generates the small
-  tier's history in seconds.
-- **Whole columns, never rows.** Draw each random column in one call on a
-  seeded `numpy.random.default_rng` (`choice`, `normal`, `gamma`, `poisson`,
-  `uniform`), then build the rest with Polars expressions: ids with
-  `pl.format("c-{}", pl.int_range(pl.len()))`, times with
-  `pl.lit(start) + pl.duration(microseconds=...)` or `pl.datetime_range`,
-  snapshots by a cross join with the date grid, labels and story effects with
-  `pl.when`, joins and window expressions. No Faker, no Python loop or list
-  comprehension over rows, no `map_elements`, `apply` or `iter_rows`: each
-  costs a Python call per row, about ten times slower than the whole column at a
-  million rows. Names, cities and products come from a short list sampled with
-  `rng.choice`.
-- **No statistics jobs.** Every feature group the generator writes is created
-  with `statistics_config=False`: from a Python job, Hopsworks computes
-  statistics in a PySpark job after every insert.
 
 ## Sinks
 - **Batch:** one offline feature group per table (the entity table, and an event
-  history when the story has one), written directly by the Python client with no
-  job behind it, named as the real source would be, with
+  history when the story has one), written by the generator job through the
+  Python client, with no materialization job behind it, named as the real source would be, with
   `event_time` set and a description saying it is synthetic and which job wrote
   it. One run, `<slug>-data-backfill`, with `--mode backfill --from --to`.
 - **Events:** one **online-enabled** feature group (`online_enabled=True,
@@ -143,3 +132,6 @@ three live ticks into an online test group are readable online; both are deleted
 ## Next Steps
 - Mount or ingest a real source instead: **hops-data-sources**.
 - Build features over the synthetic groups: **hops-features**, **hops-fg**.
+- Build a data pipeline over them (a feature pipeline, bronze, silver and gold layers, a scheduled
+  job): **hops-features**, **hops-job**.
+- Explore them in a notebook: **hops-notebook**, **hops-eda**.

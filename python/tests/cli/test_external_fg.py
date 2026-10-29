@@ -7,6 +7,7 @@ import json
 from unittest import mock
 
 from click.testing import CliRunner
+from hopsworks.cli.commands.datasource import _preview_rows
 from hopsworks.cli.main import cli
 from hsfs.core.data_source import DataSource
 from hsfs.feature_group import ExternalFeatureGroup, SpineGroup
@@ -116,7 +117,7 @@ def test_insert_refuses_a_spine_group(mock_project):
     assert "spine group" in result.output
 
 
-def test_delete_prompt_says_the_external_table_stays(mock_project):
+def test_delete_prompt_says_the_external_table_stays(mock_project, tty):
     fs = mock_project.get_feature_store.return_value
     fs.get_feature_group.return_value = _external_fg()
     result = CliRunner().invoke(
@@ -166,3 +167,38 @@ def test_create_external_fails_when_nothing_was_saved(mock_project):
     )
     assert result.exit_code == 1
     assert "Could not create external FG: bad schema" in result.output
+
+
+def test_create_external_features_help_does_not_claim_it_is_required():
+    result = CliRunner().invoke(cli, ["fg", "create-external", "--help"])
+    flat = " ".join(result.output.split())
+    assert "Optional" in flat and "required outside Spark" not in flat
+
+
+def test_datasource_preview_help_names_schema_table():
+    result = CliRunner().invoke(cli, ["datasource", "preview", "--help"])
+    assert "schema.table" in " ".join(result.output.split())
+
+
+def test_preview_rows_flattens_the_rows_the_backend_nests():
+    nested = {
+        "preview": [
+            {
+                "values": [
+                    {"value0": "id", "value1": "387"},
+                    {"value0": "city", "value1": "Paris"},
+                ]
+            },
+            "not a row",
+        ]
+    }
+    assert _preview_rows(nested) == [{"id": "387", "city": "Paris"}]
+    assert _preview_rows(None) == []
+
+
+def test_create_external_refuses_empty_path(mock_project):
+    result, create = _create(mock_project, ["--path", "", "--data-format", "csv"])
+    assert result.exit_code == 2
+    assert "--path is empty" in result.output
+    assert "hops datasource tables src" in result.output
+    create.assert_not_called()

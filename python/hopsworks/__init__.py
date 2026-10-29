@@ -15,7 +15,6 @@
 #
 from __future__ import annotations
 
-import getpass
 import importlib
 import logging
 import os
@@ -372,6 +371,8 @@ def login(
 
     if api_key is None and is_saas:
         print("Copy your API Key (first register/login at https://run.hopsworks.ai)")
+        import getpass
+
         api_key = getpass.getpass(prompt="\nPaste it here: ")
 
         # If api key was provided as input, save the API key locally on disk to avoid users having to enter it again in the same environment
@@ -428,6 +429,8 @@ def _get_cached_api_key_path():
     If not sufficient permissions are set in HOME to create the API key (writable and executable), it uses the temp directory to store it.
     """
     api_key_name = ".hw_api_key"
+    import getpass
+
     api_key_folder = f".{getpass.getuser()}_hopsworks_app"
 
     # Path for current working directory api key
@@ -494,6 +497,12 @@ def _prompt_project(valid_connection, project, is_saas):
         try:
             return valid_connection._project_api._get_project(project)
         except RestAPIError as x:
+            # A refused key is not a missing project: raise the backend's error as it is.
+            if x.response.status_code in (
+                RestAPIError.STATUS_CODE_UNAUTHORIZED,
+                RestAPIError.STATUS_CODE_FORBIDDEN,
+            ):
+                raise
             raise ProjectException(f"Could not find project {project}") from x
 
 
@@ -667,7 +676,9 @@ def _set_active_project(project):
     if _client._is_external():
         # login already fetched this project; hand the id over instead of
         # letting the client look it up a second time.
-        _client._provide_project(project.name, project_id=project.id)
+        _client._provide_project(
+            project.name, project_id=project.id, backing_name=project.backing_name
+        )
 
 
 @public

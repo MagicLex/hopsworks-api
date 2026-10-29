@@ -1,5 +1,5 @@
 ---
-description: Hopsworks menu. Explore data, start an ML system, build or edit a Superset dashboard or a Python app with a JavaScript UI, show status.
+description: Hopsworks menu. Explore data, make a table and look at it, start an ML system, build or edit a Superset dashboard or a Python app with a JavaScript UI, show status.
 argument-hint: "[explore | ml | dashboard | app | status] [instruction]"
 model: haiku
 ---
@@ -19,21 +19,61 @@ Already known, no need to look again:
 - Ask with `AskUserQuestion`, at once and before any lookup the question does not need: one call,
   up to four questions, two to four options each, the recommended one first and marked
   "(Recommended)". Never end a turn with a question in prose.
+- A next-step offer (Explore, Pieces step 6) always has these two options: **Build a data
+  pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
+  **Explore it in a notebook** (a notebook over the table). The other one or two options are what
+  the result points to: a dashboard over it, a model, or the whole ML system. An app only when
+  the user asked for one.
+- When the result could carry an ML system (a table with an outcome column, a feature group with
+  a key and an event time), that option names what it would build: **An ML system predicting
+  `<label>` from `<feature group>`** (features, training, batch scoring; `<feature group>` is
+  reused). Offer it once per table: never again for a table it was offered for in this
+  conversation. It is never marked "(Recommended)" unless the user asked for an ML system. On yes,
+  run `/hops-ml` with that sentence as its arguments.
 - Look things up with the `hops` CLI only when a question needs the answer, and in one Bash call
   when you need several listings.
 - No secrets in arguments or output. Never delete anything the user has not confirmed by name.
+- `where` in a builder's prompt is `Hopsworks terminal` only when `$HOPSFS_USER_HOME_DIR` is set
+  (the line above says which; without it, run `test -n "$HOPSFS_USER_HOME_DIR"`). A laptop, a
+  CI runner or a Hopsable sandbox is an `external client`.
+- Project files (data files, `Resources/`, a user's folder): read and write them as
+  the **hops** skill's *Project files* rule (in a Hopsable sandbox, `$HOPS_TEMPLATES/SKILL.md`) says.
+- Never read SDK or library source (installed packages, `inspect.getsource`, a grep through
+  site-packages) to find a workaround: `hops <noun> --help` and the skills say what Hopsworks
+  supports. When neither does what the step needs, say the blocker in one line with the options,
+  and stop there.
+- An exit check is the command alone, never piped: `| head` hides its exit code. A `| head` comes
+  last on its line, never before `&&` or `;`: under `pipefail` the pipe fails once `head` stops
+  reading, and the next command never runs. Write long output to a file and read the file.
+- A turn may open with an inventory of the project (`[Hopsable: project ... ]`). Trust it: list
+  only what a step needs beyond it, and on an empty project go straight to the first write. A
+  line cut short (`+N more`, `not listed`, a count alone) answers nothing about a name it does
+  not show.
+- A next step that holds cluster resources (a deployment, a schedule, an app) is never marked
+  "(Recommended)" unless the user asked for it, and never after a baseline model: the user picks it.
+- A rule that stops a step stops it. Never get around it with a copy or a rename of the user's
+  asset (a feature group, a feature view, a model) under a new name, and never re-run a sweep or a
+  training the user did not ask for. Say the blocker and the one path the playbook names.
+- A check runs from outside the program that wrote: the online store is
+  `hops fg preview <fg> --online --limit 1`, never an SDK call written into a job. A job whose own
+  check line failed after its rows were written is reported as failed with the real cause ("rows
+  written, check line wrong"), never re-run to hide it.
+- Every failure reaches the final message: a failed job, deployment or exit check is named with
+  its cause from the logs (`hops job history`, `hops deployment logs`, `hops app logs`). A failed
+  or flapping deployment is never presented as served.
 
 ## Dispatch on the first word
 
 | First word | Do |
 | --- | --- |
-| none | Ask "What do you want to do?": **Explore data**, **Build or resume an ML system**, **A dashboard**, **An app**. Then continue with that choice below. |
+| none | Ask "What do you want to do?": **Explore data**, **Make a table and look at it**, **Build or resume an ML system**, **A dashboard or an app** (then ask which); with a system listed above, **Resume <slug>** replaces **Explore data**, first and recommended, and runs `/hops-build <slug>`. Then continue with that choice below. |
 | `explore` | Explore (below). |
+| an instruction to make something outside an ML system (a table, features, a model or candidates, scoring, a real-time endpoint for a model, a dashboard, an app, a notebook, an analytics layer), alone or several together | Pieces (below), whatever its first word. |
 | `dashboard` | Dashboard (below), with the rest as the instruction. |
 | `app` | App (below), with the rest as the instruction. |
 | `status` | Status (below). |
 | `ml` | Run the interview: invoke the `hops-ml` command with the Skill tool, passing the rest as its arguments, and follow it. |
-| `reqs`, `data`, `features`, `train`, `infer`, `verify`, `stop`, `f`, `t`, `i` | Reply with one line: building and running phases is `/hops-build` (for example `/hops-build train`, `/hops-build verify`), and stop. |
+| `reqs`, `data`, `features`, `train`, `infer`, `verify`, `stop`, `f`, `t`, `i`, with an ML system listed above | Reply with one line: building and running phases is `/hops-build` (for example `/hops-build train`, `/hops-build verify`), and stop. Without a system, `features`, `train` and `infer` are Pieces (below). |
 
 Choosing **Build or resume an ML system** from the menu runs the interview the same way. When the
 system's `requirements.status` is already `met`, reply with one line that `/hops-build` continues it.
@@ -41,29 +81,108 @@ system's `requirements.status` is already `met`, reply with one line that `/hops
 ## Explore
 
 Read-only. Run what the user's words need: `hops fg list`, `hops fv list`, `hops datasource
-list`, `hops search <term>`, `hops fg info <name>`, `hops fg features <name>`,
-`hops fg preview <name> --n 10`, `hops sql "<query>"` with a `LIMIT`. Summarise in a few lines and
-offer the next step with `AskUserQuestion` (look deeper, a dashboard over it, an app over it, an ML
-system over it).
+list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>`,
+`hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT`. `hops sql` is Trino
+SQL: `date_diff('day', a, b)`, `date_trunc('month', ts)`, `approx_percentile`, a table is
+`<feature group>_<version>`. Summarise in a few lines and make the next-step offer (Rules) with
+`AskUserQuestion` (a data pipeline over it, a notebook over it, a dashboard or an ML system over
+it), the one the user's words point to marked "(Recommended)".
+
+## Pieces
+
+A request outside an ML system names what to make. Each thing to make is a piece, and this table
+is the whole dispatch:
+
+| Piece | Needs | Makes | Exit check | Builder |
+| --- | --- | --- | --- | --- |
+| table | nothing, or a data source | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row | **hops-data-builder** |
+| features | feature groups with rows, or a data source | feature group `<f>` with rows, job `<f>-features` | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
+| model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>`; a model the user names is made, whatever its view | **hops-model-builder** |
+| inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
+| deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, `hops deployment predict <d>` for a known entity returns a prediction, and `hops deployment info <d> --stable 60` passes | **hops-deploy-builder** |
+| dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
+| app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving | `hops app info <a>` shows `State` `RUNNING` | **hops-app-builder** (App below) |
+| notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (Notebook below) |
+| analytics layer | bronze: a source; silver: feature groups with rows, used as bronze by name, never copied; gold: silver tables | the layer's tables with rows | `hops fg preview <table> --limit 1` for each table its `system.yaml` lists | `/hops-bronze`, `/hops-silver`, `/hops-gold` |
+
+1. **The goal.** Write down the pieces the request names, each with its asset name. Add a piece
+   one of them needs only when that need's exit check fails: "a model on the deals" with no
+   feature view makes the view inside the model piece; "score the deals daily with the best
+   model" when a model exists is the inference piece alone. "Serve", "real-time", "an endpoint" or
+   "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference.
+2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
+   inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
+   `not listed`, not a count alone), the piece is not among them, and no earlier step of this
+   turn made or touched it. Passing: the piece exists; say so in one line and go on. Failing or
+   missing: spawn its builder with the Agent tool and its prompt below, adding `touched: yes` when
+   an earlier step of this turn made or touched the piece (Hopsable also names earlier sub-agents
+   of the turn in the builder's prompt). The builder runs the same exit check
+   last. It counts only when the tool log Hopsable adds under the report (`[Hopsable: the
+   sub-agent's last commands ...]`) shows that command, `[exit code 0]` and its passing output;
+   otherwise run the check yourself, never on the builder's words. Failing: stop and say which
+   check failed and what the builder reported.
+3. **A check is a command on the cluster**, run by you or shown by a builder's tool log with its
+   output, never a claim without it.
+4. **No `system.yaml`**, build lease or `set.py` for pieces. "Make it a system" runs `/hops-ml`,
+   which starts from what the checks find.
+5. **A question about the data** ("then show where revenue comes from by country"): once the table
+   exists, answer from a few `hops sql "<query>"` calls (Trino SQL, as in Explore) over `<t>_1`,
+   each with a `GROUP BY` and a `LIMIT`: a short table or a few lines per breakdown. Never a
+   dashboard or an app unless the user asked for one by name.
+6. **Then** make the next-step offer (Rules) with `AskUserQuestion`: a data pipeline over the
+   result, a notebook over it, and the next piece, a dashboard over it, or the whole ML system. "(Recommended)" marks only a step the request named and this
+   turn did not make; with the request done, no option is marked, so the turn ends on what was
+   asked (an Auto mode answer takes a marked option at once).
+   A deployment or a schedule the request did not name is offered unmarked; an app is not offered.
+
+Ask only what the request leaves open, in one `AskUserQuestion` call.
+
+Every builder prompt ends with `where: <Hopsworks terminal | external client>`; a question to
+the user never does.
+
+When **hops-deploy-builder** stops on an offline feature group that this system made (in this
+conversation), run the `hops fg update ... --online` it named and spawn it again, without asking,
+its prompt adding `checked: yes` (its step 1 passed but for that group).
+A group the user had before: ask once whether to turn it online ("Copies its rows to the online
+store; the group stays as it is otherwise"), with no option marked "(Recommended)": it changes
+the user's group, so the user picks it. On yes, run the command, then spawn it again. On no, stop:
+no copy of the group.
+
+For a model, read the label from the data rather than asking: the column the request names or
+implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the
+choice in one line ("Predicting `status`, the order outcome") and go on. "Train X", "an
+experiment (run)" or "compare models" without names is `candidates: 3`; asked while this system
+builds a notebook, it is Notebook step 5, in that notebook. "Show the experiments" or "the runs"
+of a model the project has is a read: `hops model runs <m>`, never a new sweep. "A (training)
+pipeline" is the model piece with `job: yes`; "run it" afterwards is `hops job run <m>-train
+--wait`, then `hops model runs <m>`. Ask only when two or more
+columns fit the request equally.
+
+| Builder | Prompt |
+| --- | --- |
+| hops-data-builder | `name`, `rows` (10000 unless the user said), `columns` (name and type, one per line), `story` (what the question should find), `source` (`synthetic` or a data source) |
+| hops-features-builder | `name`, `sources` (feature groups or a data source), `features` (name, meaning, type), `grain` (the key and the event time), `schedule` (a Quartz cron, or none) |
+| hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, or none), `metric`, `job` (`yes` when the user asks for a pipeline, a job or a schedule, else `no`) |
+| hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `population` (the entities to score, such as open deals, and the feature group that lists them), `schedule` |
+| hops-deploy-builder | `name` (the deployment, a letter first, then letters and digits), `model` (name:version, or the best by a metric), `feature_view` (name:version), `passed_features` (sent by the caller instead of looked up, or none), `known_entity` (a key to check with, or none), `cores` and `memory` (1 and 1024 unless the user said) |
 
 ## Status
 
-With a system listed above, run `python <slug>/status.py` and print its output verbatim. Without
-one, list apps (`hops app list`) and, in a terminal, dashboards (`hops superset dashboard list`);
-from an external client list the programs under `./dashboards/` instead, since Superset is
-reachable only inside the cluster.
+With a system listed above, run `python <slug>/status.py` and `hops factory system plan <slug>`
+and print their output verbatim: the plan says what the project already has and what is next. Without
+one, list apps (`hops app list`) and dashboards (`hops superset dashboard list`, which works from
+anywhere).
 
 ## Dashboard
 
-Superset is reachable only inside the cluster: in a terminal you may run `hops superset ...`; from
-an external client do not, and list the programs under `./dashboards/` instead.
+`hops superset` and the SDK reach Superset from anywhere, through the Hopsworks proxy, so the
+builder runs its program where it runs.
 
-1. List the dashboards (`hops superset dashboard list` in a terminal; `ls dashboards/` otherwise)
-   and ask: edit one (each by title, marked when a program exists under `dashboards/`), create one,
+1. List the dashboards (`hops superset dashboard list`) and ask: edit one (each by title, marked when a program exists under `dashboards/`), create one,
    or delete one. With none, go to create.
 2. **Create.** `hops fg list` and ask which feature groups to chart (multi-select; a group that is
    online only cannot be charted, since Superset reads the offline store). Read their columns with
-   `hops fg features <name>`, then ask which charts to keep from a few you propose by name: a
+   `hops fg feature list <name>`, then ask which charts to keep from a few you propose by name: a
    big-number total, a bar over the categorical column with the fewest distinct values, a
    histogram of a numeric column, a time series on the event time when there is one. Ask the title,
    proposing one from the table names.
@@ -80,6 +199,55 @@ an external client do not, and list the programs under `./dashboards/` instead.
    program: <dashboards/<slug>.py, or the ML system's <slug>/dashboards/<slug>.py>
    where: <Hopsworks terminal | external client>
    ```
+
+## Notebook
+
+A notebook is cells run on the user's own Jupyter kernel and saved with their outputs, in an
+`.ipynb` that opens in the user's JupyterLab. Write it yourself, with no builder:
+
+1. Run `hops notebook start`: it prints the Python environment the cells run in and the user's
+   Jupyter folder (`Users/<username>`). The notebook is `<folder>/<slug>.ipynb`, named after what
+   it shows. A package the environment lacks: the `hops-notebook` skill, never `pip install` in a cell.
+   An existing notebook: `hops notebook info <path> --source` prints every cell's text, and a change
+   to several cells is one `hops notebook update <path>` with all of them (`hops-notebook` skill),
+   never one `run --cell` per cell.
+2. Write one cell at a time and run it before writing the next:
+   `hops notebook run <path> --code -` with the cell on stdin. The first cell is
+   `import hopsworks` then `fs = hopsworks.login().get_feature_store()`. Each section starts with
+   its markdown cell, `hops notebook run <path> --markdown --code "## <what it shows>"`, then one
+   code cell per step: the read (`fs.get_feature_group("<t>", version=<n>).read()`), a look at the
+   rows, one chart each.
+3. A model's predictions: load the model from the registry and score the test part of the training
+   dataset it was trained on, with `<n>` from `Training dataset` in `hops model info <m>`:
+   `fv.get_training_data(training_dataset_version=<n>, primary_key=True)`, then the
+   `split_by_key` call of the training code (**hops-train** section 1, or the pipeline's
+   `train.py`), which keeps one entity's rows in one part and gives the same test part. Never
+   another split. A model whose training code split another way: show the test metrics its
+   `run.json` records instead.
+4. A cell that raised, or one the user asks to change: fix it in place with `--cell N`, never with
+   a new cell after it. `N` is the number its `hops notebook run` printed (`Cell N of ...`); no
+   `hops notebook info` to find it, since `--cell` refuses a cell the user edited.
+5. An experiment, candidates, a training run or a model asked for in the notebook: the cells
+   run the code and **hops-train** is the contract, its "In a notebook" section (read it with
+   `hops skills info hops-train` once, when you reach this step). Every candidate is a run in
+   the model registry, the chosen model registered, both checked with `hops model runs <m>` and
+   `hops model info <m>` (the check is these commands, not a download). Data in a feature group
+   trains on a feature view of it that leaves out the primary key and event time, so the view
+   serves model inputs only (`hops fv create <v> --feature-group <fg>:<n> --except
+   <key>,<event time> --labels <label>`, then
+   `split_by_key` of **hops-train** section 1 in a cell) and registers
+   with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
+   notebook made itself registers without. "Register the model" afterwards is the best run,
+   already registered: say its version. Then offer once per notebook, no option marked
+   "(Recommended)", to make it a training pipeline: the model piece (Pieces above), on a feature
+   group of the notebook's data.
+6. A question about the data while this system builds a notebook is answered in it: a cell for the
+   table, a cell per chart, never `hops sql` beside it.
+7. Never change a cell you did not write unless the user asks: the user may have the notebook open
+   in JupyterLab.
+8. A model the project already has (a pipeline's, a builder's) in a notebook: load it from the
+   registry and plot or score what it holds (step 3, its `run.json` and `images/`); never train it
+   again there.
 
 ## App
 

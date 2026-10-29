@@ -219,7 +219,7 @@ class Connection:
             A feature store handle object to perform operations on.
         """
         if not name:
-            name = client._get_instance()._project_name
+            name = client._get_instance()._project_backing_name
         return self._feature_store_api._get(util._append_feature_store_suffix(name))
 
     @usage._method_logger
@@ -369,12 +369,10 @@ class Connection:
         major_minor_backend = regexMatcher.search(self._backend_version).group(0)
 
         if major_minor_backend != major_minor_client:
-            print("\n", file=sys.stderr)
             warnings.warn(
                 f"The installed hopsworks client version {client_version} may not be compatible with the connected Hopsworks backend version {self._backend_version}. \nTo ensure compatibility please install the latest bug fix release matching the minor version of your backend ({major_minor_backend}) by running 'pip install hopsworks=={major_minor_backend}.*'",
                 stacklevel=1,
             )
-            sys.stderr.flush()
 
     @_not_connected
     def _connect(self) -> None:

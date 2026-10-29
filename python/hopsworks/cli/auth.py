@@ -14,7 +14,10 @@ import logging
 import sys
 import threading
 import urllib.parse
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
+
+import click
+from hopsworks.cli import config
 
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
@@ -55,6 +58,62 @@ def api_base(host: str) -> str:
         A full REST base URL ready for endpoint concatenation.
     """
     return normalize_host(host) + "/hopsworks-api/api"
+
+
+def refused_key_fix(source: str | None) -> str:
+    """Say how to replace a refused API key from ``source``; empty when it has none.
+
+    Args:
+        source: Where the key came from (``HopsConfig.api_key_source``).
+
+    Returns:
+        A clause starting lowercase, without a final period.
+    """
+    if not source:
+        return ""
+    if source == "HOPSWORKS_API_KEY":
+        return f"check it, or unset it to use the key in {config.CONFIG_PATH}"
+    if source.startswith("--"):
+        return "check it"
+    return "check it, or run `hops setup --force` to create a new one"
+
+
+def login_failed(exc: Exception, source: str | None = None) -> NoReturn:
+    """Raise the ``ClickException`` that says why a login failed.
+
+    A 401 means the backend refused the API key: the message names where the
+    key came from and how to replace it, and is raised ``from None`` so the root
+    handler does not explain it again. A 403 means the key is valid but lacks
+    access. Either way the backend's own message is kept.
+
+    Args:
+        exc: Whatever ``hopsworks.login()`` raised.
+        source: Where the key came from (``HopsConfig.api_key_source``).
+
+    Raises:
+        click.ClickException: Always.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status not in (401, 403):
+        raise click.ClickException(f"Could not log in: {exc}") from exc
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        body = {}
+    detail = body.get("errorMsg") or body.get("usrMsg") or response.reason
+    if status == 403:
+        raise click.ClickException(
+            f"Could not log in: access refused ({detail})"
+        ) from exc
+    key = f"the API key from {source}" if source else "the API key"
+    fix = refused_key_fix(source)
+    tail = f". {fix[0].upper()}{fix[1:]}." if fix else ""
+    raise click.ClickException(
+        f"Could not log in: {key} was refused ({detail}){tail}"
+    ) from None
 
 
 def login(

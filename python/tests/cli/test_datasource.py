@@ -242,6 +242,38 @@ def test_crm_shopify_needs_its_shop_and_app_password():
     assert "--private-app-password" in output
 
 
+@pytest.mark.parametrize(
+    ("extra", "named"),
+    [
+        (["--client-id", "i"], "--client-secret"),
+        (["--client-secret", "s"], "--client-id"),
+        (
+            ["--client-id", "i", "--client-secret", "s", "--private-app-password", "p"],
+            "--private-app-password",
+        ),
+    ],
+)
+def test_crm_shopify_takes_a_password_or_a_whole_client_credential(extra, named):
+    shop = [
+        "crm",
+        "n",
+        "--crm-type",
+        "SHOPIFY",
+        "--shop-url",
+        "https://s.myshopify.com",
+    ]
+
+    assert named in _refused([*shop, *extra])
+
+
+def test_crm_client_credentials_are_for_shopify_only():
+    output = _refused(
+        ["crm", "n", "--crm-type", "HUBSPOT", "--api-key", "k", "--client-id", "i"]
+    )
+
+    assert "--client-id" in output
+
+
 def test_options_that_were_not_given_are_left_out():
     body = _create(["opensearch", "os", *_MINIMAL["opensearch"]])
 
@@ -515,7 +547,7 @@ def test_only_one_secret_can_come_from_stdin():
 
 
 def test_a_required_secret_is_prompted_for_without_echo_on_a_terminal(monkeypatch):
-    monkeypatch.setattr(ds, "_interactive", lambda: True)
+    monkeypatch.setattr(ds.output, "no_input", lambda: False)
     with mock.patch.object(ds, "_create_connector") as create:
         result = CliRunner().invoke(
             cli,
@@ -530,7 +562,7 @@ def test_a_required_secret_is_prompted_for_without_echo_on_a_terminal(monkeypatc
 
 def test_an_empty_required_secret_is_treated_as_missing(monkeypatch):
     """An empty value must not satisfy a required secret and carry an empty credential."""
-    monkeypatch.setattr(ds, "_interactive", lambda: False)
+    monkeypatch.setattr(ds.output, "no_input", lambda: True)
 
     result, create = _invoke(
         ["sap-hana", "n", "--host", "h", "--user", "u", "--password", ""]
@@ -924,6 +956,16 @@ def test_test_only_checks_the_connection_and_creates_nothing():
     create.assert_not_called()
     assert send.call_args.args[1][-1] == "testConnection"
     assert send.call_args.kwargs["json_body"]["storageConnectorType"] == "SQL"
+
+
+def test_hopsfs_has_no_connection_test():
+    # The backend's ConnectionChecker refuses HOPSFS; create already checks the dataset.
+    result = CliRunner().invoke(
+        cli, ["datasource", "create", "hopsfs", "n", *_MINIMAL["hopsfs"], "--test"]
+    )
+
+    assert result.exit_code == 2
+    assert "No such option: --test" in result.output
 
 
 def test_a_failed_test_exits_with_the_checkers_output():

@@ -18,8 +18,9 @@ def project_group() -> None:
 def project_list(ctx: click.Context) -> None:
     """Show every project the current user is a member of.
 
+    \f
     Args:
-        ctx: Click context carrying the resolved ``HopsConfig``.
+        ctx: Click context carrying the resolved `HopsConfig`.
     """
     cfg = _require_auth(ctx)
     auth.login(host=cfg.host or "", api_key_value=cfg.api_key, project=cfg.project)
@@ -49,10 +50,13 @@ def project_list(ctx: click.Context) -> None:
 @click.argument("name")
 @click.pass_context
 def project_use(ctx: click.Context, name: str) -> None:
-    """Switch the default project to ``name`` and cache its identifiers.
+    """Switch the default project.
 
+    Switch the default project to `name` and cache its identifiers.
+
+    \f
     Args:
-        ctx: Click context carrying the resolved ``HopsConfig``.
+        ctx: Click context carrying the resolved `HopsConfig`.
         name: Project name to activate.
     """
     cfg = _require_auth(ctx)
@@ -86,7 +90,9 @@ def _feature_store_id(project: Any) -> int | None:
     )
 
     _client = client._get_instance()
-    store = util._append_feature_store_suffix(getattr(project, "name", "") or "")
+    store = util._append_feature_store_suffix(
+        getattr(project, "backing_name", "") or ""
+    )
     try:
         raw = _client._send_request(
             "GET", ["project", _client._project_id, "featurestores", store]
@@ -101,8 +107,9 @@ def _feature_store_id(project: Any) -> int | None:
 def project_info(ctx: click.Context) -> None:
     """Print details about the currently active project.
 
+    \f
     Args:
-        ctx: Click context carrying the resolved ``HopsConfig``.
+        ctx: Click context carrying the resolved `HopsConfig`.
     """
     cfg = _require_auth(ctx)
     project = auth.login(

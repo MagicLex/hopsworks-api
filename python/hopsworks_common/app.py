@@ -48,6 +48,17 @@ _FAILED_STATES = frozenset(
 )
 
 
+def absolute_url(app_url: str) -> str:
+    """The app URL the backend returns (a path under /hopsworks-api) on the client's host."""
+    app_url = app_url.lstrip("/")
+    if app_url.startswith(("http://", "https://")):
+        return app_url
+    base_url = client._get_instance()._base_url.rstrip("/")
+    if app_url.startswith("hopsworks-api/"):
+        return base_url + "/" + app_url
+    return base_url + "/hopsworks-api/" + app_url
+
+
 @public("hopsworks.app.App")
 class App:
     """Represents a Hopsworks Python App."""
@@ -91,6 +102,8 @@ class App:
         idle_scale_to_zero=None,
         idle_cooldown_seconds=None,
         cold_start_timeout_seconds=None,
+        agent_deployment_id=None,
+        agent_chat_app=None,
         **kwargs,
     ):
         self._job_id = job_id
@@ -131,6 +144,8 @@ class App:
         self._idle_scale_to_zero = bool(idle_scale_to_zero)
         self._idle_cooldown_seconds = idle_cooldown_seconds
         self._cold_start_timeout_seconds = cold_start_timeout_seconds
+        self._agent_deployment_id = agent_deployment_id
+        self._agent_chat_app = bool(agent_chat_app)
         # Runtime env-var override; set by AppApi.create_app() and applied on run().
         # Not part of the persisted app config — the backend has no field for it.
         self._env_vars: dict[str, str] | None = None
@@ -152,6 +167,12 @@ class App:
         if json_list and isinstance(json_list, list):
             return [cls.from_response_json(item) for item in json_list]
         return []
+
+    @public
+    @property
+    def job_id(self) -> int | None:
+        """ID of the job that runs the app, the app's ID."""
+        return self._job_id
 
     @public
     @property
@@ -190,14 +211,7 @@ class App:
             ```
         """
         if (self._serving or self._state == "IDLE") and self._app_url:
-            _client = client._get_instance()
-            base_url = _client._base_url.rstrip("/")
-            app_url = self._app_url.lstrip("/")
-            if app_url.startswith(("http://", "https://")):
-                return app_url
-            if app_url.startswith("hopsworks-api/"):
-                return base_url + "/" + app_url
-            return base_url + "/hopsworks-api/" + app_url
+            return absolute_url(self._app_url)
         return None
 
     @public
@@ -412,6 +426,18 @@ class App:
     def cold_start_timeout_seconds(self) -> int | None:
         """Seconds the first request waits for the app to wake, when `idle_scale_to_zero` is set."""
         return self._cold_start_timeout_seconds
+
+    @public
+    @property
+    def agent_deployment_id(self) -> int | None:
+        """The id of the agent deployment the app reaches, if it was created with `agent=` or is an agent's chat app; None otherwise."""
+        return self._agent_deployment_id
+
+    @public
+    @property
+    def agent_chat_app(self) -> bool:
+        """Whether the app is an agent's own chat app (`Agent.create_chat_app()`), as opposed to an app of your own that reaches an agent."""
+        return self._agent_chat_app
 
     @public
     @property

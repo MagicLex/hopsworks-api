@@ -52,6 +52,11 @@ class Command:
         return []
 
     @property
+    def op(self):
+        """The operation, such as `CREATE` for an environment's build or clone."""
+        return self._op
+
+    @property
     def status(self):
         return self._status
 

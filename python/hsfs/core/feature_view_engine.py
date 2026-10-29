@@ -18,11 +18,13 @@ from __future__ import annotations
 import contextlib
 import datetime
 import logging
+import numbers
+import secrets
 import tempfile
 import warnings
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from hopsworks_common import client, constants
+from hopsworks_common import client, constants, events
 from hopsworks_common.client import exceptions
 from hopsworks_common.client.exceptions import FeatureStoreException
 from hopsworks_common.core.constants import HAS_NUMPY
@@ -32,6 +34,7 @@ from hsfs import (
     feature_group,
     feature_view,
     training_dataset_feature,
+    training_dataset_split,
     util,
 )
 from hsfs.constructor.filter import Filter, Logic
@@ -132,6 +135,14 @@ class FeatureViewEngine:
             f"got {type(extra_filter).__name__}."
         )
 
+    @events.tracking(
+        "fv",
+        "create",
+        key=lambda self, feature_view_obj, *a, **k: {
+            "name": feature_view_obj.name,
+            "version": feature_view_obj.version,
+        },
+    )
     def _save(
         self, feature_view_obj: feature_view.FeatureView
     ) -> feature_view.FeatureView:
@@ -267,6 +278,14 @@ class FeatureViewEngine:
             fv = self._feature_view_api._get_by_name(name)
         return fv
 
+    @events.tracking(
+        "fv",
+        "delete",
+        key=lambda self, name, version=None, *a, **k: {
+            "name": name,
+            "version": version,
+        },
+    )
     def _delete(self, name: str, version: int | None = None, force: bool = False):
         if version:
             return self._feature_view_api._delete_by_name_version(name, version, force)
@@ -1097,11 +1116,42 @@ class FeatureViewEngine:
         return [super(td.__class__, td) for td in tds]
 
     def _create_training_data_metadata(self, feature_view_obj, training_dataset_obj):
-        return self._feature_view_api._create_training_dataset(
-            feature_view_obj.name, feature_view_obj.version, training_dataset_obj
-        )
+        training_dataset_split._set_split_method(training_dataset_obj)
+        # The seed salts the hash split, so every read of the version gives the same split.
+        seed = training_dataset_obj.seed
+        if seed is not None:
+            if (
+                isinstance(seed, bool)
+                or not isinstance(seed, numbers.Integral)
+                or not 0 <= seed < 2**63
+            ):
+                raise ValueError(
+                    f"The training dataset seed must be an integer from 0 to 2^63 - 1, got {seed!r}."
+                )
+            training_dataset_obj.seed = int(seed)
+        elif any(
+            split.split_type == TrainingDatasetSplit.RANDOM_SPLIT
+            for split in training_dataset_obj.splits
+        ):
+            training_dataset_obj.seed = secrets.randbits(31)
+        with events.tracked("td", "create", name=feature_view_obj.name) as change:
+            change.detail["fv_version"] = feature_view_obj.version
+            created = self._feature_view_api._create_training_dataset(
+                feature_view_obj.name, feature_view_obj.version, training_dataset_obj
+            )
+            change.key["version"] = getattr(created, "version", None)
+        return created
 
+    @events.tracking(
+        "td",
+        "delete",
+        key=lambda self, feature_view_obj, training_data_version=None, *a, **k: {
+            "name": feature_view_obj.name,
+            "version": training_data_version,
+        },
+    )
     def _delete_training_data(self, feature_view_obj, training_data_version=None):
+        events.note(fv_version=feature_view_obj.version)
         if training_data_version:
             self._feature_view_api._delete_training_data_version(
                 feature_view_obj.name, feature_view_obj.version, training_data_version
@@ -1111,9 +1161,18 @@ class FeatureViewEngine:
                 feature_view_obj.name, feature_view_obj.version
             )
 
+    @events.tracking(
+        "td",
+        "delete",
+        key=lambda self, feature_view_obj, training_data_version=None, *a, **k: {
+            "name": feature_view_obj.name,
+            "version": training_data_version,
+        },
+    )
     def _delete_training_dataset_only(
         self, feature_view_obj, training_data_version=None
     ):
+        events.note(fv_version=feature_view_obj.version)
         if training_data_version:
             self._feature_view_api._delete_training_dataset_only_version(
                 feature_view_obj.name, feature_view_obj.version, training_data_version
