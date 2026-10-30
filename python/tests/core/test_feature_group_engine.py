@@ -2308,8 +2308,15 @@ class TestFeatureGroupEngine:
             feature.Feature(name="n", type="int"),
         ]
 
-        # Act and Assert
-        for df_type in ("decimal(7,0)", "decimal(1,0)", "decimal(12,3)"):
+        # Act and Assert: decimal(7,0) is decimal(7)
+        fg_engine._verify_schema_compatibility(
+            fg_features,
+            [
+                feature.Feature(name="amount", type="decimal(7,0)"),
+                feature.Feature(name="n", type="int"),
+            ],
+        )
+        for df_type in ("decimal(1,0)", "decimal(12,3)"):
             df_features = [
                 feature.Feature(name="amount", type=df_type),
                 feature.Feature(name="n", type="int"),
