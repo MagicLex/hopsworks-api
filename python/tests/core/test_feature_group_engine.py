@@ -2422,7 +2422,10 @@ class TestFeatureGroupEngine:
         )
 
         # Assert
-        assert mock_verify.call_args.kwargs == {"decimals_cast": True}
+        assert mock_verify.call_args.kwargs == {
+            "decimals_cast": True,
+            "timestamp_ntz_converts": True,
+        }
 
     def test_delta_rs_casts_decimals_lowercase_setter(self, mocker):
         # Arrange
