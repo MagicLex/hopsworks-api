@@ -24,7 +24,11 @@ its "Apps built by `/hops app`" and "Fix loop" sections and `references/app_skel
   hops app deploy <name> apps/<name>
   ```
 
-  It uploads the directory to `Users/<user>/apps/<name>/`, runs the app in a clone
+  It uploads the directory to `Resources/apps/<name>/`, where every member of the project can
+  start it, and records a hash of the folder in the app: a start runs a copy of the folder only
+  when it matches, so anything else written there makes the next start fail until a redeploy.
+  The app reads its folder once at start and runs from that copy: data it writes or reads goes
+  in the project's datasets or the feature store, never the app's folder. It runs the app in a clone
   `<name>-app-env` when `app-requirements.txt` exists, creates or redeploys the app, and returns
   once the new execution serves `/health`, the URL on the last line. A non-zero exit names the
   next step. `hops app info <name>` must show `Routing: root`: in the compatibility prefix mode the proxy forwards
