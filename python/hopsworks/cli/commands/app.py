@@ -215,6 +215,8 @@ _RUNNING_APP_STATES = frozenset(
         "STARTING_APP_MASTER",
         "AGGREGATING_LOGS",
         "DEPLOYING",
+        # Scaled to zero: the execution goes on with no pod, so the backend refuses a second start.
+        "IDLE",
     }
 )
 

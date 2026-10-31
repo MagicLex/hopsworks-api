@@ -1197,6 +1197,16 @@ def test_deploy_waits_for_the_new_execution_of_a_running_app(mock_project, tmp_p
     assert apps.polled.call_count == 2
 
 
+def test_deploy_redeploys_an_idle_app(mock_project, tmp_path):
+    # An app scaled to zero keeps its execution: starting it again is refused.
+    root = _app_dir(tmp_path)
+    idle = _app(3, "IDLE", serving=False)
+    result, _, _ = _deploy(mock_project, root, existing=idle, polls=[_app(4)])
+    assert result.exit_code == 0, result.output
+    idle.redeploy.assert_called_once_with(await_serving=False)
+    idle.run.assert_not_called()
+
+
 def test_deploy_starts_a_stopped_app(mock_project, tmp_path):
     root = _app_dir(tmp_path)
     stopped = _app(3, "KILLED", serving=False)
