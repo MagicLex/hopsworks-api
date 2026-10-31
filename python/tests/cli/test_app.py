@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import types
 from unittest import mock
 
 import pytest
@@ -808,7 +809,7 @@ def test_app_info_surfaces_not_found(mock_project):
 
 # --- deploy ------------------------------------------------------------------
 
-_SOURCE = "/Projects/demo/Users/scott/apps/shop/app.py"
+_SOURCE = "/Projects/demo/Resources/apps/shop/app.py"
 _URL = "https://h/hopsworks-api/pythonapp/demo/shop/"
 
 
@@ -844,16 +845,37 @@ def _deploy(
     apps = mock_project.get_app_api.return_value
     apps.get_app.side_effect = [existing, *polls]
     dataset_api = mock_project.get_dataset_api.return_value
-    present = {"Users/scott"}
+    present = {"Resources"}
     files = dict(hopsfs or {})
     if remote is not None:
-        files["Users/scott/apps/shop/app-requirements.txt"] = remote
+        files["Resources/apps/shop/app-requirements.txt"] = remote
     present.update(files)
     dataset_api.exists.side_effect = present.__contains__
     dataset_api.mkdir.side_effect = present.add
     dataset_api.read_content.side_effect = lambda path: (
         mock.MagicMock(content=files[path].encode()) if path in files else None
     )
+
+    def listing(path, cls, offset=0, limit=1000):
+        names = {}
+        for full in files:
+            if full.startswith(f"{path}/"):
+                head, _, rest = full[len(path) + 1 :].partition("/")
+                names[head] = names.get(head, False) or bool(rest)
+        page = [
+            types.SimpleNamespace(name=n, dir=is_dir)
+            for n, is_dir in sorted(names.items())
+        ]
+        return len(page), page[offset : offset + limit]
+
+    def remove(path):
+        for full in [f for f in files if f == path or f.startswith(f"{path}/")]:
+            del files[full]
+        dataset_api.removed.append(path)
+
+    dataset_api.removed = []
+    dataset_api._list_dataset_path.side_effect = listing
+    dataset_api.remove.side_effect = remove
     user = mock.MagicMock()
     user.username = "scott"
     users_api = mock.MagicMock()
@@ -912,13 +934,13 @@ def test_deploy_creates_the_app_and_prints_the_url_last(mock_project, tmp_path):
         for c in dataset_api.upload.call_args_list
     ]
     assert uploads == [
-        (str(root / "app.py"), "Users/scott/apps/shop", True),
-        (str(root / "static" / "index.html"), "Users/scott/apps/shop/static", True),
+        (str(root / "app.py"), "Resources/apps/shop", True),
+        (str(root / "static" / "index.html"), "Resources/apps/shop/static", True),
     ]
     assert [c.args[0] for c in dataset_api.mkdir.call_args_list] == [
-        "Users/scott/apps",
-        "Users/scott/apps/shop",
-        "Users/scott/apps/shop/static",
+        "Resources/apps",
+        "Resources/apps/shop",
+        "Resources/apps/shop/static",
     ]
 
 
@@ -934,6 +956,16 @@ def test_deploy_waits_for_the_new_execution_of_a_running_app(mock_project, tmp_p
     assert apps.get_app.call_count == 3
 
 
+def test_deploy_redeploys_an_idle_app(mock_project, tmp_path):
+    # An app scaled to zero keeps its execution: starting it again is refused.
+    root = _app_dir(tmp_path)
+    idle = _app(3, "IDLE", serving=False)
+    result, _, _ = _deploy(mock_project, root, existing=idle, polls=[_app(4)])
+    assert result.exit_code == 0, result.output
+    idle.redeploy.assert_called_once_with(await_serving=False)
+    idle.run.assert_not_called()
+
+
 def test_deploy_starts_a_stopped_app(mock_project, tmp_path):
     root = _app_dir(tmp_path)
     stopped = _app(3, "KILLED", serving=False)
@@ -941,6 +973,49 @@ def test_deploy_starts_a_stopped_app(mock_project, tmp_path):
     assert result.exit_code == 0, result.output
     stopped.run.assert_called_once_with(await_serving=False)
     stopped.redeploy.assert_not_called()
+
+
+def test_deploy_moves_an_app_from_its_creators_home_to_resources(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path)
+    old = _app(3)
+    old.app_path = "hdfs:///Projects/demo/Users/scott/apps/shop/app.py"
+    result, apps, _ = _deploy(mock_project, root, existing=old, polls=[_app(4)])
+    assert result.exit_code == 0, result.output
+    apps._set_app_files.assert_called_once_with("shop", _SOURCE, mock.ANY)
+    assert "Moved app shop to Resources/apps/shop" in result.output
+
+
+def test_deploy_hashes_exactly_what_it_leaves_in_the_folder(mock_project, tmp_path):
+    import hashlib
+
+    root = _app_dir(tmp_path)
+    leftover = {
+        "Resources/apps/shop/old.py": "x",
+        "Resources/apps/shop/gone/a.txt": "y",
+    }
+    result, apps, dataset_api = _deploy(
+        mock_project, root, existing=_app(3), polls=[_app(4)], hopsfs=leftover
+    )
+    assert result.exit_code == 0, result.output
+    assert "Moved app" not in result.output
+    assert sorted(dataset_api.removed) == [
+        "Resources/apps/shop/gone",
+        "Resources/apps/shop/old.py",
+    ]
+    tree = hashlib.sha256()
+    for relative, body in [("app.py", b"app"), ("static/index.html", b"<p>hi</p>")]:
+        tree.update(f"{relative}\0{hashlib.sha256(body).hexdigest()}\n".encode())
+    apps._set_app_files.assert_called_once_with("shop", _SOURCE, tree.hexdigest())
+
+
+def test_deploy_refuses_an_all_digit_name(mock_project, tmp_path):
+    root = _app_dir(tmp_path)
+    result = CliRunner().invoke(cli, ["app", "deploy", "123", str(root)], obj={})
+    assert result.exit_code == 1
+    assert "App name '123' is all digits" in result.output
+    mock_project.get_app_api.return_value.create_app.assert_not_called()
 
 
 def test_deploy_fails_when_the_new_execution_fails(mock_project, tmp_path):
@@ -1005,7 +1080,7 @@ def _resolved(*packages):
 def _node_app(execution_id, env="shop-app-env"):
     a = _app(execution_id, env=env)
     a.app_kind = "NODEJS"
-    a.app_path = "hdfs:///Projects/demo/Users/scott/apps/shop/server.mjs"
+    a.app_path = "hdfs:///Projects/demo/Resources/apps/shop/server.mjs"
     return a
 
 
@@ -1022,7 +1097,7 @@ def test_deploy_ships_a_node_app_with_its_dependencies(mock_project, tmp_path):
     assert apps.create_app.call_args.kwargs == {
         "name": "shop",
         "app_kind": "NODEJS",
-        "app_path": "/Projects/demo/Users/scott/apps/shop/server.mjs",
+        "app_path": "/Projects/demo/Resources/apps/shop/server.mjs",
         "app_port": 8080,
         "readiness_probe_path": "/health",
         "environment": "shop-app-env",
@@ -1052,8 +1127,8 @@ def test_deploy_skips_the_install_of_an_unchanged_node_app(mock_project, tmp_pat
         existing=_node_app(3),
         polls=[_node_app(4)],
         hopsfs={
-            "Users/scott/apps/shop/package.json": _PACKAGE,
-            "Users/scott/apps/shop/package-lock.json": _LOCKFILE,
+            "Resources/apps/shop/package.json": _PACKAGE,
+            "Resources/apps/shop/package-lock.json": _LOCKFILE,
         },
     )
     assert result.exit_code == 0, result.output
@@ -1194,7 +1269,7 @@ def test_deploy_clones_and_installs_the_requirements(mock_project, tmp_path):
         await_creation=True,
     )
     clone.install_requirements.assert_called_once_with(
-        "/Projects/demo/Users/scott/apps/shop/app-requirements.txt",
+        "/Projects/demo/Resources/apps/shop/app-requirements.txt",
         await_installation=True,
     )
     assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env"
@@ -1243,7 +1318,7 @@ def test_deploy_json_lists_every_file_with_its_sha256(mock_project, tmp_path):
     payload = json.loads(result.output)
     assert payload["url"] == _URL
     assert payload["environment"] == "python-agent-pipeline"
-    assert payload["source"] == "Users/scott/apps/shop"
+    assert payload["source"] == "Resources/apps/shop"
     assert payload["files"] == [
         {"path": "app.py", "sha256": hashlib.sha256(b"app").hexdigest()},
         {

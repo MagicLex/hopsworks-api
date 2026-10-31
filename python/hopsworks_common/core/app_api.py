@@ -352,6 +352,18 @@ class AppApi:
         created._env_vars = dict(env_vars) if env_vars else None
         return created
 
+    def _set_app_files(self, app_name: str, app_path: str, files_sha256: str):
+        """Set the file an app runs and the hash of its folder; its next start runs only those files."""
+        _client = client._get_instance()
+        path_params = ["project", _client._project_id, "jobs", app_name]
+        headers = {"content-type": "application/json"}
+        config = _client._send_request("GET", path_params, headers=headers)["config"]
+        config["appPath"] = app_path
+        config["appFilesSha256"] = files_sha256
+        _client._send_request(
+            "PUT", path_params, headers=headers, data=json.dumps(config)
+        )
+
     def _start(self, app_name: str, env_vars: dict[str, str] | None = None):
         """Start an app execution.
 

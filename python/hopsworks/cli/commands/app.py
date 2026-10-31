@@ -208,6 +208,8 @@ _RUNNING_APP_STATES = frozenset(
         "STARTING_APP_MASTER",
         "AGGREGATING_LOGS",
         "DEPLOYING",
+        # Scaled to zero: the execution goes on with no pod, so the backend refuses a second start.
+        "IDLE",
     }
 )
 
@@ -597,7 +599,7 @@ def app_deploy(
 ) -> None:
     """Create or update an app from a local directory.
 
-    Uploads LOCAL_DIR to `Users/<user>/apps/<name>/` (overwriting, skipping
+    Uploads LOCAL_DIR to `Resources/apps/<name>/` (overwriting, skipping
     dotfiles, `__pycache__` and a Node app's `node_modules`), prepares the
     environment, creates the app or redeploys it, and waits until the new
     execution serves. `app.py` runs as a custom app; without one, a
@@ -621,6 +623,11 @@ def app_deploy(
     import hopsworks
     from hopsworks.cli.commands.files import makedirs
 
+    if name.isdigit():
+        # Hopsworks keeps per-app markers under Resources/apps/<job id>/.
+        raise click.ClickException(
+            f"App name '{name}' is all digits: pick a name with a letter."
+        )
     kind, entry = _app_entry(local_dir)
     node = kind == "NODEJS"
     files = _deploy_files(local_dir, node)
@@ -630,7 +637,10 @@ def app_deploy(
         username = hopsworks.get_users_api()._get_current_user().username
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not resolve your username: {exc}") from exc
-    remote_dir = f"Users/{username}/apps/{name}"
+    # In Resources every member can read the app, so any member can start it; the
+    # backend runs only files its creator owns.
+    remote_dir = f"Resources/apps/{name}"
+    home_dir = f"Users/{username}/apps/{name}"
     app_path = f"/Projects/{project.name}/{remote_dir}/{entry}"
     has_requirements = wanted is not None
     env_name = environment or (
@@ -642,13 +652,20 @@ def app_deploy(
         existing = apps.get_app(name)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not find app '{name}': {exc}") from exc
+    # An app deployed to its creator's home moves to Resources at this deploy.
+    moving = existing is not None and (
+        getattr(existing, "app_path", None) or ""
+    ).endswith(f"{home_dir}/{entry}")
     if existing is not None:
         # The SDK cannot change an app's kind, file or environment, so a mismatch
         # would keep serving something else than what was uploaded.
         existing_kind = (getattr(existing, "app_kind", None) or "CUSTOM").upper()
         if (existing_kind == "NODEJS") != node or not (
-            getattr(existing, "app_path", None) or ""
-        ).endswith(f"{remote_dir}/{entry}"):
+            moving
+            or (getattr(existing, "app_path", None) or "").endswith(
+                f"{remote_dir}/{entry}"
+            )
+        ):
             label = AppApi.APP_KIND_LABELS.get(existing_kind, existing_kind)
             raise click.ClickException(
                 f"App '{name}' is a {label} app running {existing.app_path}, not {app_path}. "
@@ -667,7 +684,9 @@ def app_deploy(
     # Before the upload: what the environment last got is what HopsFS holds.
     try:
         requirements_changed = (
-            has_requirements and _wanted_remote(dataset_api, remote_dir, node) != wanted
+            has_requirements
+            and _wanted_remote(dataset_api, home_dir if moving else remote_dir, node)
+            != wanted
         )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
@@ -712,8 +731,20 @@ def app_deploy(
             _what(node),
         )
 
+    contents = {relative: Path(local_dir, relative).read_bytes() for relative in files}
+    try:
+        _prune(dataset_api, remote_dir, set(contents))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not clear old files from {remote_dir}: {exc}"
+        ) from exc
+    files_sha256 = _tree_sha256(contents)
     previous = None
     try:
+        if existing is not None:
+            apps._set_app_files(name, app_path, files_sha256)
+            if moving:
+                output.success("✓ Moved app %s to %s", name, remote_dir)
         if existing is None:
             a = apps.create_app(
                 **_accepted_kwargs(
@@ -729,6 +760,7 @@ def app_deploy(
                     },
                 )
             )
+            apps._set_app_files(name, app_path, files_sha256)
             output.success("✓ Created app %s", name)
             a.run(await_serving=False)
         elif _app_is_running(existing):
@@ -751,6 +783,7 @@ def app_deploy(
                 "state": getattr(a, "state", None),
                 "environment": env_name,
                 "source": remote_dir,
+                "files_sha256": files_sha256,
                 "files": [
                     {
                         "path": relative,
@@ -932,6 +965,47 @@ def _deploy_files(local_dir: str, node: bool = False) -> list[str]:
                     )
                 )
     return sorted(found)
+
+
+def _tree_sha256(files: dict[str, bytes]) -> str:
+    """The hash of an app folder, as the app's container computes it over its copy before running it.
+
+    sha256 over `<relative path>\\0<hex sha256 of the file>\\n` for every file, sorted by
+    the path's bytes. The job config keeps it, which only the app's creator or a Data
+    owner may change, so a file another member writes into the folder fails the start.
+    """
+    import hashlib
+
+    tree = hashlib.sha256()
+    for relative in sorted(files, key=str.encode):
+        digest = hashlib.sha256(files[relative]).hexdigest()
+        tree.update(f"{relative}\0{digest}\n".encode())
+    return tree.hexdigest()
+
+
+def _prune(dataset_api: Any, remote_dir: str, keep: set[str]) -> None:
+    """Remove what `remote_dir` holds beyond `keep` (relative file paths): the folder holds exactly what was hashed."""
+    from hopsworks_common.core import inode
+
+    def walk(relative: str) -> None:
+        path = f"{remote_dir}/{relative}".rstrip("/")
+        items, offset = [], 0
+        while True:
+            count, page = dataset_api._list_dataset_path(
+                path, inode.Inode, offset=offset, limit=1000
+            )
+            items.extend(page)
+            offset += len(page)
+            if not page or offset >= count:
+                break
+        for item in items:
+            child = f"{relative}/{item.name}".lstrip("/")
+            if item.dir and any(k.startswith(f"{child}/") for k in keep):
+                walk(child)
+            elif item.dir or child not in keep:
+                dataset_api.remove(f"{remote_dir}/{child}")
+
+    walk("")
 
 
 def _local_text(path: str) -> str:
