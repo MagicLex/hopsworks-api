@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import types
 from unittest import mock
 
 import pytest
@@ -990,7 +991,7 @@ def test_app_info_surfaces_not_found(mock_project):
 
 # --- deploy ------------------------------------------------------------------
 
-_SOURCE = "/Projects/demo/Users/scott/apps/shop/app.py"
+_SOURCE = "/Projects/demo/Resources/apps/shop/app.py"
 _URL = "https://h/hopsworks-api/pythonapp/demo/shop/"
 # What the backend returns as appUrl: a path, which the CLI puts on the client's host.
 _PATH = "/hopsworks-api/pythonapp/demo/shop/"
@@ -1037,11 +1038,11 @@ def _deploy(
     apps.get_app.return_value = existing
     dataset_api = mock_project.get_dataset_api.return_value
     node = (root / "package.json").exists() and not (root / "app.py").exists()
-    record = f"Users/scott/apps/shop/{'.app-package.installed' if node else '.app-requirements.installed'}"
+    record = f"Resources/apps/shop/{'.app-package.installed' if node else '.app-requirements.installed'}"
     files = dict(hopsfs or {})
     if installed is not None:
         files[record] = installed
-    present = {"Users/scott"}
+    present = {"Resources"}
     dataset_api.exists.side_effect = lambda path: path in present or path in files
     dataset_api.mkdir.side_effect = present.add
     dataset_api.read_content.side_effect = lambda path: (
@@ -1060,6 +1061,27 @@ def _deploy(
             dataset_api.records.append(text)
 
     dataset_api.upload.side_effect = upload
+
+    def listing(path, cls, offset=0, limit=1000):
+        names = {}
+        for full in files:
+            if full.startswith(f"{path}/"):
+                head, _, rest = full[len(path) + 1 :].partition("/")
+                names[head] = names.get(head, False) or bool(rest)
+        page = [
+            types.SimpleNamespace(name=n, dir=is_dir)
+            for n, is_dir in sorted(names.items())
+        ]
+        return len(page), page[offset : offset + limit]
+
+    def remove(path):
+        for full in [f for f in files if f == path or f.startswith(f"{path}/")]:
+            del files[full]
+        dataset_api.removed.append(path)
+
+    dataset_api.removed = []
+    dataset_api._list_dataset_path.side_effect = listing
+    dataset_api.remove.side_effect = remove
     username = user
     user = mock.MagicMock()
     user.username = username
@@ -1130,13 +1152,13 @@ def test_deploy_creates_the_app_and_prints_the_url_last(mock_project, tmp_path):
         for c in dataset_api.upload.call_args_list
     ]
     assert uploads == [
-        (str(root / "app.py"), "Users/scott/apps/shop", True),
-        (str(root / "static" / "index.html"), "Users/scott/apps/shop/static", True),
+        (str(root / "app.py"), "Resources/apps/shop", True),
+        (str(root / "static" / "index.html"), "Resources/apps/shop/static", True),
     ]
     assert [c.args[0] for c in dataset_api.mkdir.call_args_list] == [
-        "Users/scott/apps",
-        "Users/scott/apps/shop",
-        "Users/scott/apps/shop/static",
+        "Resources/apps",
+        "Resources/apps/shop",
+        "Resources/apps/shop/static",
     ]
 
 
@@ -1192,6 +1214,49 @@ def test_deploy_fails_when_the_new_execution_fails(mock_project, tmp_path):
     assert result.exit_code == 1
     assert "Could not deploy app 'shop': it stopped in state FAILED." in result.output
     assert "hops app logs shop" in result.output
+
+
+def test_deploy_moves_an_app_from_its_creators_home_to_resources(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path)
+    old = _app(3)
+    old.app_path = "hdfs:///Projects/demo/Users/scott/apps/shop/app.py"
+    result, apps, _ = _deploy(mock_project, root, existing=old, polls=[_app(4)])
+    assert result.exit_code == 0, result.output
+    apps._set_app_files.assert_called_once_with("shop", _SOURCE, mock.ANY)
+    assert "Moved app shop to Resources/apps/shop" in result.output
+
+
+def test_deploy_hashes_exactly_what_it_leaves_in_the_folder(mock_project, tmp_path):
+    import hashlib
+
+    root = _app_dir(tmp_path)
+    leftover = {
+        "Resources/apps/shop/old.py": "x",
+        "Resources/apps/shop/gone/a.txt": "y",
+    }
+    result, apps, dataset_api = _deploy(
+        mock_project, root, existing=_app(3), polls=[_app(4)], hopsfs=leftover
+    )
+    assert result.exit_code == 0, result.output
+    assert "Moved app" not in result.output
+    assert sorted(dataset_api.removed) == [
+        "Resources/apps/shop/gone",
+        "Resources/apps/shop/old.py",
+    ]
+    tree = hashlib.sha256()
+    for relative, body in [("app.py", b"app"), ("static/index.html", b"<p>hi</p>")]:
+        tree.update(f"{relative}\0{hashlib.sha256(body).hexdigest()}\n".encode())
+    apps._set_app_files.assert_called_once_with("shop", _SOURCE, tree.hexdigest())
+
+
+def test_deploy_refuses_an_all_digit_name(mock_project, tmp_path):
+    root = _app_dir(tmp_path)
+    result = CliRunner().invoke(cli, ["app", "deploy", "123", str(root)], obj={})
+    assert result.exit_code == 1
+    assert "App name '123' is all digits" in result.output
+    mock_project.get_app_api.return_value.create_app.assert_not_called()
 
 
 def test_deploy_refuses_an_app_in_another_environment(mock_project, tmp_path):
@@ -1271,7 +1336,7 @@ def _assert_installs(env, packages):
 def _node_app(execution_id, env="shop-app-env"):
     a = _app(execution_id, env=env)
     a.app_kind = "NODEJS"
-    a.app_path = "hdfs:///Projects/demo/Users/scott/apps/shop/server.mjs"
+    a.app_path = "hdfs:///Projects/demo/Resources/apps/shop/server.mjs"
     return a
 
 
@@ -1284,7 +1349,7 @@ def test_deploy_ships_a_node_app_with_its_dependencies(mock_project, tmp_path):
     assert apps.create_app.call_args.kwargs == {
         "name": "shop",
         "app_kind": "NODEJS",
-        "app_path": "/Projects/demo/Users/scott/apps/shop/server.mjs",
+        "app_path": "/Projects/demo/Resources/apps/shop/server.mjs",
         "app_port": 8080,
         "readiness_probe_path": "/health",
         "environment": "shop-app-env",
@@ -1479,7 +1544,7 @@ def test_deploy_clones_and_installs_the_requirements(mock_project, tmp_path):
         await_creation=True,
     )
     clone.install_requirements.assert_called_once_with(
-        "/Projects/demo/Users/scott/apps/shop/app-requirements.txt",
+        "/Projects/demo/Resources/apps/shop/app-requirements.txt",
         await_installation=True,
     )
     assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env"
@@ -1552,7 +1617,7 @@ def test_deploy_into_a_shared_app_environment_clones_your_own_copy(
         await_creation=False,
     )
     envs.envs["shop-app-env-scott"].install_requirements.assert_called_once_with(
-        "/Projects/demo/Users/scott/apps/shop/app-requirements.txt",
+        "/Projects/demo/Resources/apps/shop/app-requirements.txt",
         await_installation=True,
     )
     assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env-scott"
@@ -1715,7 +1780,7 @@ def test_deploy_json_lists_every_file_with_its_sha256(mock_project, tmp_path):
     payload = json.loads(result.output)
     assert payload["url"] == _URL
     assert payload["environment"] == "python-agent-pipeline"
-    assert payload["source"] == "Users/scott/apps/shop"
+    assert payload["source"] == "Resources/apps/shop"
     assert payload["files"] == [
         {"path": "app.py", "sha256": hashlib.sha256(b"app").hexdigest()},
         {
@@ -1821,7 +1886,12 @@ def test_deploy_names_the_scheduler_message_of_a_queued_app_on_timeout(
     root = _app_dir(tmp_path)
     queued = {**backend("app_queued"), "executionId": 4}
     result, _, _ = _deploy(
-        mock_project, root, "--timeout", "30", existing=_app(3), polls=[queued] * _POLLS_PAST_30_S
+        mock_project,
+        root,
+        "--timeout",
+        "30",
+        existing=_app(3),
+        polls=[queued] * _POLLS_PAST_30_S,
     )
     assert result.exit_code == 1
     message = PENDING_REASON.removeprefix("FailedScheduling: ").rstrip(".")
@@ -1832,7 +1902,12 @@ def test_deploy_names_the_stuck_state_and_reason_on_timeout(mock_project, tmp_pa
     root = _app_dir(tmp_path)
     pending = {**backend("app_pending"), "executionId": 4}
     result, _, _ = _deploy(
-        mock_project, root, "--timeout", "30", existing=_app(3), polls=[pending] * _POLLS_PAST_30_S
+        mock_project,
+        root,
+        "--timeout",
+        "30",
+        existing=_app(3),
+        polls=[pending] * _POLLS_PAST_30_S,
     )
     assert result.exit_code == 1
     assert (
@@ -1907,7 +1982,7 @@ def test_prepare_env_clones_and_installs_and_the_deploy_skips_the_install(
         await_creation=True,
     )
     envs.envs["shop-app-env"].install_requirements.assert_called_once_with(
-        "/Projects/demo/Users/scott/apps/shop/app-requirements.txt",
+        "/Projects/demo/Resources/apps/shop/app-requirements.txt",
         await_installation=True,
     )
     assert dataset_api.records == ["shop-app-env\npolars==1.0\n"]
