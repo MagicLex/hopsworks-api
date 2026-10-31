@@ -16,18 +16,22 @@ The offline store is lakehouse tables (Hudi, Delta, or Iceberg), and these are q
 Offline feature groups are queried through Trino with this reference pattern:
 
 ```
-delta.<project_name>_featurestore.<fg_name>_<fg_version>
-hudi.<project_name>_featurestore.<fg_name>_<fg_version>
+delta.<feature_store>.<fg_name>_<fg_version>
+hudi.<feature_store>.<fg_name>_<fg_version>
 ```
 
 - Catalog is `delta` for Delta feature groups, `hudi` for Hudi ones.
-- Schema is `<project_name>_featurestore` (project name lowercase).
+- Schema is the project's feature store, `<backing name>_featurestore` (lowercase): the project's
+  backing name, which can differ from its display name. Read it with
+  `project.get_feature_store().name`; `hops sql` and `hops trino query` use it by default, so
+  `<fg_name>_<version>` alone reads a feature group there.
 - Table is `<fg_name>_<version>` — the version suffix is required.
 
 ### Caveats
 
 - The CLI's default catalog is `iceberg`, so always **fully-qualify** with
   `delta.`/`hudi.` (or pass `--catalog delta`) when reading feature groups.
+- An external feature group (a mounted data source) has no table in `delta`, `hudi`, `hive` or `iceberg`: `hops sql` fails with `TABLE_NOT_FOUND`. Read a mount with `hops fg preview <fg>` or `fg.read()`.
 - `--limit` caps rows (default soft cap; `--limit 0` = unlimited). `-f file.sql`
   runs a query from a file; `-i` reads from stdin.
 - **Do not query a Delta group before its first commit.** A stream feature group's
@@ -53,11 +57,11 @@ hudi.<project_name>_featurestore.<fg_name>_<fg_version>
 ## Commands / API
 
 ```bash
-hops trino query "SELECT * FROM delta.<project>_featurestore.<fg>_1 LIMIT 5"
+hops trino query "SELECT * FROM delta.<feature_store>.<fg>_1 LIMIT 5"
 hops trino catalogs                       # delta, hive, hudi, iceberg, ...
 hops trino schemas delta                  # schemas in a catalog
-hops trino tables delta.<project>_featurestore
-hops trino describe delta.<project>_featurestore.<fg>_1
+hops trino tables delta.<feature_store>
+hops trino columns delta.<feature_store>.<fg>_1
 ```
 
 ## Related skills

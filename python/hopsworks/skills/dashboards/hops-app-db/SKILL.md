@@ -64,7 +64,7 @@ the project's Trino coordinator, so an app in any language can read the
 | `TRINO_HOST` / `TRINO_PORT` | internal DNS name and HTTPS port (`8443`) of the Trino coordinator |
 | `TRINO_USER` | `<project>__<username>` of the person who **started** the app (the HDFS username, two underscores) |
 | `TRINO_PASSWORD_SECRET_NAME` | name of the **Hopsworks secret** holding that user's Trino password (same string as `TRINO_USER`) |
-| `TRINO_SCHEMA` | `<project>_featurestore`, the project's offline feature store schema |
+| `TRINO_SCHEMA` | `<backing name>_featurestore`, the project's offline feature store schema (the backing name can differ from the display name) |
 
 There is deliberately **no `TRINO_CATALOG`**: the catalog depends on each feature
 group's format, so pick it in the app.
@@ -337,13 +337,13 @@ missing variable, so guard local development on `inHopsworks()`.
 ## Commands / API
 
 ```bash
-hops app create <name> --path /Projects/<p>/Users/<u>/app.py --start   # db access on by default
+hops app create <name> --path /Projects/<p>/Users/<u>/app.py --entrypoint-command "python app.py" --start   # db access on by default
 hops app create <name> ... --no-db-access                              # opt out
 hops app info <name>                                                   # "Database access" row
 ```
 
 ```python
-apps.create_app(name=..., app_path=..., db_access=True)   # default
+apps.create_app(name=..., app_path=..., entrypoint_command="python app.py", db_access=True)   # default
 app.db_access
 ```
 

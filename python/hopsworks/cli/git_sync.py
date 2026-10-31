@@ -35,13 +35,13 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 import click
 from hopsworks.cli import config, output
 from hopsworks.cli.commands import git as git_cmd
+from hopsworks.cli.commands.files import makedirs
 
 
 _NOT_REPO_ROOT = (
@@ -432,7 +432,7 @@ def _ensure_clean_and_pushed(state: dict, interactive: bool) -> bool:
             "then re-run)."
         )
         return False
-    if not click.confirm(
+    if not output.ask(
         "You have uncommitted/unpushed work. Commit and push it now?",
         default=False,
     ):
@@ -451,7 +451,7 @@ def _ensure_clean_and_pushed(state: dict, interactive: bool) -> bool:
             output.info("Uncommitted changes:")
             for line in dirty.splitlines():
                 output.info("  %s", line)
-            if click.confirm(
+            if output.ask(
                 "Nothing is staged; stage the modified tracked files (untracked "
                 "files stay local)?",
                 default=False,
@@ -508,9 +508,8 @@ def _stage_key(dataset_api, teleport_user_root: str, key: Path) -> str | None:
                         key_name,
                     )
         return key_name
-    with contextlib.suppress(Exception):
-        dataset_api.mkdir(ssh_dir)
     try:
+        makedirs(dataset_api, ssh_dir)
         dataset_api.upload(local_path=str(key), upload_path=ssh_dir, overwrite=False)
         if pub_line:
             with tempfile.TemporaryDirectory() as tmp:
@@ -571,7 +570,7 @@ def _ensure_token(host: str, interactive: bool) -> bool:
         "in the manifest).",
         provider,
     )
-    if not click.confirm(f"Register a {provider} token for {host} now?", default=True):
+    if not output.ask(f"Register a {provider} token for {host} now?", default=True):
         output.info("git sync skipped.")
         return False
     username = click.prompt(f"{provider} username")
@@ -645,7 +644,7 @@ def maybe_collect(dataset_api, teleport_user_root: str) -> dict | None:
         return None
     host = _remote_host(url)
 
-    interactive = not output.JSON_MODE and sys.stdin.isatty()
+    interactive = not output.JSON_MODE and not output.no_input()
     prefs = _prefs()
     answer = prefs.get("answer")
     if answer == "never":

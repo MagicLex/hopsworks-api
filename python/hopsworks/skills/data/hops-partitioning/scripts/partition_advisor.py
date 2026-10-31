@@ -2,7 +2,7 @@
 """Whether a table built from a bronze feature group should be partitioned by time.
 
 Reads the bronze table's Parquet files where the Hopsworks terminal mounts the
-feature store (/hopsfs/featurestore/<project>_featurestore.db/<fg>_<version>):
+feature store (/hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version>):
 their sizes, row counts, and the minimum and maximum of the time column from
 the Parquet footers, without reading any data. From the bytes per hour, day
 and week over that span it recommends no partitioning, or partitioning by the

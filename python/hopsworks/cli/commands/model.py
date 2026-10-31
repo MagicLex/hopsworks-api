@@ -14,11 +14,12 @@ from typing import Any
 
 import click
 from hopsworks.cli import lineage, output, session, versions
+from hopsworks.cli.commands.job import _ts_label
 
 
 @click.group("model")
 def model_group() -> None:
-    """Model registry commands."""
+    """Models in the model registry."""
 
 
 @model_group.command("list")
@@ -26,6 +27,7 @@ def model_group() -> None:
 def model_list(ctx: click.Context) -> None:
     """List every model registered in the active project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -52,6 +54,7 @@ def model_list(ctx: click.Context) -> None:
 def model_info(ctx: click.Context, name: str, version: int | None) -> None:
     """Show details for a single model version.
 
+    \f
     Args:
         ctx: Click context.
         name: Model name.
@@ -62,25 +65,159 @@ def model_info(ctx: click.Context, name: str, version: int | None) -> None:
     try:
         model = versions.model(mr, name, version)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Model '{name}' not found: {exc}") from exc
+        raise click.ClickException(f"Could not find model '{name}': {exc}") from exc
 
     if model is None:
         raise click.ClickException(f"Model '{name}' not found.")
 
     if output.JSON_MODE:
-        output.print_json(_model_to_dict(model))
+        output.print_json({**_model_to_dict(model), "images": _images(project, model)})
         return
 
     rows = [
         ["Name", getattr(model, "name", "?")],
         ["Version", getattr(model, "version", "?")],
         ["Framework", getattr(model, "framework", "-")],
-        ["Created", getattr(model, "created", "-")],
-        ["Metrics", _short_metrics(getattr(model, "training_metrics", {}) or {})],
+        ["Created", _ts_label(getattr(model, "created", None))],
+        ["Feature view", _feature_view_label(model)],
+        ["Training dataset", getattr(model, "training_dataset_version", None) or "-"],
+        ["Metrics", _short_metrics(getattr(model, "training_metrics", {}) or {}, None)],
         ["Description", output.first_line(getattr(model, "description", ""))],
         ["Tags", output.format_mapping(output.read_tags(model))],
+        ["Images", ", ".join(_images(project, model)) or "-"],
     ]
     output.print_table(["FIELD", "VALUE"], rows)
+
+
+@model_group.command("runs")
+@click.argument("name")
+@click.option("--sweep", help="Only the runs of this sweep id.")
+@click.option(
+    "--sort",
+    help="Metric to rank by; defaults to the metric each run.json names.",
+)
+@click.pass_context
+def model_runs(
+    ctx: click.Context, name: str, sweep: str | None, sort: str | None
+) -> None:
+    """List the runs of model NAME, its versions, best first.
+
+    Each version is one run. Its run.json (written next to the model files at
+    registration) gives the run and sweep ids, the candidate and its params; a
+    version without one shows its metrics and description only.
+
+    \f
+    Args:
+        ctx: Click context.
+        name: Model name, the experiment.
+        sweep: Only this sweep's runs.
+        sort: Metric to rank by.
+    """
+    project = session.get_project(ctx)
+    try:
+        models = project.get_model_registry().get_models(name) or []
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not find model '{name}': {exc}") from exc
+    runs = _runs(project, models)
+    if sweep:
+        runs = [r for r in runs if r.get("sweep_id") == sweep]
+    metric = sort or next((r["metric"] for r in runs if r.get("metric")), None)
+    lower = bool(sort is None and runs and runs[0].get("metric_goal") == "min")
+    ranked = [
+        r for r in runs if metric and isinstance(r["metrics"].get(metric), (int, float))
+    ]
+    ranked.sort(key=lambda r: r["metrics"][metric], reverse=not lower)
+    if ranked:
+        ranked[0]["best"] = True
+    runs = ranked + [r for r in runs if r not in ranked]
+    if output.JSON_MODE:
+        output.print_json(runs)
+        return
+    if not runs:
+        output.info(
+            f"No runs of '{name}'" + (f" in sweep {sweep}" if sweep else "") + "."
+        )
+        return
+    output.print_table(
+        [
+            "VERSION",
+            "RUN",
+            "SWEEP",
+            "CANDIDATE",
+            "PARAMS",
+            metric or "METRICS",
+            "BASELINE",
+            "TD",
+            "CREATED",
+        ],
+        [
+            [
+                f"{r['version']}{' *' if r.get('best') else ''}",
+                r.get("run_id") or "-",
+                r.get("sweep_id") or "-",
+                r.get("candidate") or output.first_line(r.get("description") or "-"),
+                output.format_mapping(r.get("params") or {}) or "-",
+                r["metrics"].get(metric, "-")
+                if metric
+                else _short_metrics(r["metrics"]),
+                _baseline(r),
+                r.get("training_dataset_version") or "-",
+                _ts_label(r.get("created")),
+            ]
+            for r in runs
+        ],
+    )
+    if ranked:
+        output.info(f"* best by {metric}")
+
+
+def _runs(project: Any, models: list[Any]) -> list[dict[str, Any]]:
+    """One record per model version: its registry fields merged with its run.json."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    dataset_api = project.get_dataset_api()
+
+    def record(model: Any) -> dict[str, Any]:
+        run: dict[str, Any] = {}
+        try:
+            # save() puts the model directory's files under Files/.
+            response = dataset_api.read_content(f"{model.version_path}/Files/run.json")
+            if response is not None:
+                run = json.loads(response.content)
+        except Exception as exc:  # noqa: BLE001
+            if not versions.not_found(exc):  # a version registered without run.json has none
+                raise click.ClickException(
+                    f"The run.json of {model.name} v{model.version} could not be read: {exc}"
+                ) from exc
+        return {
+            **run,
+            "version": model.version,
+            "metrics": dict(getattr(model, "training_metrics", None) or {}),
+            "description": getattr(model, "description", None),
+            "training_dataset_version": getattr(model, "training_dataset_version", None)
+            or run.get("training_dataset_version"),
+            "created": getattr(model, "created", None),
+            "best": False,
+        }
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return list(pool.map(record, models))
+
+
+def _baseline(run: dict[str, Any]) -> Any:
+    metrics = run["metrics"]
+    return metrics.get(
+        "test_baseline_accuracy", metrics.get("val_baseline_accuracy", "-")
+    )
+
+
+def _feature_view_label(model: Any) -> str:
+    """The feature view the model was trained on, `name vN`, from its provenance; `-` without one."""
+    try:
+        view = model.get_feature_view(init=False)
+    except Exception as exc:  # noqa: BLE001
+        return "-" if versions.not_found(exc) else f"could not be read: {exc}"
+    return f"{view.name} v{view.version}" if view is not None else "-"
 
 
 def _list_models(project: Any) -> list[dict[str, Any]]:
@@ -103,11 +240,25 @@ def _list_models(project: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _short_metrics(metrics: dict[str, Any]) -> str:
+def _short_metrics(metrics: dict[str, Any], limit: int | None = 3) -> str:
     if not metrics:
         return "-"
-    parts = [f"{k}={v}" for k, v in list(metrics.items())[:3]]
+    parts = [f"{k}={v}" for k, v in list(metrics.items())[:limit]]
     return ", ".join(parts)
+
+
+def _images(project: Any, model: Any) -> list[str]:
+    """The evaluation images the registry shows with the version: the files under its images/."""
+    try:
+        # save() puts the model directory's files under Files/.
+        paths = project.get_dataset_api().list(f"{model.version_path}/Files/images")
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):  # a version registered without images/
+            return []
+        raise click.ClickException(
+            f"Images of {model.name} v{model.version} could not be read: {exc}"
+        ) from exc
+    return sorted(p.rsplit("/", 1)[-1] for p in paths)
 
 
 def _model_to_dict(model: Any) -> dict[str, Any]:
@@ -116,6 +267,8 @@ def _model_to_dict(model: Any) -> dict[str, Any]:
         "version": getattr(model, "version", None),
         "framework": getattr(model, "framework", None),
         "created": getattr(model, "created", None),
+        "feature_view": _feature_view_label(model),
+        "training_dataset_version": getattr(model, "training_dataset_version", None),
         "metrics": dict(getattr(model, "training_metrics", {}) or {}),
         "description": getattr(model, "description", None),
         "tags": output.read_tags(model),
@@ -181,14 +334,15 @@ def model_register(
     input_example_path: str | None,
     version: int | None,
 ) -> None:
-    """Upload a trained model artifact to the Hopsworks model registry.
+    """Upload a trained model to the model registry.
 
+    \f
     Args:
         ctx: Click context.
         name: Model name.
         path: Local path to the model artifact (file or directory).
-        framework: ML framework category (``sklearn``/``tensorflow``/``torch``/``python``/``llm``).
-        metrics_spec: Metrics as ``key=value`` pairs.
+        framework: ML framework category (`sklearn`/`tensorflow`/`torch`/`python`/`llm`).
+        metrics_spec: Metrics as `key=value` pairs.
         description: Description string.
         feature_view: Feature view the model was trained on.
         td_version: Training dataset version used for training.
@@ -219,7 +373,7 @@ def model_register(
             fv_obj = versions.feature_view(fs, feature_view, None)
         except Exception as exc:  # noqa: BLE001
             raise click.ClickException(
-                f"Feature view '{feature_view}' not found: {exc}"
+                f"Could not find feature view '{feature_view}': {exc}"
             ) from exc
         if fv_obj is None:
             raise click.ClickException(f"Feature view '{feature_view}' not found.")
@@ -236,7 +390,7 @@ def model_register(
         )
         model.save(path)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Model register failed: {exc}") from exc
+        raise click.ClickException(f"Could not register model '{name}': {exc}") from exc
 
     output.success(
         "✓ Registered model %s v%s",
@@ -260,6 +414,7 @@ def model_download(
 ) -> None:
     """Download a model artifact from the registry.
 
+    \f
     Args:
         ctx: Click context.
         name: Model name.
@@ -270,7 +425,7 @@ def model_download(
     try:
         path = model.download(local_path=output_dir)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Download failed: {exc}") from exc
+        raise click.ClickException(f"Could not download model '{name}': {exc}") from exc
     output.success("✓ Downloaded model %s to %s", name, path)
 
 
@@ -282,6 +437,7 @@ def model_download(
 def model_delete(ctx: click.Context, name: str, version: int, yes: bool) -> None:
     """Delete a single model version.
 
+    \f
     Args:
         ctx: Click context.
         name: Model name.
@@ -289,12 +445,12 @@ def model_delete(ctx: click.Context, name: str, version: int, yes: bool) -> None
         yes: Skip confirmation when True.
     """
     model = _get_model(ctx, name, version)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete model '{name}' v{version}?", abort=True)
+    if not yes:
+        output.confirm(f"Delete model '{name}' v{version}?")
     try:
         model.delete()
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Delete failed: {exc}") from exc
+        raise click.ClickException(f"Could not delete model '{name}': {exc}") from exc
     output.success("✓ Deleted model %s v%s", name, version)
 
 
@@ -308,6 +464,7 @@ def model_lineage(ctx: click.Context, name: str, version: int | None) -> None:
     Upstream covers the feature view and training dataset the model was
     trained from.
 
+    \f
     Args:
         ctx: Click context.
         name: Model name.
@@ -341,7 +498,7 @@ def _get_model(ctx: click.Context, name: str, version: int | None) -> Any:
     except click.ClickException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Model '{name}' not found: {exc}") from exc
+        raise click.ClickException(f"Could not find model '{name}': {exc}") from exc
 
 
 def _parse_metrics(spec: str | None) -> dict[str, float]:

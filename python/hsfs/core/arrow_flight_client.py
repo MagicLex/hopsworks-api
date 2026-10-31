@@ -32,29 +32,67 @@ from retrying import retry
 if not HAS_PYARROW:
     raise ModuleNotFoundError(pyarrow_not_installed_message)
 
-import pyarrow
-import pyarrow._flight
-import pyarrow.flight
 from hopsworks_common import client
 from hopsworks_common.client.exceptions import FeatureStoreException
 from hopsworks_common.core.constants import HAS_POLARS, polars_not_installed_message
-from hsfs import feature_group
+from hsfs import feature_group, training_dataset_split
 from hsfs.core.variable_api import VariableApi
 from hsfs.storage_connector import StorageConnector
-from pyarrow.flight import FlightServerError
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    import pyarrow
     from hsfs.constructor import query
     from hsfs.constructor.fs_query import FsQuery
 
-
-if HAS_POLARS:
-    import polars as pl
-
 _logger = logging.getLogger(__name__)
+
+
+def _holds_integers(data_type) -> bool:
+    import pyarrow
+
+    if pyarrow.types.is_integer(data_type):
+        return True
+    if (
+        pyarrow.types.is_list(data_type)
+        or pyarrow.types.is_large_list(data_type)
+        or pyarrow.types.is_fixed_size_list(data_type)
+    ):
+        return _holds_integers(data_type.value_type)
+    if pyarrow.types.is_map(data_type):
+        return _holds_integers(data_type.key_type) or _holds_integers(
+            data_type.item_type
+        )
+    if pyarrow.types.is_struct(data_type):
+        return any(_holds_integers(field.type) for field in data_type)
+    return False
+
+
+def _to_pandas_with_exact_integers(table: pyarrow.Table):
+    """The plain pandas conversion, with the exact values of the integers it rounds.
+
+    The plain conversion turns an integer holding a null into float64, also inside lists and
+    structs, which rounds values above 2^53. Those columns are kept exactly in `frame.attrs`
+    for the split hash; the frame itself is what a plain read returns.
+    """
+    import pyarrow
+
+    frame = table.to_pandas()
+    rounded = [
+        field.name
+        for field, column in zip(table.schema, table.columns, strict=True)
+        if _holds_integers(field.type)
+        and (column.null_count or not pyarrow.types.is_integer(field.type))
+    ]
+    if rounded:
+        exact = table.select(rounded).to_pandas(integer_object_nulls=True)
+        frame.attrs[training_dataset_split.EXACT_COLUMNS_ATTR] = {
+            name: exact[name].tolist() for name in rounded
+        }
+    return frame
+
 
 _arrow_flight_instance = None
 
@@ -81,16 +119,28 @@ def _disable_feature_query_service_client():
 
 
 def _should_retry(exception):
+    import pyarrow._flight
+
+    return isinstance(exception, pyarrow._flight.FlightUnavailableError)
+
+
+def _should_retry_write(exception):
+    import pyarrow._flight
+
     return isinstance(exception, pyarrow._flight.FlightUnavailableError)
 
 
 def _is_feature_query_service_queue_full_error(exception):
+    import pyarrow._flight
+
     return isinstance(
         exception, pyarrow._flight.FlightServerError
     ) and "no free slot available for" in str(exception)
 
 
 def _is_no_commits_found_error(exception):
+    import pyarrow._flight
+
     return isinstance(
         exception, pyarrow._flight.FlightServerError
     ) and "No commits found" in str(exception)
@@ -100,6 +150,8 @@ _ORACLE_ERROR = re.compile(r"ORA-\d{5}")
 
 
 def _is_no_metadata_found_error(exception):
+    import pyarrow._flight
+
     return isinstance(exception, pyarrow._flight.FlightServerError) and any(
         msg in str(exception)
         for msg in ["No hudi properties found", "No delta logs found"]
@@ -107,6 +159,8 @@ def _is_no_metadata_found_error(exception):
 
 
 def _is_no_data_found_error(exception):
+    import pyarrow._flight
+
     # Error message: 'No data found for featuregroup fg_read_uvbhz.fg_polars_online_true_1. Detail: Failed....
     return isinstance(
         exception, pyarrow._flight.FlightServerError
@@ -118,6 +172,8 @@ def _data_source_error(exception) -> str | None:
 
     A member reading through their own credentials needs the database's reason to tell a missing grant from a wrong password.
     """
+    import pyarrow._flight
+
     if not isinstance(exception, pyarrow._flight.FlightServerError):
         return None
     match = _ORACLE_ERROR.search(str(exception))
@@ -127,6 +183,8 @@ def _data_source_error(exception) -> str | None:
 
 
 def _should_retry_healthcheck(exception):
+    import pyarrow._flight
+
     return isinstance(
         exception,
         (pyarrow._flight.FlightUnavailableError, pyarrow._flight.FlightTimedOutError),
@@ -207,6 +265,7 @@ class ArrowFlightClient:
         StorageConnector.ELASTICSEARCH,
         StorageConnector.S3,
         StorageConnector.GLUE,
+        StorageConnector.HOPSFS,
     ]
     # Oracle rides on StorageConnector.SQL above — it's distinguished on the
     # backend by sqlConnector.databaseType == "ORACLE". Keep that routing in
@@ -229,6 +288,7 @@ class ArrowFlightClient:
         )
 
         self._enabled_on_cluster: bool = False
+        self._disabled_reason: str | None = None
         self._host_url: str | None = None
         self._connection: pyarrow.flight.FlightClient | None = None
         if disabled_for_session:
@@ -243,6 +303,8 @@ class ArrowFlightClient:
         )
 
         self._certificates_json: str | None = None
+        # Set before the health check, which can fail and leave the client enabled for a later read.
+        self._server_version: bytes | None = None
 
         try:
             self._check_cluster_service_enabled()
@@ -269,8 +331,6 @@ class ArrowFlightClient:
                 action.type for action in self._connection.list_actions()
             ]:
                 self._server_version = self._get_server_version()
-            else:
-                self._server_version = None
             if self._server_version is None:
                 self._register_certificates()
         except Exception as e:
@@ -321,25 +381,28 @@ class ArrowFlightClient:
         self, message: str | None = None, on_purpose: bool = False
     ) -> None:
         self._disabled_for_session = True
+        self._disabled_reason = message
         if on_purpose:
             warnings.warn(
                 "Hopsworks Query Service will be disabled for this session.",
                 stacklevel=1,
             )
-        if self._enabled_on_cluster:
+        elif not self._enabled_on_cluster:
             warnings.warn(
-                "Hospworks Query Service is disabled on cluster. Contact your administrator to enable it.",
+                "Hopsworks Query Service is disabled on cluster. Contact your administrator to enable it.",
                 stacklevel=1,
             )
         else:
             warnings.warn(
-                f"Client initialisation failed: {message}. Hopsworks Query Service will be disabled for this session."
-                "If you believe this is a transient error, you can call `(hopsworks.)hsfs.reset_offline_query_service_client()`"
+                f"Client initialisation failed: {message}. Hopsworks Query Service will be disabled for this session. "
+                "If you believe this is a transient error, you can call `fs._reset_hopsworks_feature_query_service_client()` on the feature store"
                 " to re-enable it.",
                 stacklevel=1,
             )
 
     def _initialize_flight_client(self):
+        import pyarrow.flight
+
         (tls_root_certs, cert_chain, private_key) = self._extract_certs()
         self._connection = pyarrow.flight.FlightClient(
             location=self.host_url,
@@ -362,6 +425,8 @@ class ArrowFlightClient:
         retry_on_exception=_should_retry_healthcheck,
     )
     def _health_check(self):
+        import pyarrow.flight
+
         _logger.debug("Performing healthcheck of Hopsworks Query Service.")
         action = pyarrow.flight.Action("healthcheck", b"")
         options = pyarrow.flight.FlightCallOptions(timeout=self.health_check_timeout)
@@ -374,6 +439,8 @@ class ArrowFlightClient:
         retry_on_exception=_should_retry,
     )
     def _get_server_version(self):
+        import pyarrow.flight
+
         _logger.debug("Acquiring the server version of Hopsworks Query Service.")
         action = pyarrow.flight.Action("get-version", b"")
         options = pyarrow.flight.FlightCallOptions(timeout=self.health_check_timeout)
@@ -437,6 +504,9 @@ class ArrowFlightClient:
         retry_on_exception=_should_retry_certificate_registration,
     )
     def _register_certificates(self):
+        import pyarrow
+        import pyarrow.flight
+
         certificates_json = self._make_certificates_json()
         certificates_json_buf = pyarrow.py_buffer(certificates_json)
         action = pyarrow.flight.Action(
@@ -450,6 +520,8 @@ class ArrowFlightClient:
 
     def _handle_afs_exception(user_message="None"):
         def _needs_certificates(instance, error) -> bool:
+            from pyarrow.flight import FlightServerError
+
             return instance._server_version is None and (
                 isinstance(error, FlightServerError)
                 and "Please register client certificates first." in str(error)
@@ -525,8 +597,13 @@ class ArrowFlightClient:
         retry_on_exception=_should_retry,
     )
     def _get_flight_info(self, descriptor):
+        import pyarrow.flight
+
         # The timeout needs not be as long as timeout for do_get or do_action
-        _logger.debug("Getting flight info for descriptor: %s", str(descriptor))
+        # The descriptor command is the HQS payload, which carries data source credentials.
+        _logger.debug(
+            "Getting flight info for a %s descriptor.", descriptor.descriptor_type
+        )
         options = pyarrow.flight.FlightCallOptions(timeout=self.health_check_timeout)
         return self._connection.get_flight_info(
             descriptor,
@@ -539,12 +616,25 @@ class ArrowFlightClient:
         retry_on_exception=_should_retry,
     )
     def _get_dataset(
-        self, descriptor, timeout=None, headers=None, dataframe_type="pandas"
+        self,
+        descriptor,
+        timeout=None,
+        headers=None,
+        dataframe_type="pandas",
+        exact_integers=False,
     ):
+        import pyarrow.flight
+
+        if HAS_POLARS:
+            import polars as pl
+
         if timeout is None:
             timeout = self.timeout
         info = self._get_flight_info(descriptor)
-        _logger.debug("Retrieved flight info: %s. Fetching dataset.", str(info))
+        _logger.debug(
+            "Retrieved flight info with %d endpoints. Fetching dataset.",
+            len(info.endpoints),
+        )
 
         if headers is None:
             headers = self._certificates_headers()
@@ -557,6 +647,8 @@ class ArrowFlightClient:
             if not HAS_POLARS:
                 raise ModuleNotFoundError(polars_not_installed_message)
             return pl.from_arrow(reader.read_all())
+        if exact_integers:
+            return _to_pandas_with_exact_integers(reader.read_all())
         return reader.read_pandas()
 
     @_handle_afs_exception(user_message=READ_ERROR)
@@ -575,6 +667,8 @@ class ArrowFlightClient:
         batches, left early or raised, so a cancelled read does not leave the
         connection consuming a result nobody will take.
         """
+        import pyarrow.flight
+
         if timeout is None:
             timeout = self.timeout
         info = self._get_flight_info(descriptor)
@@ -601,6 +695,8 @@ class ArrowFlightClient:
     # retry is handled in get_dataset
     @_handle_afs_exception(user_message=READ_ERROR)
     def _read_query(self, query_object: FsQuery, arrow_flight_config, dataframe_type):
+        import pyarrow.flight
+
         query_encoded = query_object.hqs_payload.encode("ascii")
         descriptor = pyarrow.flight.FlightDescriptor.for_command(query_encoded)
         return self._get_dataset(
@@ -621,12 +717,17 @@ class ArrowFlightClient:
                 else None
             ),
             dataframe_type=dataframe_type,
+            exact_integers=bool(
+                arrow_flight_config and arrow_flight_config.get("exact_integers")
+            ),
         )
 
     def _stream_query(
         self, query_object: FsQuery, arrow_flight_config
     ) -> Iterator[pyarrow.RecordBatch]:
         """The record batches of a query, as the server produces them."""
+        import pyarrow.flight
+
         query_encoded = query_object.hqs_payload.encode("ascii")
         descriptor = pyarrow.flight.FlightDescriptor.for_command(query_encoded)
         return self._stream_dataset(
@@ -651,6 +752,8 @@ class ArrowFlightClient:
     # retry is handled in get_dataset
     @_handle_afs_exception(user_message=READ_ERROR)
     def _read_path(self, path, arrow_flight_config, dataframe_type):
+        import pyarrow.flight
+
         descriptor = pyarrow.flight.FlightDescriptor.for_path(path)
         return self._get_dataset(
             descriptor,
@@ -670,20 +773,26 @@ class ArrowFlightClient:
         # do_action call did not trigger any write on the server
         # Technically same as _should_retry, used for read operations but to avoid future mistakes
         # it is better to have separate retry_on_exception function with explicit limitations
-        retry_on_exception=lambda e: isinstance(
-            e, pyarrow._flight.FlightUnavailableError
-        ),
+        retry_on_exception=_should_retry_write,
     )
     def _create_training_dataset(
         self, feature_view_obj, training_dataset_obj, query_obj, arrow_flight_config
     ):
+        import pyarrow
+        import pyarrow.flight
+
         training_dataset = {}
         training_dataset["project_name"] = self._client._project_name
         training_dataset["fv_name"] = feature_view_obj.name
         training_dataset["fv_version"] = feature_view_obj.version
         training_dataset["tds_version"] = training_dataset_obj.version
         training_dataset["query"] = json.loads(query_obj.hqs_payload)
-        _logger.debug(f"Creating training dataset: {training_dataset}")
+        _logger.debug(
+            "Creating training dataset %s for feature view %s v%s.",
+            training_dataset_obj.version,
+            feature_view_obj.name,
+            feature_view_obj.version,
+        )
         try:
             training_dataset_encoded = json.dumps(training_dataset).encode("ascii")
             training_dataset_buf = pyarrow.py_buffer(training_dataset_encoded)
@@ -739,6 +848,11 @@ class ArrowFlightClient:
     def disabled_for_session(self) -> bool:
         """Whether the client is disabled for the current session."""
         return self._disabled_for_session
+
+    @property
+    def disabled_reason(self) -> str | None:
+        """Why the client failed to initialise, when it did; `None` otherwise."""
+        return self._disabled_reason
 
     @property
     def enabled_on_cluster(self) -> bool:

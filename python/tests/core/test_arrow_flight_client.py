@@ -13,10 +13,12 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 #
+import logging
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from hopsworks_common.client.exceptions import FeatureStoreException
 from hsfs import feature_group, feature_view, storage_connector, training_dataset
 from hsfs.constructor import fs_query
 from hsfs.core import arrow_flight_client
@@ -248,6 +250,19 @@ class TestArrowFlightClient:
         # Assert
         assert supported
 
+    def test_supports_hopsfs(self):
+        # Arrange
+        connector = storage_connector.HopsFSConnector(0, "HopsFSConnector", 99)
+        external_feature_group = feature_group.ExternalFeatureGroup(
+            primary_key=[""], data_source=ds.DataSource(storage_connector=connector)
+        )
+
+        # Act
+        supported = arrow_flight_client._supports([external_feature_group])
+
+        # Assert
+        assert supported
+
     def test_supports_unsupported(self):
         # Arrange
         external_feature_group = feature_group.ExternalFeatureGroup(
@@ -328,6 +343,47 @@ class TestArrowFlightClient:
         args, kwargs = flight_client_mock.call_args
         assert kwargs.get("override_hostname") == "flyingduck.service.hopsworks.ai"
 
+    def test_flight_descriptor_and_info_are_not_logged(self, mocker, caplog):
+        # Arrange
+        import pyarrow.flight
+
+        client = arrow_flight_client._get_instance()
+        info = MagicMock(endpoints=[MagicMock()])
+        info.__str__.return_value = "sentinel-session-token"
+        mocker.patch.object(client, "_connection")
+        client._connection.get_flight_info.return_value = info
+        descriptor = pyarrow.flight.FlightDescriptor.for_command(
+            b'{"password": "sentinel-password"}'
+        )
+        caplog.set_level(logging.DEBUG)
+
+        # Act
+        client._get_dataset(descriptor, headers=[])
+
+        # Assert
+        assert "flight info" in caplog.text
+        assert "sentinel-password" not in caplog.text
+        assert "sentinel-session-token" not in caplog.text
+
+    def test_training_dataset_query_is_not_logged(self, mocker, caplog):
+        # Arrange
+        client = arrow_flight_client._get_instance()
+        mocker.patch.object(client, "_connection")
+        mocker.patch.object(client, "_certificates_headers", return_value=[])
+        client._connection.do_action.return_value = [MagicMock()]
+        query = MagicMock(hqs_payload='{"password": "sentinel-password"}')
+        caplog.set_level(logging.DEBUG)
+        client._client._project_name = "test_project"
+        feature_view = MagicMock(version=1)
+        feature_view.name = "test_fv"
+
+        # Act
+        client._create_training_dataset(feature_view, MagicMock(version=2), query, None)
+
+        # Assert
+        assert "Creating training dataset" in caplog.text
+        assert "sentinel-password" not in caplog.text
+
 
 class TestDataSourceError:
     """A refusal from the data source reaches the caller instead of a generic read failure."""
@@ -354,3 +410,42 @@ class TestDataSourceError:
             is None
         )
         assert arrow_flight_client._data_source_error(ValueError("ORA-00942")) is None
+
+
+def test_init_failure_is_reported_as_itself(mocker):
+    # Another process of the same user deleted the certificates this one reads.
+    mocker.patch("hopsworks_common.client._get_instance")
+    variables = mocker.patch("hsfs.core.arrow_flight_client.VariableApi").return_value
+    variables._get_service_discovery_domain.return_value = "consul"
+    variables._get_flyingduck_enabled.return_value = True
+    mocker.patch.object(
+        arrow_flight_client.ArrowFlightClient,
+        "_retrieve_host_url",
+        return_value="grpc+tls://flyingduck:5005",
+    )
+    mocker.patch.object(
+        arrow_flight_client.ArrowFlightClient,
+        "_initialize_flight_client",
+        side_effect=FileNotFoundError("ca_chain.pem"),
+    )
+
+    with pytest.warns(
+        UserWarning, match="Client initialisation failed: .*ca_chain.pem"
+    ):
+        query_service = arrow_flight_client.ArrowFlightClient()
+
+    assert query_service.enabled_on_cluster
+    assert query_service.disabled_for_session
+    assert "ca_chain.pem" in query_service.disabled_reason
+
+
+def test_sql_offline_raises_the_init_failure(mocker):
+    query_service = mocker.Mock(enabled_on_cluster=True, disabled_reason="ca_chain.pem")
+    mocker.patch(
+        "hsfs.core.arrow_flight_client._get_instance", return_value=query_service
+    )
+
+    with pytest.raises(
+        FeatureStoreException, match="failed to initialise.*ca_chain.pem"
+    ):
+        python.Engine()._sql_offline("SELECT 1", "default")

@@ -627,7 +627,7 @@ class TestSchemaPublishing:
         eng._engine._dataset_api.exists.return_value = True
         mocker.patch(
             "hopsworks_common.client._get_instance",
-            return_value=mocker.Mock(_project_name="p"),
+            return_value=mocker.Mock(_project_name="p", _project_backing_name="p"),
         )
         deployment = mocker.Mock()
         deployment.name = "dep"
@@ -638,6 +638,68 @@ class TestSchemaPublishing:
         eng._engine._dataset_api.remove.assert_called_once_with(
             "/Projects/p/Deployments/dep/resources/schema"
         )
+
+    def test_a_running_deployment_refusal_names_both_ways_out(self, mocker):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = "Running"
+
+        with pytest.raises(ModelServingException) as refused:
+            eng._delete(deployment)
+
+        assert str(refused.value) == (
+            "Deployment 'dep' is Running: stop it first, or force the delete."
+        )
+        eng._serving_api._delete.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["Starting", "Updating"])
+    def test_a_starting_or_updating_deployment_is_told_to_wait(self, mocker, status):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = status
+
+        with pytest.raises(ModelServingException) as refused:
+            eng._delete(deployment)
+
+        assert str(refused.value) == (
+            f"Deployment 'dep' is {status}: wait until it is running, "
+            "then stop it or force the delete."
+        )
+        eng._serving_api._delete.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["Starting", "Updating"])
+    def test_force_leaves_the_decision_to_the_backend(self, mocker, status):
+        from hopsworks_common.client.exceptions import RestAPIError
+
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = status
+        response = mocker.Mock(status_code=400)
+        response.json.return_value = {
+            "errorCode": 240001,
+            "errorMsg": "Deployment is starting or updating",
+        }
+        refusal = RestAPIError("url", response)
+        eng._serving_api._delete.side_effect = refusal
+
+        with pytest.raises(RestAPIError) as refused:
+            eng._delete(deployment, force=True)
+
+        assert refused.value is refusal
+        eng._serving_api._delete.assert_called_once_with(deployment)
+
+    def test_a_deployment_without_state_is_not_reported_deleted(self, mocker):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value = None
+
+        with pytest.raises(ModelServingException, match="nothing deleted"):
+            eng._delete(deployment, force=True)
+        eng._serving_api._delete.assert_not_called()
 
     def test_read_schema_from_backend(self, mocker):
         from hsml.deployment_schema import DeploymentSchema
@@ -685,7 +747,7 @@ class TestSchemaPublishing:
         eng = self._engine(mocker)
         mocker.patch(
             "hopsworks_common.client._get_instance",
-            return_value=mocker.Mock(_project_name="p"),
+            return_value=mocker.Mock(_project_name="p", _project_backing_name="p"),
         )
         # a backend without the endpoint answers a bare 404 without an error code
         response = mocker.Mock(status_code=404)
@@ -919,6 +981,34 @@ class TestStartWithoutWaiting:
         eng._start(deployment, await_status=0)
 
         eng._serving_api._post.assert_called_once()
+
+    def test_refused_start_is_not_rolled_back(self, mocker):
+        from hopsworks_common.client.exceptions import RestAPIError
+        from hopsworks_common.constants import PREDICTOR_STATE
+        from hsml.engine import serving_engine
+
+        error = RestAPIError.__new__(RestAPIError)
+        error.response = mocker.Mock(status_code=403)
+        error.error_code = 150068
+        error.args = ("refused",)
+        eng = serving_engine.ServingEngine()
+        eng._serving_api = mocker.Mock()
+        eng._serving_api._post.side_effect = error
+        eng._check_status = mocker.Mock(
+            return_value=(False, mocker.Mock(status=PREDICTOR_STATE.STATUS_STOPPED))
+        )
+        eng._get_available_instances = mocker.Mock(return_value=1)
+        eng._get_starting_progress = mocker.Mock(return_value=(0, ""))
+        eng._stop = mocker.Mock()
+        deployment = mocker.Mock(
+            name="dep", model_server="PYTHON", has_model=True, requested_instances=1
+        )
+
+        with pytest.raises(RestAPIError) as info:
+            eng._start(deployment, await_status=0)
+
+        assert info.value is error
+        eng._stop.assert_not_called()
 
 
 class TestStartAndSaveAwaitTheRoute:
@@ -1494,3 +1584,22 @@ def test_dropped_scaling_fields_names_what_an_older_backend_left_out():
     )
     assert _dropped_scaling_fields(None, {}) == []
     assert _dropped_scaling_fields(sent, None) == []
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        None,
+        "",
+        "null",
+        "predictor terminated unsuccessfully. null",
+        # As the serving runtime reports a predictor that exits while starting.
+        "predictor terminated unsuccessfully. \n\nnull",
+    ],
+)
+def test_a_reason_ending_in_null_names_no_cause(reason):
+    assert serving_engine._no_reason(reason)
+
+
+def test_a_reason_with_a_cause_is_kept():
+    assert not serving_engine._no_reason("ImagePullBackOff: image not found")

@@ -14,11 +14,13 @@
 #   limitations under the License.
 #
 
+import json
 from unittest.mock import Mock
 
 import pytest
 import requests
 from hopsworks_common.core.superset_api import SupersetApi
+from hopsworks_common.core.superset_query_context import build_query_context
 
 
 class TestSupersetApi:
@@ -61,6 +63,9 @@ class TestSupersetApi:
         """Build a mock requests.Response."""
         resp = Mock(spec=requests.Response)
         resp.status_code = status_code
+        resp.ok = status_code < 400
+        resp.reason = "Bad Request" if status_code == 400 else "OK"
+        resp.text = ""
         resp.json.return_value = json_data or {}
         resp.cookies = cookies or {}
         resp.raise_for_status = Mock()
@@ -138,6 +143,19 @@ class TestSupersetApi:
 
         headers = authed_api._http.request.call_args.kwargs["headers"]
         assert headers["X-CSRFToken"] == "csrf-tok"
+
+    def test_get_claims_no_json_body(self, authed_api):
+        """Superset answers 400 to a bodiless GET sent as application/json."""
+        authed_api._http = Mock()
+        authed_api._http.request.return_value = self._mock_response(
+            json_data={"result": []}
+        )
+
+        authed_api._request("GET", "/api/v1/chart/5/data/")
+
+        call = authed_api._http.request.call_args
+        assert call.kwargs["json"] is None
+        assert "Content-Type" not in call.kwargs["headers"]
 
     def test_csrf_token_not_included_for_get(self, authed_api):
         """GET requests do not include the X-CSRFToken header."""
@@ -251,6 +269,198 @@ class TestSupersetApi:
     #  204 No Content handling                                            #
     # ------------------------------------------------------------------ #
 
+    def test_write_sends_a_same_origin_referer(self, authed_api):
+        """Flask-WTF behind an HTTPS proxy refuses a write without a Referer."""
+        authed_api._http.request = Mock(return_value=self._mock_response(201))
+        authed_api.create_dashboard(dashboard_title="d")
+        headers = authed_api._http.request.call_args.kwargs["headers"]
+        assert headers["Referer"] == (
+            authed_api._get_superset_url() + "/hopsworks-api/superset/"
+        )
+
+    @pytest.mark.parametrize(
+        ("base", "referer"),
+        [
+            ("https://h.example:443", "https://h.example/hopsworks-api/superset/"),
+            (
+                "https://h.example:8181",
+                "https://h.example:8181/hopsworks-api/superset/",
+            ),
+        ],
+    )
+    def test_referer_drops_the_default_port(self, authed_api, base, referer):
+        """Flask-WTF compares hosts as strings: h.example:443 is not h.example."""
+        authed_api._get_superset_url = Mock(return_value=base)
+        assert authed_api._referer() == referer
+
+    def test_error_carries_the_superset_message(self, authed_api):
+        resp = self._mock_response(400)
+        resp.text = '{"errors": [{"message": "The referrer header is missing."}]}'
+        authed_api._http.request = Mock(return_value=resp)
+        with pytest.raises(requests.HTTPError, match="referrer header is missing"):
+            authed_api.create_dashboard(dashboard_title="d")
+
+    def test_create_dataset_sets_its_description_after_the_post(self, authed_api):
+        """Superset's dataset POST schema refuses a description field: it goes in a PUT."""
+        authed_api._request = Mock(side_effect=[{"id": 7}, {"id": 7}])
+
+        authed_api.create_dataset(
+            3, "sales_1", schema="p_featurestore", description="d"
+        )
+
+        post, put = authed_api._request.call_args_list
+        assert post.args == ("POST", "/api/v1/dataset/")
+        assert post.kwargs["json_data"] == {
+            "database": 3,
+            "table_name": "sales_1",
+            "schema": "p_featurestore",
+        }
+        assert put.args == ("PUT", "/api/v1/dataset/7")
+        assert put.kwargs["json_data"] == {"description": "d"}
+
+    def test_create_dataset_without_description_is_one_post(self, authed_api):
+        authed_api._request = Mock(return_value={"id": 7})
+
+        authed_api.create_dataset(3, "sales_1", description="")
+
+        assert authed_api._request.call_count == 1
+        assert "description" not in authed_api._request.call_args.kwargs["json_data"]
+
+    def test_create_dataset_names_the_dataset_when_the_description_fails(
+        self, authed_api
+    ):
+        refused = requests.HTTPError("403 Forbidden")
+        authed_api._request = Mock(side_effect=[{"id": 7}, refused])
+
+        with pytest.raises(requests.HTTPError, match="dataset 7 was created"):
+            authed_api.create_dataset(3, "sales_1", description="d")
+
+    def test_create_chart_saves_the_query_context_the_explore_view_builds(
+        self, authed_api
+    ):
+        """Without a saved query context, the chart data endpoint answers 400."""
+        authed_api._request = Mock(return_value={"id": 5})
+        params = json.dumps({"metric": "count", "adhoc_filters": []})
+
+        authed_api.create_chart("Total", "big_number_total", 7, params)
+
+        authed_api._request.assert_called_once()
+        method, path = authed_api._request.call_args.args
+        payload = authed_api._request.call_args.kwargs["json_data"]
+        assert (method, path) == ("POST", "/api/v1/chart/")
+        assert payload["params"] == params
+        assert json.loads(payload["query_context"]) == build_query_context(
+            7, "big_number_total", json.loads(params)
+        )
+
+    def test_create_chart_refuses_params_the_explore_view_refuses(self, authed_api):
+        authed_api._request = Mock()
+        params = json.dumps({"metrics": ["count"], "whiskerOptions": "Min/max"})
+
+        with pytest.raises(ValueError, match="Unsupported whisker type"):
+            authed_api.create_chart("Boxes", "box_plot", 7, params)
+
+        authed_api._request.assert_not_called()
+
+    def test_update_chart_params_rebuilds_the_query_context_in_one_put(
+        self, authed_api
+    ):
+        current = {
+            "params": json.dumps({"metric": "count"}),
+            "viz_type": "big_number_total",
+            "datasource_id": 7,
+            "datasource_type": "table",
+        }
+        authed_api._request = Mock(side_effect=[{"result": current}, {"id": 5}])
+        params = json.dumps({"groupby": ["plan"], "metric": "count"})
+
+        authed_api.update_chart(5, params=params, viz_type="pie", slice_name="By plan")
+
+        get, put = authed_api._request.call_args_list
+        assert get.args == ("GET", "/api/v1/chart/5")
+        assert put.args == ("PUT", "/api/v1/chart/5")
+        payload = put.kwargs["json_data"]
+        assert payload["params"] == params
+        assert payload["viz_type"] == "pie"
+        assert payload["slice_name"] == "By plan"
+        assert json.loads(payload["query_context"]) == build_query_context(
+            7, "pie", json.loads(params)
+        )
+
+    def test_update_chart_viz_type_keeps_the_saved_params(self, authed_api):
+        current = {
+            "params": json.dumps({"groupby": ["plan"], "metric": "count"}),
+            "viz_type": "pie",
+            "datasource_id": 7,
+            "datasource_type": "table",
+        }
+        authed_api._request = Mock(side_effect=[{"result": current}, {"id": 5}])
+
+        authed_api.update_chart(5, viz_type="funnel")
+
+        payload = authed_api._request.call_args.kwargs["json_data"]
+        assert payload["params"] == current["params"]
+        assert json.loads(payload["query_context"]) == build_query_context(
+            7, "funnel", json.loads(current["params"])
+        )
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda api: api.create_chart("Total", "big_number_total", 7, "{}"),
+            lambda api: api.update_chart(5, params="{}"),
+            lambda api: api.update_chart(5, viz_type="pie"),
+        ],
+    )
+    def test_chart_writes_never_send_query_context_generation(self, authed_api, call):
+        """A PUT holding only it and query_context skips Superset's owner check."""
+        current = {
+            "params": "{}",
+            "viz_type": "big_number_total",
+            "datasource_id": 7,
+            "datasource_type": "table",
+        }
+        authed_api._request = Mock(
+            side_effect=lambda method, *a, **k: (
+                {"result": current} if method == "GET" else {"id": 5}
+            )
+        )
+
+        call(authed_api)
+
+        payload = authed_api._request.call_args.kwargs["json_data"]
+        assert "query_context" in payload
+        assert "query_context_generation" not in payload
+
+    def test_update_chart_datasource_rebuilds_the_query_context_for_it(
+        self, authed_api
+    ):
+        """The PUT carries the merged chart's fields, so they match its context."""
+        current = {
+            "params": json.dumps({"groupby": ["plan"], "metric": "count"}),
+            "viz_type": "pie",
+            "datasource_id": 7,
+            "datasource_type": "table",
+        }
+        authed_api._request = Mock(side_effect=[{"result": current}, {"id": 5}])
+
+        authed_api.update_chart(5, datasource_id=8)
+
+        payload = authed_api._request.call_args.kwargs["json_data"]
+        assert {k: payload[k] for k in current} == {**current, "datasource_id": 8}
+        assert json.loads(payload["query_context"]) == build_query_context(
+            8, "pie", json.loads(current["params"])
+        )
+
+    def test_update_chart_without_params_or_viz_type_is_one_put(self, authed_api):
+        authed_api._request = Mock(return_value={"id": 5})
+
+        authed_api.update_chart(5, dashboards=[3])
+
+        authed_api._request.assert_called_once_with(
+            "PUT", "/api/v1/chart/5", json_data={"dashboards": [3]}
+        )
+
     def test_204_returns_empty_dict(self, authed_api):
         """A 204 response returns an empty dict instead of calling .json()."""
         resp = self._mock_response(status_code=204)
@@ -266,15 +476,38 @@ class TestSupersetApi:
     #  URL validation guards                                              #
     # ------------------------------------------------------------------ #
 
-    def test_get_superset_url_raises_on_external_client(self, authed_api, mocker):
-        """Raises RuntimeError when called from an external client."""
+    def test_external_client_goes_through_the_hopsworks_proxy(
+        self, mocker, mock_project
+    ):
+        """From outside: the Hopsworks URL, the proxy cookie and the client's TLS settings."""
+        mocker.patch("hopsworks_common.core.superset_api.VariableApi")
         mocker.patch(
             "hopsworks_common.core.superset_api.client._is_external",
             return_value=True,
         )
+        client_mock = Mock()
+        client_mock._base_url = "https://hopsworks.example:443"
+        client_mock._verify = "/certs/ca.pem"
+        client_mock._send_request.return_value = {"accessToken": "sess-tok"}
+        mocker.patch(
+            "hopsworks_common.core.superset_api.client._get_instance",
+            return_value=client_mock,
+        )
+        api = SupersetApi(project=mock_project)
+        assert api._http.verify == "/certs/ca.pem"
+        resp = self._mock_response(json_data={"result": []})
+        api._http.request = Mock(return_value=resp)
 
-        with pytest.raises(RuntimeError, match="only available from within"):
-            authed_api._get_superset_url()
+        api.list_dashboards()
+
+        args, kwargs = api._http.request.call_args
+        assert args == (
+            "GET",
+            "https://hopsworks.example:443/hopsworks-api/superset/api/v1/dashboard/",
+        )
+        assert kwargs["headers"]["Cookie"] == (
+            "!Proxy!SupersetProxyServletsession=sess-tok"
+        )
 
     def test_get_superset_url_raises_on_empty_domain(self, authed_api, mocker):
         """Raises RuntimeError when service discovery domain is empty."""

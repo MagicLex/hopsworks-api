@@ -16,12 +16,35 @@
 
 from __future__ import annotations
 
+import logging
 import re
+import weakref
 from typing import Literal
 
 from hopsworks_apigen import also_available_as
 from hopsworks_common import client
+from hopsworks_common.client import session_cache
 from hopsworks_common.client.exceptions import FeatureStoreException, RestAPIError
+
+
+_logger = logging.getLogger(__name__)
+
+# Backend variables read once per client, so once per connection: a new connection builds a new client.
+_DELTA_CHECKPOINT_INTERVALS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _parse_delta_checkpoint_interval(value) -> int | None:
+    """The variable value as a positive integer, or None (with a warning) when it is not one."""
+    try:
+        interval = int(value)
+    except (TypeError, ValueError):
+        interval = None
+    if interval is None or interval < 1:
+        _logger.warning(
+            f"Ignoring featurestore_delta_checkpoint_interval={value!r}: not a positive integer."
+        )
+        return None
+    return interval
 
 
 LOADBALANCER_SERVICES = {
@@ -74,7 +97,10 @@ class VariableApi:
         _client = client._get_instance()
 
         path_params = ["variables", "versions"]
-        resp = _client._send_request("GET", path_params)
+        resp = session_cache.get_host("versions")
+        if resp is None:
+            resp = _client._send_request("GET", path_params)
+            session_cache.put_host("versions", resp)
 
         for entry in resp:
             if entry["software"] == software:
@@ -203,3 +229,29 @@ class VariableApi:
         except RestAPIError:
             tablespace = None
         return tablespace or "ts_1"
+
+    def _get_featurestore_delta_checkpoint_interval(self) -> int | None:
+        """Get the number of commits between checkpoints of a Delta feature group table.
+
+        Read from the backend once per connection.
+
+        Returns:
+            The value of the `featurestore_delta_checkpoint_interval` variable, or None when the cluster
+                does not define it or holds a value that is not a positive integer. Tables are then left as they are.
+
+        Raises:
+            hopsworks.client.exceptions.RestAPIError: If the variable exists but could not be read.
+        """
+        _client = client._get_instance()
+        if _client in _DELTA_CHECKPOINT_INTERVALS:
+            return _DELTA_CHECKPOINT_INTERVALS[_client]
+        try:
+            value = self._get_variable("featurestore_delta_checkpoint_interval")
+        except RestAPIError as err:
+            if err.response.status_code != RestAPIError.STATUS_CODE_NOT_FOUND:
+                raise
+            interval = None
+        else:
+            interval = _parse_delta_checkpoint_interval(value)
+        _DELTA_CHECKPOINT_INTERVALS[_client] = interval
+        return interval

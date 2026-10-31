@@ -5,6 +5,10 @@ description: Mount or ingest a table from a supported datasource. Mount tables f
 
 Prefer the `hops` CLI for mounting or ingesting external tables from a datasource. Use the `hopsworks` Python SDK if the CLI is unsuccessful.
 
+Read a data source only through Hopsworks: mount it as an external feature group, look at it with a query that has a LIMIT, or ingest it. Never open a database driver (psycopg2, SQLAlchemy, pymysql, JDBC) with a credential copied from a secret, a variable or the connector. To look at a table, run `hops datasource preview <ds> --table <t> [--database <db>]` (`<schema>.<t>` when the name is in several schemas), or mount a query and read it: `hops fg create-external <fg> --connector <ds> --query "SELECT ... LIMIT 100" --primary-key <col> --no-statistics`, then `hops fg preview <fg>` (notebook: `fs.get_feature_group("<fg>", 1).read()`). A query mount is written against the source's schema (`schema.table`, as `hops datasource tables <ds>` shows), not the `--database` name. `read()` pulls the whole mount, so put the LIMIT or filter in the query. `connector.read()` raises `NotImplementedError` for a SQL source on the Python engine. `hops sql` cannot read a mount (`TABLE_NOT_FOUND`); use `hops fg preview` or `fg.read()`. A failed read is reported with its error, not routed around with a driver.
+
+`hops datasource infer-metadata` is optional: it needs the cluster's platform intelligence key and comes after the look, never before it.
+
 A secret option of `hops datasource create` (`--password`, `--api-key`, ...) takes the value itself, `-` to read it from stdin, or `account:NAME` to read your account variable `NAME`. Use `account:NAME` for a credential the user saved in their account (the Factory's forms do): the value goes to the data source without a shell, a file or a printout, and never through `$(...)` around a command that also prints, such as `hopsworks.login()`.
 
 Never ask the user for a password, token or key in the conversation, in a message or with AskUserQuestion: whatever is typed there reaches the model. In the Factory's chat, end your reply with a `hops-secret` block instead. It is a form: the secret as a hidden field, the plain settings that go with it (`fields`, never a secret) and, for a data source, a `test` command the form's Test button runs:
@@ -65,7 +69,7 @@ data = sc.get_data(tables[0])             # single resource fallback
 Both calls block until the fetch finishes and raise `hopsworks.client.exceptions.DataSourceException` with the job logs when it fails; `get_data_batch` reports every failed resource in one exception.
 `get_data` raises the same exception for SQL sources, where the read is served inline rather than by a job: a refused read is answered with HTTP 200 and the source's own message, so the exception carries that message.
 `DataSourceException` is a subclass of `FeatureStoreException`, so an `except FeatureStoreException` around `fg.save()` catches a failed schema fetch during schema inference.
-Results are cached server-side per resource — pass `use_cached=False` to force a refetch.
+Results are cached server-side per resource, failed fetches too. Updating or deleting the data source (after fixing a credential, for example) clears its cache, so the next call fetches again; pass `use_cached=False` to force a refetch otherwise.
 For REST connectors there is no `get_tables()`; build each entry yourself with `DataSource(table="issues", rest_endpoint=RestEndpointConfig(relative_url="v1/issues"))` so every endpoint carries its own request config.
 
 ## Mount a table as an external feature group
@@ -91,6 +95,18 @@ ext_fg = fs.create_external_feature_group(
     online_enabled=False,
 )
 ext_fg.save()
+```
+
+### A folder in the project (HopsFS)
+
+A folder of parquet, csv or orc files, or a Delta or Iceberg table folder, in a project dataset mounts through a HOPSFS data source on that dataset. `--dataset` takes the dataset's name, never a path: `Resources`, `<project>_Training_Datasets`, or `<backing name>_featurestore.db`, where each feature group's table is the folder `<name>_<version>`. Reuse a HOPSFS data source on that dataset when `hops datasource list` shows one. A HOPSFS data source has no connection test: its create checks that the dataset exists. `--path` is the folder relative to the dataset. A folder with `_delta_log/` is Delta, one with `metadata/` is Iceberg; otherwise the files' extension names the format. The create reads the schema from the files, so `--features` is not needed, and `--primary-key` can wait until `hops fg info` has shown the columns.
+
+```bash
+hops files list /apps/hive/warehouse/<backing name>_featurestore.db   # the feature store's table folders; other datasets: hops files list <dataset>
+hops datasource create hopsfs <ds> --dataset <backing name>_featurestore.db
+hops fg create-external <fg> --connector <ds> --path <folder> --data-format <parquet|csv|orc|delta|iceberg> --no-statistics
+hops fg info <fg>               # the columns
+hops fg preview <fg> --limit 5
 ```
 
 ## Create a connector
@@ -151,7 +167,7 @@ hops datasource create sql oracle_sales --database-type ORACLE --credentials-mod
 hops datasource credentials set oracle_sales --user SCOTT --password - < pw.txt     # validates, then saves to your account
 HOPSWORKS_DS_CREDENTIALS_WALLET_PASSWORD=... hops datasource credentials set oracle_sales --user SCOTT --password - --wallet ./Wallet_db.zip < pw.txt   # only one secret per call can come from stdin
 hops datasource credentials set oracle_sales --password - < new_pw.txt            # rotate the password; the bound username and wallet stay
-hops datasource credentials show oracle_sales                                       # status and the names of your secret and env var, never values
+hops datasource credentials info oracle_sales                                       # status and the names of your secret and env var, never values
 hops datasource list                                                                 # CREDENTIALS column: shared, provided: yours set, provided: missing
 hops fg list                                                                         # ACCESS column per mounted table: ok, no_credentials, invalid_credentials, no_access, error
 hops fg test-access sales_external                                                   # re-check your access to one mounted table now
@@ -197,7 +213,10 @@ fg = fs.create_feature_group(
 fg.save()
 
 fg.sink_job.run()   # runs the ingestion job server-side (see hops-job to monitor)
+fg = fs.get_feature_group("events", version=1)
 ```
+
+A full load (the default loading strategy) deletes and recreates the feature group under a new id when the run starts, so a `fg` object held across `run()` answers 404. Fetch it again by name and version after the run, before `read()`, `insert` or a feature view.
 
 The custom transform is a Python file uploaded to HopsFS and executed inside the ingestion environment, where `dlt` is installed. Write it as a script and point at it with `transform_script_path`; do not import `dlt` in your interactive session.
 
@@ -259,6 +278,7 @@ fs.get_or_create_feature_group(
 # 3. create the job with all its targets, then run it
 job.save()   # ONE atomic create with both feature groups as targets
 job.run()    # runs the multi-table job server-side (see hops-job to monitor)
+accounts = fs.get_feature_group("accounts", version=1)   # full-load targets come back under new ids
 ```
 
 A feature group's own `sink_job_conf` supplies that target's overrides; only the fields it changes from the defaults are applied, so a feature group with a bare config (or none) inherits the job-level defaults. Each target's column mappings are generated automatically from its feature group's schema — where the SDK sanitized a source column name (e.g. `"Total Amount"` -> `total_amount`), the mapping back to the original source column is added for you, just like a single-table sink job. For REST sources, the endpoint from the feature group's data source is carried onto its target automatically. Attach a schedule with `schedule_config=` on `new_ingestion_job` to run the whole set on a cadence.
@@ -361,6 +381,7 @@ fg = fs.create_feature_group(
 fg.save()
 
 fg.sink_job.run()   # copies the sheet into the managed feature group
+fg = fs.get_feature_group("budget_actuals", version=1)   # a full load recreates it under a new id
 ```
 
 **Multiple sheet tabs → multiple feature groups**

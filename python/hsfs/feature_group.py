@@ -33,7 +33,7 @@ import avro.schema
 import hsfs.expectation_suite
 import humps
 from hopsworks_apigen import deprecated, deprecation, public
-from hopsworks_common import client, job, spark_connect_utils
+from hopsworks_common import client, events, job, spark_connect_utils
 from hopsworks_common.client.exceptions import FeatureStoreException, RestAPIError
 from hopsworks_common.core import alerts_api
 from hopsworks_common.core.constants import (
@@ -42,6 +42,7 @@ from hopsworks_common.core.constants import (
     HAS_NUMPY,
     HAS_POLARS,
     HAS_PYICEBERG,
+    lazy_module,
 )
 from hopsworks_common.core.sink_job_configuration import SinkJobConfiguration
 from hsfs import (
@@ -62,6 +63,7 @@ from hsfs.constructor import filter as filter_module
 from hsfs.constructor import query
 from hsfs.core import data_source as ds
 from hsfs.core import (
+    delta_engine,
     deltastreamer_jobconf,
     expectation_suite_engine,
     explicit_provenance,
@@ -100,6 +102,8 @@ from hsfs.validation_report import ValidationReport
 
 
 if TYPE_CHECKING:
+    from hopsworks_common.project import Project
+
     if HAS_CONFLUENT_KAFKA:
         import confluent_kafka
     if HAS_NUMPY:
@@ -116,7 +120,7 @@ if TYPE_CHECKING:
 
 
 if HAS_GREAT_EXPECTATIONS:
-    import great_expectations
+    great_expectations = lazy_module("great_expectations")
 
 _logger = logging.getLogger(__name__)
 
@@ -1362,7 +1366,7 @@ class FeatureGroupBase:
     @public
     def share(
         self,
-        target_project: str | int,
+        target_project: str | int | Project,
         features: list[str] | None = None,
     ) -> None:
         """Share this feature group with another project.
@@ -1388,7 +1392,7 @@ class FeatureGroupBase:
             ```
 
         Parameters:
-            target_project: Project name (preferred) or numeric id.
+            target_project: Project name, numeric id or Project object. Use the id or the object when several projects share a name.
             features: Optional whitelist of feature names. ``None`` shares
                 the whole feature group.
 
@@ -1426,13 +1430,13 @@ class FeatureGroupBase:
         return share_api.ShareApi()._list_feature_group_shares(self._id)
 
     @public
-    def unshare(self, target_project: str | int) -> None:
+    def unshare(self, target_project: str | int | Project) -> None:
         """Revoke a previously-granted feature-group share.
 
         Requires the **Data Owner** role in the source project.
 
         Parameters:
-            target_project: Project name or numeric id.
+            target_project: Project name, numeric id or Project object.
 
         Raises:
             PermissionError: If the caller lacks Data Owner in the source
@@ -3137,10 +3141,21 @@ class FeatureGroupBase:
             | None
         ),
     ) -> None:
-        if isinstance(expectation_suite, hsfs.expectation_suite.ExpectationSuite):
+        # The Great Expectations check comes last: it loads the package, which every
+        # feature group read from the backend would otherwise pay for.
+        if expectation_suite is None:
+            self._expectation_suite = None
+        elif isinstance(expectation_suite, hsfs.expectation_suite.ExpectationSuite):
             tmp_expectation_suite = expectation_suite.to_json_dict(decamelize=True)
             tmp_expectation_suite["feature_group_id"] = self._id
             tmp_expectation_suite["feature_store_id"] = self._feature_store_id
+            self._expectation_suite = hsfs.expectation_suite.ExpectationSuite(
+                **tmp_expectation_suite
+            )
+        elif isinstance(expectation_suite, dict):
+            tmp_expectation_suite = expectation_suite.copy()
+            tmp_expectation_suite["feature_store_id"] = self._feature_store_id
+            tmp_expectation_suite["feature_group_id"] = self._id
             self._expectation_suite = hsfs.expectation_suite.ExpectationSuite(
                 **tmp_expectation_suite
             )
@@ -3153,15 +3168,6 @@ class FeatureGroupBase:
                 feature_store_id=self._feature_store_id,
                 feature_group_id=self._id,
             )
-        elif isinstance(expectation_suite, dict):
-            tmp_expectation_suite = expectation_suite.copy()
-            tmp_expectation_suite["feature_store_id"] = self._feature_store_id
-            tmp_expectation_suite["feature_group_id"] = self._id
-            self._expectation_suite = hsfs.expectation_suite.ExpectationSuite(
-                **tmp_expectation_suite
-            )
-        elif expectation_suite is None:
-            self._expectation_suite = None
         else:
             raise TypeError(
                 f"The argument `expectation_suite` has to be `None` of type `ExpectationSuite` or `dict`, but is of type: `{type(expectation_suite)}`"
@@ -3596,6 +3602,7 @@ class FeatureGroup(FeatureGroupBase):
         clustered_by: list[str] | None = None,
         bucket_index: dict[str, Any] | None = None,
         sort_order: list[str] | None = None,
+        offline_table_initialized: bool | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -3663,6 +3670,12 @@ class FeatureGroup(FeatureGroupBase):
             None if sort_order is None else list(sort_order)
         )
         self._online_partition_columns: bool = bool(online_partition_columns)
+        # True when the backend wrote the first Delta commit at create.
+        # Old backends do not return the field, so it stays None.
+        self._offline_table_initialized: bool | None = offline_table_initialized
+        # Create-request options, set by the engine before the POST only.
+        self._initialize_offline_table: bool | None = None
+        self._enable_change_data_feed: bool | None = None
 
         self._materialization_job: Job = None
 
@@ -4432,17 +4445,15 @@ class FeatureGroup(FeatureGroupBase):
                 "Sink can only be enabled for feature groups with time travel format DELTA."
             )
 
-        if write_options is None:
-            write_options = {}
-        if all(
-            [
-                not self._id,
-                self.time_travel_format == "DELTA",
-                write_options.get("delta.enableChangeDataFeed") != "false",
-            ]
-        ):
+        # A copy, so the defaults set below stay out of the caller's dict.
+        write_options = dict(write_options or {})
+        if not self._id and self.time_travel_format == "DELTA":
             # New delta FG allow for change data capture query
-            write_options["delta.enableChangeDataFeed"] = "true"
+            write_options["delta.enableChangeDataFeed"] = (
+                delta_engine.DeltaEngine.change_data_feed_value(
+                    write_options.get("delta.enableChangeDataFeed", "true")
+                )
+            )
 
         if (
             (features is None and len(self._features) > 0)
@@ -4473,7 +4484,7 @@ class FeatureGroup(FeatureGroupBase):
             )
 
             self._feature_group_engine._save_feature_group_metadata(
-                self, None, write_options or {}
+                self, None, write_options
             )
 
             return None, None
@@ -4688,23 +4699,21 @@ class FeatureGroup(FeatureGroupBase):
 
         if validation_options is None:
             validation_options = {}
-        if write_options is None:
-            write_options = {}
+        # A copy, so the defaults set below stay out of the caller's dict.
+        write_options = dict(write_options or {})
         if "wait_for_job" not in write_options:
             write_options["wait_for_job"] = wait
         if "wait_for_online_ingestion" not in write_options:
             write_options["wait_for_online_ingestion"] = wait
         if not self._id and self._offline_backfill_every_hr is not None:
             write_options["offline_backfill_every_hr"] = self._offline_backfill_every_hr
-        if all(
-            [
-                not self._id,
-                self.time_travel_format == "DELTA",
-                write_options.get("delta.enableChangeDataFeed") != "false",
-            ]
-        ):
+        if not self._id and self.time_travel_format == "DELTA":
             # New delta FG allow for change data capture query
-            write_options["delta.enableChangeDataFeed"] = "true"
+            write_options["delta.enableChangeDataFeed"] = (
+                delta_engine.DeltaEngine.change_data_feed_value(
+                    write_options.get("delta.enableChangeDataFeed", "true")
+                )
+            )
 
         job, ge_report = self._feature_group_engine._insert(
             self,
@@ -5032,6 +5041,11 @@ class FeatureGroup(FeatureGroupBase):
         return self._feature_group_engine._commit_details(self, wallclock_time, limit)
 
     @public
+    @events.tracking(
+        "fg",
+        "update",
+        key=lambda self, *a, **k: {"name": self.name, "version": self.version},
+    )
     def remove_rows(
         self,
         delete_df: TypeVar("pyspark.sql.DataFrame"),  # noqa: F821
@@ -5261,9 +5275,10 @@ class FeatureGroup(FeatureGroupBase):
 
         A reader opening a Delta table replays every commit since the last checkpoint, so
         without one the cost of opening the table grows with the number of commits.
-        Spark writes checkpoints on its own every `delta.checkpointInterval` commits;
-        delta-rs writes none, so on a table only ever written from Python this is the only
-        thing that bounds the replay.
+        Spark and delta-rs both write a checkpoint on their own every `delta.checkpointInterval` commits.
+        Hopsworks sets that property from the cluster's `featurestore_delta_checkpoint_interval` variable
+        only when the variable is available and the table has no `delta.checkpointInterval` yet.
+        A reader replays at most the table's own interval of commits, so this call forces one early.
 
         Expiring the log entries a checkpoint covers is a separate call,
         [`delta_cleanup_metadata`][hsfs.feature_group.FeatureGroup.delta_cleanup_metadata].
@@ -5951,6 +5966,10 @@ class FeatureGroup(FeatureGroupBase):
                 fg_meta_dict["bucketIndex"]["engine"] = self._bucket_index["engine"]
         if self._sort_order:
             fg_meta_dict["sortOrder"] = list(self._sort_order)
+        if self._initialize_offline_table is not None:
+            fg_meta_dict["initializeOfflineTable"] = self._initialize_offline_table
+        if self._enable_change_data_feed is not None:
+            fg_meta_dict["enableChangeDataFeed"] = self._enable_change_data_feed
         if self.data_source:
             fg_meta_dict["dataSource"] = self.data_source.to_dict()
         if self._online_config:
@@ -6586,8 +6605,8 @@ class ExternalFeatureGroup(FeatureGroupBase):
 
         if validation_options is None:
             validation_options = {}
-        if write_options is None:
-            write_options = {}
+        # A copy, so the defaults set below stay out of the caller's dict.
+        write_options = dict(write_options or {})
         if "wait_for_job" not in write_options:
             write_options["wait_for_job"] = wait
         if "wait_for_online_ingestion" not in write_options:

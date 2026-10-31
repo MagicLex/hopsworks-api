@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Literal
 
-from hopsworks_common import client
+from hopsworks_common import client, events, util
 from hopsworks_common.client.exceptions import FeatureStoreException
 from hopsworks_common.core.constants import (
     HAS_AVRO,
@@ -37,12 +37,6 @@ from hopsworks_common.decorators import _uses_confluent_kafka
 from hsfs.core import online_ingestion, online_ingestion_api, storage_connector_api
 from tqdm import tqdm
 
-
-if HAS_NUMPY:
-    import numpy as np
-
-if HAS_PANDAS:
-    import pandas as pd
 
 if HAS_CONFLUENT_KAFKA:
     from confluent_kafka import (
@@ -463,6 +457,12 @@ def _get_encoder_func(writer_schema: str) -> callable:
 
 
 def _encode_row(complex_feature_writers, writer, row):
+    if HAS_NUMPY:
+        import numpy as np
+
+    if HAS_PANDAS:
+        import pandas as pd
+
     # transform special data types
     # here we might need to handle also timestamps and other complex types
     # possible optimizaiton: make it based on type so we don't need to loop over
@@ -483,6 +483,10 @@ def _encode_row(complex_feature_writers, writer, row):
                 row[k] = row[k].replace(tzinfo=timezone.utc)
             if HAS_PANDAS and isinstance(row[k], pd._libs.missing.NAType):
                 row[k] = None
+            # A nullable boolean column (pandas' "boolean") yields numpy.bool_ from itertuples,
+            # which is not a bool, so avro matches it to no branch of ["null", "boolean"].
+            if HAS_NUMPY and isinstance(row[k], np.bool_):
+                row[k] = bool(row[k])
     # encode complex features
     row = _encode_complex_features(complex_feature_writers, row)
     # encode feature row
@@ -531,12 +535,16 @@ def _build_ack_callback_and_optional_progress_bar(
             total=n_rows,
             bar_format=bar_format,
             desc="Uploading Dataframe",
+            disable=util._progress_disabled(),
             mininterval=1,
         )
     else:
         progress_bar = None
 
+    delivered = 0
+
     def acked(err: KafkaError | None, msg: Any) -> None:
+        nonlocal delivered
         if err is not None:
             if offline_write_options.get("debug_kafka", False):
                 print(f"Failed to deliver message: {str(msg)}: {str(err)}")
@@ -546,6 +554,9 @@ def _build_ack_callback_and_optional_progress_bar(
         # update progress bar for each msg
         if not is_multi_part_insert:
             progress_bar.update()
+        # Counted here: a disabled progress bar (no terminal) does not count.
+        delivered += 1
+        events.progress(delivered, n_rows, "rows")
 
     return acked, progress_bar
 

@@ -18,7 +18,6 @@ import copy
 
 from hopsworks_common.constants import SCALING_CONFIG, Default
 from hsml import resources, transformer
-from hsml.constants import RESOURCES
 
 
 SERVING_NUM_INSTANCES_NO_LIMIT = [-1]
@@ -137,12 +136,8 @@ class TestTransformer:
         assert t.script_file == json["script_file"]
 
         assert t.resources.num_instances == SCALING_CONFIG.MIN_NUM_INSTANCES
-        assert t.resources.requests.cores == RESOURCES.MIN_CORES
-        assert t.resources.requests.memory == RESOURCES.MIN_MEMORY
-        assert t.resources.requests.gpus == RESOURCES.GPUS
-        assert t.resources.limits.cores == RESOURCES.MAX_CORES
-        assert t.resources.limits.memory == RESOURCES.MAX_MEMORY
-        assert t.resources.limits.gpus == RESOURCES.GPUS
+        assert t.resources.requests is None
+        assert t.resources.limits is None
 
     # constructor
 
@@ -162,12 +157,17 @@ class TestTransformer:
         assert t.script_file == json["script_file"]
 
         assert t.resources.num_instances == SCALING_CONFIG.MIN_NUM_INSTANCES
-        assert t.resources.requests.cores == RESOURCES.MIN_CORES
-        assert t.resources.requests.memory == RESOURCES.MIN_MEMORY
-        assert t.resources.requests.gpus == RESOURCES.GPUS
-        assert t.resources.limits.cores == RESOURCES.MAX_CORES
-        assert t.resources.limits.memory == RESOURCES.MAX_MEMORY
-        assert t.resources.limits.gpus == RESOURCES.GPUS
+        assert t.resources.requests is None
+        assert t.resources.limits is None
+
+    def test_to_dict_omits_unset_resources(self, mocker):
+        self._mock_serving_variables(
+            mocker, SERVING_NUM_INSTANCES_NO_LIMIT, force_scale_to_zero=False
+        )
+
+        serialized = transformer.Transformer("script.py", resources=None).to_dict()
+
+        assert serialized["transformerResources"] == {}
 
     def test_constructor_default_resources_when_scale_to_zero_is_required(
         self, mocker, backend_fixtures
@@ -187,12 +187,8 @@ class TestTransformer:
         assert t.script_file == json["script_file"]
 
         assert t.resources.num_instances == 0
-        assert t.resources.requests.cores == RESOURCES.MIN_CORES
-        assert t.resources.requests.memory == RESOURCES.MIN_MEMORY
-        assert t.resources.requests.gpus == RESOURCES.GPUS
-        assert t.resources.limits.cores == RESOURCES.MAX_CORES
-        assert t.resources.limits.memory == RESOURCES.MAX_MEMORY
-        assert t.resources.limits.gpus == RESOURCES.GPUS
+        assert t.resources.requests is None
+        assert t.resources.limits is None
 
     def test_constructor_default_scaling_configuration_marker(
         self, mocker, backend_fixtures

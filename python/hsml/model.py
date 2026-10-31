@@ -28,10 +28,10 @@ from hopsworks_apigen import public
 from hopsworks_common import client, tag, usage, util
 from hopsworks_common.constants import INFERENCE_ENDPOINTS as IE
 from hopsworks_common.constants import MODEL_REGISTRY
+from hsml import predictor as predictor_mod
 from hsml.core import explicit_provenance
 from hsml.engine import model_engine
 from hsml.model_schema import ModelSchema
-from hsml.predictor import Predictor
 from hsml.schema import Schema
 
 
@@ -95,6 +95,9 @@ class Model:
         self._creator = creator
         self._environment = environment
         self._project_name = project_name
+        # modelPath comes from the server; older backends return none.
+        self._server_model_path = kwargs.get("model_path")
+        self._models_path = None
         self._training_metrics = metrics
         self._program = program
         self._user_full_name = user_full_name
@@ -486,7 +489,7 @@ class Model:
         if name is None:
             name = self._get_default_serving_name()
 
-        predictor = Predictor.for_model(
+        predictor = predictor_mod.Predictor.for_model(
             self,
             name=name,
             description=description,
@@ -836,6 +839,7 @@ class Model:
         model_dict = {
             "id": self._name + "_" + str(self._version),
             "projectName": self._project_name,
+            "modelRegistryId": self._model_registry_id,
             "name": self._name,
             "modelSchema": self._model_schema,
             "version": self._version,
@@ -1020,8 +1024,12 @@ class Model:
     def model_path(self):
         """Path of the model with version folder omitted.
 
-        Resolves to `/Projects/{project_name}/Models/{name}`.
+        Resolves to `/Projects/{backing_name}/Models/{name}`.
         """
+        if self._server_model_path:
+            return self._server_model_path
+        if self._models_path:
+            return f"{self._models_path}/{self.name}"
         return f"/Projects/{self.project_name}/Models/{self.name}"
 
     @public
@@ -1029,7 +1037,7 @@ class Model:
     def version_path(self):
         """Path of the model including version folder.
 
-        Resolves to `/Projects/{project_name}/Models/{name}/{version}`.
+        Resolves to `/Projects/{backing_name}/Models/{name}/{version}`.
         """
         return f"{self.model_path}/{str(self.version)}"
 
@@ -1038,7 +1046,7 @@ class Model:
     def model_files_path(self):
         """Path of the model files including version and files folder.
 
-        Resolves to `/Projects/{project_name}/Models/{name}/{version}/Files`.
+        Resolves to `/Projects/{backing_name}/Models/{name}/{version}/Files`.
         """
         return f"{self.version_path}/{MODEL_REGISTRY.MODEL_FILES_DIR_NAME}"
 

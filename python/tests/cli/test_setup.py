@@ -74,7 +74,7 @@ def test_resolve_host_prefers_explicit_flag():
 
 def test_resolve_host_reuses_cached_when_non_interactive():
     cfg = config.HopsConfig(host="https://old.example")
-    with mock.patch.object(setup_mod, "_interactive", return_value=False):
+    with mock.patch.object(setup_mod.output, "no_input", return_value=True):
         assert setup_mod._resolve_host(cfg, None) == "https://old.example"
 
 
@@ -93,7 +93,7 @@ def test_resolve_host_prompts_and_switches_cluster(tmp_home):
     )
     cfg = config.load()
     with (
-        mock.patch.object(setup_mod, "_interactive", return_value=True),
+        mock.patch.object(setup_mod.output, "no_input", return_value=False),
         mock.patch.object(
             setup_mod.click, "prompt", return_value="https://alive.example"
         ),
@@ -122,7 +122,7 @@ def test_setup_force_prompts_and_runs_flow_against_new_host(tmp_home):
     with (
         mock.patch.object(setup_mod.requests, "post", side_effect=_flow_post()),
         mock.patch.object(setup_mod, "_open_browser", return_value=True),
-        mock.patch.object(setup_mod, "_interactive", return_value=True),
+        mock.patch.object(setup_mod.output, "no_input", return_value=False),
         mock.patch.object(
             setup_mod.click, "prompt", return_value="https://alive.example"
         ),
@@ -166,6 +166,7 @@ def test_setup_runs_token_flow_when_forced(tmp_home):
     wait_response = {
         "apiKey": "NEW.KEY",
         "workspaceUsername": "demo",
+        "workspaceProjectId": 42,
         "apiKeyName": "jim-laptop",
         "timeout": False,
     }
@@ -229,6 +230,7 @@ def test_setup_runs_token_flow_when_forced(tmp_home):
     assert saved.api_key == "NEW.KEY"
     assert saved.api_key_name == "jim-laptop"
     assert saved.project == "demo"
+    assert saved.project_id == 42
 
 
 def _flow_post(create=None, wait=None):
@@ -459,7 +461,7 @@ def test_setup_failure_prints_one_line_naming_the_host(tmp_home):
 
     assert result.exit_code != 0
     assert (
-        "Failed to connect to https://c.app.hopsworks.ai: connection refused"
+        "Could not connect to https://c.app.hopsworks.ai: connection refused"
         in result.output
     )
 

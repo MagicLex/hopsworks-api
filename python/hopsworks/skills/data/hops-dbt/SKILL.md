@@ -30,7 +30,7 @@ over exported Parquet produce the same artifacts.
 
 ## Smoke-test (cheap pre/post-flight)
 ```bash
-hops trino tables delta.<project>_featurestore                 # before: sources visible to dbt?
+hops trino tables delta.<backing name>_featurestore                 # before: sources visible to dbt?
 hops job info <job-name>                                       # after: execution FINISHED?
 hops files list Resources/dbt_runs/<job-name>/<execution id>   # after: run_graph.json + execution_graph.html present
 ```
@@ -69,7 +69,7 @@ os.environ.update({
     "DBT_TRINO_PORT": str(trino.get_port()),
     "DBT_TRINO_USER": user,
     "DBT_TRINO_PASSWORD": password,
-    "DBT_TRINO_SCHEMA": f"{project.name}_featurestore",
+    "DBT_TRINO_SCHEMA": f"{getattr(project, 'backing_name', project.name)}_featurestore",
     # _get_ca_chain_path is private on purpose: dbt needs the cert as a FILE
     # PATH for profiles.yml, and connect()/create_engine() are the only
     # public paths, which resolve it internally instead of handing it over.
@@ -79,7 +79,7 @@ os.environ.update({
 
 Rules that make dbt work against Hopsworks Trino:
 
-- **Sources are feature-group tables:** `delta.<project>_featurestore.<fg name>_<version>` (see [hops-trino-sql](../hops-trino-sql/SKILL.md) for naming and partition pruning).
+- **Sources are feature-group tables:** `delta.<backing name>_featurestore.<fg name>_<version>` (see [hops-trino-sql](../hops-trino-sql/SKILL.md) for naming and partition pruning).
 - **Materialize models as `ephemeral`.** The offline store is Hopsworks-managed: tables are created and written through the feature-store API so schema, statistics and lineage stay consistent. dbt compiles the SQL; the runner executes it and upserts the rows into a feature group.
 - **Override relation listing.** dbt-trino's default introspection reads `system.metadata`, which Hopsworks Trino restricts. Add this macro to the project:
 
@@ -215,7 +215,7 @@ def compiled_sql(target_dir: Path) -> str:
 def run_and_upsert(project, fs, target_dir: Path) -> int:
     conn = project.get_trino_api().connect(
         catalog="delta",                              # the FG's format: delta | hudi | iceberg
-        schema=f"{project.name.lower()}_featurestore",
+        schema=f"{getattr(project, 'backing_name', project.name).lower()}_featurestore",
     )
     try:
         cur = conn.cursor()

@@ -59,7 +59,7 @@ import { trinoClient, query, streamQuery, featureGroupTable } from "@hopsworks/a
 
 const trino = await trinoClient({ catalog: "delta" });        // catalog = the feature group's format: delta, hudi, iceberg
 
-// <fg_name>_<version> in the project's schema (TRINO_SCHEMA, "<project>_featurestore")
+// <fg_name>_<version> in the project's schema (TRINO_SCHEMA, "<backing name>_featurestore")
 const recent = await query(trino,
   `SELECT cc_num, amount, event_time FROM transactions_1 WHERE event_time >= DATE '2025-01-01' LIMIT 100`);
 

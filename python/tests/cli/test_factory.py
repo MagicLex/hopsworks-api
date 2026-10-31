@@ -145,8 +145,8 @@ def test_answers_are_checked_as_the_form_checks_them():
         "What should it answer? is required.",
         "Cadence must be one of daily, weekly.",
         "Weeks is out of range.",
-        "Tables 1: Table is required.",
-        "Tables 1: Refresh must be one of daily, weekly.",
+        "Tables 1: Table (`table`) is required.",
+        "Tables 1: Refresh (`cadence`) must be one of daily, weekly.",
     ]
 
 
@@ -185,6 +185,12 @@ def test_a_new_repository_needs_no_url_and_an_existing_one_a_clean_url():
         ("yes", "must say whether"),
     ):
         assert problem in factory_spec.repository_problems(answer, "Repo")[0]
+
+
+@pytest.mark.parametrize("answer", [{"url": "local"}, {"create": False, "url": "local"}, {"create": True, "url": " Local "}])
+def test_a_local_url_keeps_code_in_hopsworks(answer):
+    assert factory_spec.repository_problems(answer, "Repo") == []
+    assert factory_spec.repo_record(answer) == {"url": "local", "provider": "local"}
 
 
 def test_code_kept_in_hopsworks_needs_no_url_and_creates_no_repository():
@@ -398,7 +404,9 @@ def test_validate_runs_without_a_cluster(tmp_path):
     assert refused.exit_code != 0 and "kind must be Factory" in refused.output
 
 
-def test_import_reviews_the_instructions_then_creates(tmp_path, monkeypatch, logged_in):
+def test_import_reviews_the_instructions_then_creates(
+    tmp_path, monkeypatch, logged_in, tty
+):
     path = tmp_path / "review.yaml"
     path.write_text(REVIEW)
     created = []
@@ -483,7 +491,7 @@ def _recording(monkeypatch, tmp_path):
 
 
 def test_run_asks_each_question_then_resumes_from_system_yaml(
-    tmp_path, monkeypatch, logged_in
+    tmp_path, monkeypatch, logged_in, tty
 ):
     registered, launched = _recording(monkeypatch, tmp_path)
     typed = [
@@ -524,7 +532,7 @@ def test_run_asks_each_question_then_resumes_from_system_yaml(
     assert refused.exit_code != 0
     assert "hops factory run churn-review q3-review" in refused.output
     unknown = CliRunner().invoke(cli, ["factory", "run", "churn-review", "nope"])
-    assert unknown.exit_code != 0 and "no system 'nope'" in unknown.output
+    assert unknown.exit_code != 0 and "No system 'nope'" in unknown.output
     preset = CliRunner().invoke(
         cli, ["factory", "run", "churn-review", "--preset", "q4"]
     )

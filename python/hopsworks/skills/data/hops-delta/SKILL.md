@@ -54,10 +54,11 @@ possible.
   just orphaned are seconds old and the retention window has not passed. On a
   daily schedule, each run reclaims what earlier runs orphaned. That is expected,
   not a failure, and it is the same property that keeps in-flight readers safe.
-- **Spark writes checkpoints on its own** every `delta.checkpointInterval`
-  commits (10 by default). **delta-rs writes none at all**, so a table only ever
-  written by a Python job will replay its whole log forever until something
-  checkpoints it.
+- **Spark and delta-rs both write checkpoints on their own** every
+  `delta.checkpointInterval` commits. Hopsworks sets that property from the
+  cluster's `featurestore_delta_checkpoint_interval` variable (5 by default) only
+  when the variable is available and the table has no `delta.checkpointInterval`.
+  A reader replays at most the table's own interval of commits.
 - **`after_ingest_date` needs a date partition column.** Only a partition column
   can select files without reading them, so a date-bounded compaction is refused
   on a table not partitioned by a date.
