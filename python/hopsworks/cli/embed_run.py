@@ -38,8 +38,9 @@ if TYPE_CHECKING:
 
 CHUNK_CHARS = 2000
 CHUNK_OVERLAP = 200
-#: Seconds a read-back waits for the online store to show a write or a delete.
-READBACK_S = 300
+#: Seconds a read-back waits for the online store to show a write or a delete:
+#: 30x the worst lag seen on the dev cluster (1.8 s, 2026-11-04, light load).
+READBACK_S = 60
 #: Seconds after which a lease is taken over: longer than any run, shorter than a schedule gap worth noticing.
 LEASE_S = 6 * 3600
 #: Keys per online read-back request.
