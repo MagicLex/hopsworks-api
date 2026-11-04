@@ -214,7 +214,7 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-"hopsworks.cli.templates" = ["*.md"]
+"hopsworks.cli.templates" = ["*.md", "*.tmpl"]
 # Skill playbooks are data, not importable code: the folder names carry hyphens
 # and the tree has no __init__.py, so packages.find excludes it above and the
 # files ride along as package data instead.

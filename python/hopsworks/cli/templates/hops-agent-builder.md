@@ -22,57 +22,33 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    time, online or not) and `hops fg preview <fg> --limit 3`. The agent answers from these
    columns only; a question the description implies that no column can answer ends the run with
    one line naming the missing data.
-2. **Write the entry script** `agents/<name>/agent.py` in the working directory, an `AgentApp`
-   with `framework="custom"` and `tool_events=True`, the provider's SDK called directly with
-   tools (no LangChain unless the description needs it):
-   - **Tools read through Hopsworks only**, never a database driver with a copied credential.
-     Every tool is bounded (at most 50 rows back to the model); never read a whole feature group
-     per request, and never `fg.read(online=True)` without a filter (it reads the whole table):
-     - a lookup by primary key from the online store:
-       `fg.select_all().filter(fg.<pk> == key).read(online=True)`;
-     - an aggregate or top-k through Trino, with a `LIMIT` (`fs.sql` on a string raises "Reading
-       data with Hive is not supported"):
+2. **Write the entry script with `hops agent init`, then edit its output.** Never write the script
+   from scratch:
 
-       ```python
-       conn = project.get_trino_api().connect(
-           catalog="delta",
-           schema=f"{getattr(project, 'backing_name', project.name).lower()}_featurestore")
-       cur = conn.cursor(); cur.execute("SELECT ... FROM <fg>_<version> ... LIMIT 20")
-       rows = cur.fetchall(); conn.close()
-       ```
-   - Log in once at start (`hopsworks.login()` takes the pod's credentials) and keep the feature
-     store and feature group handles; a tool call reuses them.
-   - The API key: `hopsworks.get_secrets_api().get("<key_secret>")` once at start, never printed or
-     logged, never in an error message.
-   - The system prompt names the tables, their columns and what the agent is for, from
-     `description`. It answers with numbers from tool results only and says when the data has none.
-   - `suggested_prompts`: two or three questions the data answers, written from the preview rows.
-   - **Traces.** `framework="custom"` instruments nothing by itself, and the exit check reads the
-     trace, so the script opens the spans: one TOOL span per tool call and one LLM span per model
-     call, whose token counts price the turn (**hops-agent-deployment** "Price the turns"):
+   ```bash
+   hops agent init <name> --reads <fg[:version]> [<fg[:version]> ...] [--search <embedding fg[:version]>] \
+     --model <model> --key-secret <key_secret>
+   ```
 
-     ```python
-     import json
-     from opentelemetry import trace
-     tracer = trace.get_tracer("<name>")
+   It writes `agents/<name>/agent.py` (it refuses to overwrite one without `--force`): an `AgentApp`
+   (`from hopsworks_agents.protocol import AgentApp`, `framework="custom"`, `tool_events=True`) with
+   its `@agent_app.chat` handler and the `if __name__ == "__main__":` block that serves it on port
+   8080, one login at start, the API key read once from the secret (never printed), the provider's
+   SDK called with tools, a TOOL span per tool call and an LLM span per model call carrying the
+   token counts once, `asyncio.to_thread` around the blocking calls, and per feature group a
+   Trino aggregate (`LIMIT 50`, schema from the project's backing name) and, for a group with a
+   primary key and an online store, a primary-key lookup. With `--search` it adds a `search`
+   tool (at most 10 neighbours); when init says search needs the embedding endpoint, the tool is
+   not in the script and the agent answers without it. Its last lines print the `deploy_agent` call
+   with the model's prices.
 
-     def tool(name, args, fn):
-         with tracer.start_as_current_span(name, attributes={
-             "openinference.span.kind": "TOOL", "tool.name": name,
-             "input.value": json.dumps(args)}) as span:
-             result = fn(**args)
-             span.set_attribute("output.value", json.dumps(result, default=str))
-             return result
-
-     # around each provider call:
-     with tracer.start_as_current_span("llm", attributes={
-         "openinference.span.kind": "LLM", "llm.model_name": MODEL}) as span:
-         response = client.messages.create(...)
-         span.set_attribute("llm.token_count.prompt", response.usage.input_tokens)
-         span.set_attribute("llm.token_count.completion", response.usage.output_tokens)
-     ```
-
-     A blocking tool or provider call runs in `asyncio.to_thread` from the handler.
+   Edit what the description changes: the system prompt (what the agent is for, from
+   `description`; it answers with numbers from tool results only and says when the data has none),
+   the `suggested_prompts` (two or three questions the data answers, written from the preview rows)
+   and the tools. Keep every tool bounded (at most 50 rows back to the model), reading through
+   Hopsworks only, never a database driver with a copied credential, and never
+   `fg.read(online=True)` without a filter. Keep the spans: the exit check reads the trace.
+   The key is never printed, logged or put in an error message.
 3. **Deploy with tracing and prices**, the SDK call (the CLI has no tracing option):
 
    ```python
@@ -111,8 +87,9 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    `hops app info <name>_chat` shows `State` `RUNNING`. An answer with no tool call is the model
    guessing: a fail.
 6. **Evaluation.** A read-only suite named `<name>` of 3 to 5 tasks, each a question the data
-   answers. Read each expected value through Trino first, with the query the agent's tool would
-   run, so an expectation is a value from the data, never a guess:
+   answers. Read each expected value with `hops trino query "<the SQL the agent's tool would run>"` first
+   (the SDK's Trino connect fails TLS from the sandbox), so an expectation is a value from the
+   data, never a guess:
    - the judge's key: a check that names a provider reads `<PROVIDER>_API_KEY` from the account's
      environment, so create it from `key_secret` once (`hopsworks.get_env_vars_api().create_env_var(
      "<PROVIDER>_API_KEY", secret_name="<key_secret>", visibility="PRIVATE")`; an existing one is

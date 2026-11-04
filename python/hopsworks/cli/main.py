@@ -43,6 +43,7 @@ _LAZY_SUBCOMMANDS: dict[str, str] = {
     "model": "hopsworks.cli.commands.model:model_group",
     "deployment": "hopsworks.cli.commands.deployment:deployment_group",
     "env": "hopsworks.cli.commands.env:env_group",
+    "secrets": "hopsworks.cli.commands.secrets:secrets_group",
     "job": "hopsworks.cli.commands.job:job_group",
     "alert": "hopsworks.cli.commands.alert:alert_group",
     "app": "hopsworks.cli.commands.app:app_group",
