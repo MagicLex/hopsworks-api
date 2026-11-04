@@ -18,7 +18,6 @@ import click
 from hopsworks.cli import embed_run, output, session
 
 
-RUNNER = f"{embed_run.STATE_DIR}/embed_job.py"
 _RUNNER_CODE = (
     '"""Runs `hops` with the job arguments: the job `hops fg embed --schedule` creates."""\n'
     "import sys\n\n"
@@ -259,6 +258,11 @@ def _job_name(group: str) -> str:
     return f"{group}_embed"
 
 
+def _runner(group: str) -> str:
+    """The job's script: one per group, so deleting the group deletes it."""
+    return f"{embed_run.STATE_DIR}/{group}_embed_job.py"
+
+
 def _schedule(project, group, src, text, args, cron, environment) -> str:
     from hopsworks.cli import versions  # noqa: PLC0415
     from hopsworks.cli.commands.files import makedirs  # noqa: PLC0415
@@ -280,12 +284,12 @@ def _schedule(project, group, src, text, args, cron, environment) -> str:
     try:
         makedirs(dataset, embed_run.STATE_DIR)
         with tempfile.TemporaryDirectory() as tmp:
-            local = os.path.join(tmp, os.path.basename(RUNNER))
+            local = os.path.join(tmp, os.path.basename(_runner(group)))
             with open(local, "w", encoding="utf-8") as f:
                 f.write(_RUNNER_CODE)
             dataset.upload(local, embed_run.STATE_DIR, overwrite=True)
         config = api.get_configuration("PYTHON")
-        config["appPath"] = RUNNER
+        config["appPath"] = _runner(group)
         config["defaultArgs"] = shlex.join(args)
         if environment:
             config["environmentName"] = environment
@@ -375,6 +379,8 @@ def fg_embed_delete(
             "wait for it to end, then delete."
         )
     paths = [state.lease] if held else []
+    if dataset.exists(_runner(group)):
+        paths.append(_runner(group))
     paths += [
         f"{embed_run.STATE_DIR}/{group}_v{fg.version}"
         for fg in found
