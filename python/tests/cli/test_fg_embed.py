@@ -344,6 +344,32 @@ def test_a_group_not_made_by_embed_is_refused():
     assert w.log == []
 
 
+def test_the_upsert_frame_matches_the_group_schema():
+    from datetime import datetime, timezone
+
+    from hsfs.engine import python
+
+    row = {
+        "doc_id": "1",
+        "chunk_ix": 0,
+        "text": "a",
+        "embedding": [0.1, 0.2],
+        "content_sha": "x",
+        "embedded_at": datetime.now(timezone.utc),
+    }
+    features = python.Engine()._parse_schema_feature_group(
+        embed_run.upsert_frame([row]), "HUDI"
+    )
+    assert {f.name: f.type for f in features} == {
+        "doc_id": "string",
+        "chunk_ix": "bigint",
+        "text": "string",
+        "embedding": "array<float>",
+        "content_sha": "string",
+        "embedded_at": "timestamp",
+    }
+
+
 # --- command surface ---------------------------------------------------------
 
 
@@ -440,6 +466,8 @@ def test_delete_dry_run_lists_and_deletes_nothing(embedded):
 def test_delete_removes_only_what_embed_made(embedded):
     embedded.groups.append(_owned_fg(3, owner="someone_else"))
     embedded.files.dirs.add(f"{embed_run.STATE_DIR}/notes_body_emb_v1")
+    embedded.files.files[f"{embed_run.STATE_DIR}/notes_body_emb_embed_job.py"] = b""
+    embedded.files.files[f"{embed_run.STATE_DIR}/other_body_emb_embed_job.py"] = b""
     result = CliRunner().invoke(
         cli, ["fg", "embed", "delete", "notes_body_emb", "--yes"]
     )
@@ -448,6 +476,9 @@ def test_delete_removes_only_what_embed_made(embedded):
     embedded.job.delete.assert_called_once()
     assert [fg.delete.called for fg in embedded.groups] == [True, True, False]
     assert not embedded.files.dirs
+    assert list(embedded.files.files) == [
+        f"{embed_run.STATE_DIR}/other_body_emb_embed_job.py"
+    ]
 
 
 def test_delete_is_refused_while_a_run_holds_the_lease(embedded):

@@ -283,9 +283,20 @@ class Stores:
         )
 
     def upsert(self, rows: list[dict]) -> None:
-        import pandas as pd  # noqa: PLC0415
+        self.fg.insert(upsert_frame(rows), wait=True)
 
-        self.fg.insert(pd.DataFrame(rows), wait=True)
+
+def upsert_frame(rows: list[dict]) -> Any:
+    """The rows as a frame whose embeddings infer as array<float>, the group's type.
+
+    A list of Python floats infers as array<double>, which the insert refuses.
+    """
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    frame = pd.DataFrame(rows)
+    frame["embedding"] = [np.asarray(v, dtype=np.float32) for v in frame["embedding"]]
+    return frame
 
 
 def _iso(epoch: Any) -> str:
