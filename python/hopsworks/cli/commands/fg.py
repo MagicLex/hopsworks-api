@@ -21,6 +21,7 @@ from typing import Any
 import click
 from hopsworks.cli import joinspec, lineage, output, session, versions
 from hopsworks.cli.commands.alert import fg_alert_group
+from hopsworks.cli.commands.embed import fg_embed_group
 
 
 @click.group("fg")
@@ -49,6 +50,7 @@ def fg_keyword_group() -> None:
 
 
 fg_group.add_command(fg_alert_group)
+fg_group.add_command(fg_embed_group)
 
 
 @fg_group.command("list")
@@ -1891,13 +1893,11 @@ def _build_embedding(spec: str) -> tuple[Any, Any]:
     except ValueError as exc:
         raise click.BadParameter(f"Embedding dim must be int: {exc}") from exc
     metric = parts[2].strip() if len(parts) >= 3 else "cosine"
-    from hsfs.embedding import EmbeddingFeature, EmbeddingIndex  # noqa: PLC0415
+    from hsfs.embedding import EmbeddingIndex  # noqa: PLC0415
     from hsfs.feature import Feature  # noqa: PLC0415
 
     index = EmbeddingIndex()
-    index.add_embedding(
-        EmbeddingFeature(name=col, dimension=dim, similarity_function_type=metric)
-    )
+    index.add_embedding(col, dim, similarity_function_type=metric)
     feature = Feature(col, "array<float>")
     return index, feature
 
