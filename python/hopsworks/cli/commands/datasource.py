@@ -1870,7 +1870,7 @@ def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Delete a storage connector and every feature group made from it.
+    """Delete a data source and its feature groups.
 
     The source read here is the one deleted: a same-name source made since is kept.
 
@@ -2039,7 +2039,6 @@ def _preview_rows(preview) -> list[dict]:
 )
 @click.option(
     "--limit",
-    "--n",
     "-n",
     "limit",
     type=click.IntRange(min=1),
@@ -2055,7 +2054,7 @@ def connector_preview(
     database: str | None,
     limit: int,
 ) -> None:
-    """Fetch a small data preview of one table through a connector.
+    """Preview a few rows of one table of a data source.
 
     \f
     Args:
@@ -2069,7 +2068,7 @@ def connector_preview(
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Preview failed: {exc}") from exc
+        raise click.ClickException(f"Could not preview data source '{name}': {exc}") from exc
     if database is not None:
         ds.database = database
     if table is not None:
@@ -2278,7 +2277,7 @@ def _google_source(ctx: click.Context, group: str, name: str) -> tuple[Any, Any]
     try:
         sc = fs.get_data_source(name).storage_connector
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Data source '{name}' not found: {exc}") from exc
+        raise click.ClickException(f"No data source '{name}': {exc}") from exc
     found = _synced_group(sc)
     if found != group:
         hint = f" Use: hops datasource {found} sync list {name}" if found else ""
@@ -2311,7 +2310,7 @@ def _google_send(
     from hopsworks_common.core import rest
 
     return _call(
-        method.capitalize(), lambda: rest._send_request(method, path, query, body)
+        method.upper(), lambda: rest._send_request(method, path, query, body)
     )
 
 
@@ -2348,6 +2347,7 @@ def _google_group(group: str) -> None:
 
     @datasource_group.group(
         group,
+        short_help=f"The syncs of a {label} data source.",
         help=f"Check and rerun the syncs Hopsworks runs for a {label} data source.",
     )
     def g() -> None:
@@ -2484,6 +2484,7 @@ def _google_drive_settings(sync: click.Group, group: str) -> None:
 
     @sync.command(
         "schedule",
+        short_help="Set the sync's Quartz cron in UTC, or none.",
         help="Set the sync's Quartz cron in UTC, seconds first ('0 0 * ? * *' is hourly), or 'none' to copy only on run.",
     )
     @click.argument("name")
@@ -2514,6 +2515,7 @@ def _google_drive_settings(sync: click.Group, group: str) -> None:
 
     @sync.command(
         "filter",
+        short_help="Copy only the files that match --include and not --exclude.",
         help="Copy only files whose path under the dataset matches --include and not --exclude (globs, e.g. 'Reports/**/*.csv'), up to --max-size-mb.",
     )
     @click.argument("name")
@@ -2544,6 +2546,7 @@ def _google_drive_settings(sync: click.Group, group: str) -> None:
 
     @sync.command(
         "mirror",
+        short_help="Remove from the dataset the files removed in Drive.",
         help="With --on (the default for a new sync), a file removed in Drive is removed from the dataset at the next run.",
     )
     @click.argument("name")
@@ -2564,4 +2567,4 @@ def _call(what: str, fn: Callable[[], Any]) -> Any:
     except click.ClickException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"{what} failed: {exc}") from exc
+        raise click.ClickException(f"Could not complete the {what} request: {exc}") from exc
