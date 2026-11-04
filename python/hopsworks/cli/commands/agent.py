@@ -799,7 +799,8 @@ def _system_prompt(name: str, groups: list[dict], search_group: dict | None) -> 
     if search_group:
         lines.append(
             f"Search tool: meaning-based lookup in {search_group['name']}; "
-            "cite what it returns."
+            "cite what it returns. When it answers that search is unavailable, "
+            "say so in your answer and answer without it."
         )
     body = "".join(f"        {json.dumps(line)},\n" for line in lines)
     return '"\\n".join(\n    [\n' + body + "    ]\n)"

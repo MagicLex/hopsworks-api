@@ -6,7 +6,15 @@ SEARCH_SKIP = @@SKIP@@
 
 def search(query, k=5):
     k = max(1, min(int(k), 10))
-    hits = FG_SEARCH.find_neighbors(embed_query(query), k=k)
+    try:
+        vector = embed_query(query)
+    except Exception as exc:  # noqa: BLE001 - the model gets a result it can say so from
+        return {
+            "search_unavailable": True,
+            "message": "Search is unavailable right now (" + str(exc) + "). "
+            "Say in your answer that you could not search.",
+        }
+    hits = FG_SEARCH.find_neighbors(vector, k=k)
     return [
         {
             "score": score,

@@ -383,7 +383,7 @@ def test_embed_help_names_the_command_without_the_hidden_verb():
 
 
 def test_embed_without_an_endpoint_names_the_settings(mock_project, monkeypatch):
-    for name in ("PROJECT", "DEPLOYMENT", "MODEL"):
+    for name in ("PROJECT", "BUILD_DEPLOYMENT", "MODEL"):
         monkeypatch.delenv(f"HOPSABLE_EMBEDDING_{name}", raising=False)
     result = CliRunner().invoke(cli, ["fg", "embed", "notes", "--text", "body"])
     assert result.exit_code == 2
@@ -548,24 +548,28 @@ def test_the_client_pairs_each_vector_with_its_text():
     answer = {"predictions": [{"data": [
         {"index": 1, "embedding": [2.0]}, {"index": 0, "embedding": [1.0]},
     ]}]}  # fmt: skip
-    assert embed._vectors(answer, 2) == [[1.0], [2.0]]
+    answer["predictions"][0]["model"] = "m"
+    assert embed._vectors(answer, 2, "m") == [[1.0], [2.0]]
     with pytest.raises(ValueError, match="1 vectors for 2 texts"):
-        embed._vectors({"predictions": [{"data": [{"embedding": [1.0]}]}]}, 2)
+        embed._vectors(
+            {"predictions": [{"model": "m", "data": [{"embedding": [1.0]}]}]}, 2, "m"
+        )
+    with pytest.raises(ValueError, match="reports model 'other', not 'm'"):
+        embed._vectors({"predictions": [{"model": "other", "data": []}]}, 0, "m")
 
 
-def test_the_client_needs_the_three_settings(monkeypatch):
+def test_the_client_needs_the_project_and_the_model(monkeypatch):
     from hopsworks_agents import embed
 
     monkeypatch.setenv("HOPSABLE_EMBEDDING_PROJECT", "hopsable_embeddings")
-    monkeypatch.delenv("HOPSABLE_EMBEDDING_DEPLOYMENT", raising=False)
-    monkeypatch.delenv("HOPSABLE_EMBEDDING_MODEL", raising=False)
-    with pytest.raises(
-        ValueError, match="HOPSABLE_EMBEDDING_DEPLOYMENT, HOPSABLE_EMBEDDING_MODEL"
-    ):
+    for name in ("DEPLOYMENT", "BUILD_DEPLOYMENT", "MODEL"):
+        monkeypatch.delenv(f"HOPSABLE_EMBEDDING_{name}", raising=False)
+    with pytest.raises(ValueError, match="HOPSABLE_EMBEDDING_MODEL"):
         embed.endpoint()
-    assert embed.endpoint(deployment="embedder", model="m") == (
+    assert embed.endpoint(model="m") == ("hopsable_embeddings", "embedder", "m")
+    assert embed.endpoint(model="m", build=True) == (
         "hopsable_embeddings",
-        "embedder",
+        "embedderbuild",
         "m",
     )
 
@@ -579,24 +583,24 @@ def test_the_client_posts_to_the_serving_project_by_its_backing_name(monkeypatch
         "projectId": 21623, "projectName": "hopsable_embeddings", "backingName": "5okprgv34044",
     }  # fmt: skip
     istio._send_request.return_value = {
-        "predictions": [{"data": [{"embedding": [0.5]}]}]
+        "predictions": [{"model": "bge", "data": [{"embedding": [0.5]}]}]
     }
     with (
         mock.patch("hopsworks_common.client._get_instance", return_value=rest),
         mock.patch("hopsworks_common.client.istio._get_instance", return_value=istio),
     ):
         vectors = embed.embed_texts(
-            ["hi"], project="hopsable_embeddings", deployment="embedder", model="bge"
+            ["hi"], project="hopsable_embeddings", deployment="embedderbuild", model="bge"
         )
     assert vectors == [[0.5]]
     call = istio._send_request.call_args
     assert call.args[1] == [
         "v1",
         "5okprgv34044",
-        "embedder",
+        "embedderbuild",
         "v1",
         "models",
-        "embedder:predict",
+        "embedderbuild:predict",
     ]
     assert json.loads(call.kwargs["data"]) == {
         "instances": [{"model": "bge", "input": ["hi"]}]
