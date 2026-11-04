@@ -32,6 +32,8 @@ hops agent logs my_agent         # startup and request errors land here
 
 Build the agent with the framework of your choice and wrap it in `AgentApp` from `hopsworks_agents.protocol`. `AgentApp` is a FastAPI app that speaks **AG-UI**, the open agent–user interaction protocol, plus Hopsworks' extensions: the chat panel detects it from its manifest, `/v1/run` (AG-UI runs) and `/v1/chat` (one JSON reply) are served, health and readiness probes exist, CORS is on, and when tracing is enabled on the deployment the library wires OpenTelemetry itself. The script runs as a program in the pod, so serve the app on port 8080 in its main block.
 
+`hops agent init <name> --reads <fg[:version]>...` writes a first `agents/<name>/agent.py` over feature groups (Anthropic SDK, traced tool and LLM spans, a bounded Trino aggregate and a primary-key lookup per group, this main block): edit it instead of starting from a blank file.
+
 ```python
 # my_agent.py
 from hopsworks_agents.protocol import AgentApp, AgentError
@@ -169,6 +171,13 @@ print(Counter(s["attributes"].get("llm.model_name") for s in trace.spans
 ```
 
 One chat after deploying settles it in a second, and it is the only way to catch an agent priced for the model its docstring names while the SDK runs its own default.
+
+List prices the CLI knows, USD per million tokens as of 2026-11-04 (`hops agent init` writes them into the script and its deploy hint):
+
+| Model | Input | Output |
+|---|---|---|
+| `claude-sonnet-5-5` | 2.00 | 10.00 |
+| `claude-sonnet-4-5` | 3.00 | 15.00 |
 
 Prices change, so write them where the model is chosen and say when they were taken. A deployment whose model changed and whose prices did not is worse than an unpriced one: it reports a number that is confidently wrong.
 
