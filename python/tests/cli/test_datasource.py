@@ -1038,7 +1038,7 @@ def test_hopsfs_has_no_connection_test():
     )
 
     assert result.exit_code == 2
-    assert "No such option: --test" in result.output
+    assert "No such option '--test'" in result.output
 
 
 def test_a_failed_test_exits_with_the_checkers_output():
