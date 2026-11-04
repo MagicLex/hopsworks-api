@@ -28,7 +28,7 @@ Leaves:
 - Domain: `init`, `create-external`, `ingest`, `infer-metadata`, `test-access`, `validate`, `trigger`, `use`, `mkdir`, `acquire`, `release`, `renew`, `write-doc`, `delete-assets`, `plan`, `filter`.
 - Sync and costs: `costs`, `copy`, `drives`, `folders`, `reset-script`, `audit`, `index`, `set-folder`, `schedule`, `pause`, `resume`, `resync`, `retry`.
 - Views: `lineage`, `logs`, `history`, `runs`, `schema`, `columns`, `tables`, `databases`, `catalogs`, `schemas`, `triggered`, `url`, `dir`, `status`.
-- Top level: `setup`, `login`, `logout`, `context`, `sql`, `update`.
+- Top level: `setup`, `login`, `logout`, `context`, `sql`, `score`, `update`.
 
 ## Not used
 

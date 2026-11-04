@@ -111,7 +111,10 @@ is the whole dispatch:
    one of them needs only when that need's exit check fails: "a model on the deals" with no
    feature view makes the view inside the model piece; "score the deals daily with the best
    model" when a model exists is the inference piece alone. "Serve", "real-time", "an endpoint" or
-   "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference. "An
+   "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference.
+   "Score", "rank" or "the chance of" an outcome over connected data (a CRM, a database, a
+   feature group), with no model named, is not a piece: run `hops score` as the **hops-score**
+   skill says. "An
    agent", "a chatbot", "an assistant", "a chat over my data" or a chat UI to talk to the data is the
    agent piece, never an app that calls a model itself: the agent piece is traced and evaluated.
 2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
