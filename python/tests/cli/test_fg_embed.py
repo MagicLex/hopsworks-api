@@ -197,6 +197,16 @@ def test_a_rerun_with_no_change_calls_the_endpoint_only_for_the_dimension():
     plan = w.run("r2")
     assert plan.embedded == 0 and plan.removed == 0 and not plan.created
     assert w.embedded == ["short"]  # the dimension probe
+    assert plan.upserted == 0
+
+
+def test_an_unchanged_chunk_missing_online_is_written_again():
+    w = World([[1, "short"], [2, "a longer body text"]])
+    w.run()
+    w.stores[1].on.discard(("1", 0))
+    plan = w.run("r2")
+    assert plan.embedded == 0 and plan.upserted == 1
+    assert w.stores[1].on == set(w.stores[1].off)
 
 
 def test_shortened_and_deleted_rows_are_removed_after_the_upsert_from_both_stores():
