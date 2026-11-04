@@ -9,8 +9,8 @@ run killed at any point leaves a state the next run finishes:
 1. Read the source fully and compute the desired keys D. A failed read stops
    the run before anything is written or deleted.
 2. X = the keys the group holds now minus D; X is written to the pending file.
-3. Upsert D; a chunk whose content_sha is unchanged keeps its vector and is
-   not sent to the endpoint.
+3. Upsert the changed chunks of D and any unchanged one the online store
+   lacks; an unchanged chunk keeps its vector and is not sent to the endpoint.
 4. Remove X, offline then online.
 5. Read back X absent from both stores and D present online, then delete the
    pending file.
@@ -412,8 +412,16 @@ def run(
                 strict=True,
             )
         )
+        # Unchanged chunks are rewritten only when the online store lacks them
+        # (a run that died after the offline write), so a refresh's writes stay
+        # proportional to what changed.
+        missing = set(want) - set(changed)
+        if missing:
+            missing -= stores.online_present(sorted(missing))
         rows = []
         for key, chunk in want.items():
+            if key not in vectors and key not in missing:
+                continue
             vector, at = (
                 (vectors[key], stamp)
                 if key in vectors
