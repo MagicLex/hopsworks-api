@@ -22,6 +22,10 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    time, online or not) and `hops fg preview <fg> --limit 3`. The agent answers from these
    columns only; a question the description implies that no column can answer ends the run with
    one line naming the missing data.
+   When the questions need search over text (documents, notes, descriptions), make the text
+   searchable first and pass the group to `--search`:
+   `hops fg embed <fg> --text <col> [--schedule "@daily"]` writes `<fg>_<col>_emb` (it prints the
+   group's name); a source that changes gets `--schedule`.
 2. **Write the entry script with `hops agent init`, then edit its output.** Never write the script
    from scratch:
 
@@ -40,7 +44,8 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    primary key and an online store, a primary-key lookup. With `--search` it adds a `search`
    tool (at most 10 neighbours); when init says search needs the embedding endpoint, the tool is
    not in the script and the agent answers without it. Its last lines print the `deploy_agent` call
-   with the model's prices.
+   with the model's prices; with `--search` that call's `description` names the group
+   (`hopsable.embed.search=<group>`): keep it, `hops fg embed delete` reads it.
 
    Edit what the description changes: the system prompt (what the agent is for, from
    `description`; it answers with numbers from tool results only and says when the data has none),
@@ -56,7 +61,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    project = hopsworks.login()
    agent = project.get_agent_serving().deploy_agent(
        entry="agents/<name>/agent.py", name="<name>", environment="python-agent-pipeline",
-       description="<description>",
+       description="<description>",  # with --search: "<description> hopsable.embed.search=<group>"
        tracing={"enabled": True,
                 "input_token_price_per_million_tokens": <in>,
                 "output_token_price_per_million_tokens": <out>},

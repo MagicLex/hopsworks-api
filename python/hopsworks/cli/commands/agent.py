@@ -590,7 +590,7 @@ def agent_init(
         return
     output.success("✓ Wrote %s", target)
     click.echo("Tools: " + ", ".join(tools))
-    click.echo(_deploy_hint(name, target, model_name))
+    click.echo(_deploy_hint(name, target, model_name, search_group))
 
 
 def _split_refs(values: tuple[str, ...]) -> list[str]:
@@ -833,7 +833,18 @@ def _price_comment(model_name: str) -> str:
     )
 
 
-def _deploy_hint(name: str, target: Path, model_name: str) -> str:
+def _deploy_hint(
+    name: str, target: Path, model_name: str, search_group: dict | None = None
+) -> str:
+    # `hops fg embed delete` refuses while a deployment's description names its group.
+    description = ""
+    if search_group:
+        from hopsworks.cli import embed_run  # noqa: PLC0415
+
+        description = (
+            f'      description="Searches {search_group["name"]}. '
+            f'{embed_run.SEARCH}{search_group["name"]}",\n'
+        )
     price = _PRICES.get(model_name)
     tracing = '{"enabled": True'
     if price:
@@ -850,6 +861,7 @@ def _deploy_hint(name: str, target: Path, model_name: str) -> str:
         "  project = hopsworks.login()\n"
         "  agent = project.get_agent_serving().deploy_agent(\n"
         f'      entry="{target}", name="{name}", environment="python-agent-pipeline",\n'
+        f"{description}"
         f"      tracing={tracing})\n"
         "  agent.start(await_running=900)"
     )

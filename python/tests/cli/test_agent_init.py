@@ -98,9 +98,10 @@ def test_init_an_unreadable_preview_still_writes_the_script(mock_project, tmp_pa
 
 
 def test_init_search_without_the_embedding_module_is_omitted(contacts, tmp_path):
-    result, code = _init(
-        tmp_path, "bot1", "--reads", "contacts", "--search", "contacts"
-    )
+    with mock.patch("importlib.util.find_spec", return_value=None):
+        result, code = _init(
+            tmp_path, "bot1", "--reads", "contacts", "--search", "contacts"
+        )
     assert result.exit_code == 0, result.output
     assert "Search needs the embedding endpoint" in result.output
     assert "def search(" not in code
