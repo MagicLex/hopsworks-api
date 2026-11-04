@@ -796,6 +796,25 @@ def fg_create_external(
         raise click.ClickException(
             f"Could not find data source '{connector_name}': {exc}"
         ) from exc
+    connector = data_source.storage_connector
+    if connector is not None and connector.type == "CRM":
+        # A CRM group reads through the vendor's API on Spark only: no Python
+        # read, preview or SQL works on it. Google Analytics lands in a report
+        # sync dataset instead, and Hopsworks refuses an ingestion job on it.
+        crm = getattr(connector.crm_type, "value", connector.crm_type)
+        if str(crm).lower() == "google_analytics":
+            raise click.UsageError(
+                f"{connector_name} is a Google Analytics source: read its report sync. "
+                f"`hops datasource info {connector_name}` names the dataset; mount its "
+                f"`traffic` folder through a HopsFS data source (skill hops-data-sources, "
+                f"google-sources.md)."
+            )
+        raise click.UsageError(
+            f"{connector_name} is a CRM source: its rows cannot be read in place. "
+            f"Copy them into a feature group: `hops fg ingest {name} --connector "
+            f"{connector_name} --table <resource> --primary-key <cols> --no-statistics`; "
+            f"`hops datasource tables {connector_name}` lists the resources."
+        )
 
     # The SDK ignores query and path passed next to a data source, so the
     # whole source spec goes on the data source itself.
@@ -886,6 +905,15 @@ _INGEST_STRATEGIES = {
     help="First run's start: an id for incremental-id; epoch ms, an ISO time or a dashed date for incremental-timestamp; a date or ISO time for incremental-date.",
 )
 @click.option("--online", is_flag=True, help="Also load the online feature store.")
+@click.option(
+    "--statistics/--no-statistics",
+    "statistics",
+    default=None,
+    help=(
+        "Compute statistics after each copy (a statistics job per run). "
+        "Default: the SDK default, which is on."
+    ),
+)
 @click.option("--description", default="", help="Free-form description.")
 @click.option(
     "--wait/--no-wait",
@@ -906,6 +934,7 @@ def fg_ingest(
     cursor: str | None,
     start: str | None,
     online: bool,
+    statistics: bool | None,
     description: str,
     wait: bool,
 ) -> None:
@@ -928,6 +957,7 @@ def fg_ingest(
         cursor: Column an incremental strategy tracks.
         start: First run's start value.
         online: Whether to enable the online store.
+        statistics: False turns statistics computation off; None keeps the SDK default.
         description: Free-form description.
         wait: Whether to wait for the copy to end.
     """
@@ -960,6 +990,7 @@ def fg_ingest(
             event_time,
             data_source,
             sink_job_conf,
+            statistics,
         )
         execution = _run_ingest(fg, wait)
     if output.JSON_MODE:
@@ -1006,6 +1037,7 @@ def _ingest(
     event_time,
     data_source,
     sink_job_conf=None,
+    statistics=None,
 ):
     """The sink feature group on ``data_source``, saved: its schema read from the source."""
     try:
@@ -1019,6 +1051,7 @@ def _ingest(
             data_source=data_source,
             sink_enabled=True,
             sink_job_conf=sink_job_conf,
+            statistics_config=False if statistics is False else None,
         )
         fg.save()
     except Exception as exc:  # noqa: BLE001
