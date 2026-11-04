@@ -225,6 +225,8 @@ Scheduled materialization (`offline_backfill_every_hr`) and running it without w
 
 A feature group with an `embedding_index` is backed by the vector database (OpenSearch), and every update to any of its features re-indexes. Keep it to the key, the vector and rarely-changing metadata. Creating one and similarity search: `hops skills info hops-fg references/embeddings.md`.
 
+To make a text column searchable, run `hops fg embed <fg> --text <col> [--to <group>] [--schedule "@daily"]` instead of writing the pipeline. It chunks each row's text (2000 characters, 200 overlap), embeds the chunks with the platform's embedding deployment under your own credentials (`HOPSABLE_EMBEDDING_PROJECT`, `HOPSABLE_EMBEDDING_DEPLOYMENT`, `HOPSABLE_EMBEDDING_MODEL`, or the `--embedding-*` flags) and writes `<fg>_<col>_emb`: primary key `(doc_id, chunk_ix)`, `doc_id` the source row's primary key, columns `text`, `embedding` (cosine), `content_sha`, `embedded_at`; model and dimension in the description, a new version for another model. A rerun embeds only changed chunks and deletes the chunks of shortened or deleted rows from both stores; while it runs, a search can see old and new chunks of a changed row. A failed source read changes nothing. `--schedule` adds a Python job running the same command. `hops fg embed delete <group> --dry-run` lists the group's versions, job and schedule; without `--dry-run` it deletes them, refused while an agent searches the group. Search it from an agent with `hops agent init <name> --reads <fg> --search <group>`.
+
 ---
 
 ## Reading Feature Groups
