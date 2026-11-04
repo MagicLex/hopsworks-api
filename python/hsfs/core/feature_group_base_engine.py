@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hopsworks_common import events
 from hopsworks_common.client.exceptions import FeatureStoreException
+from hopsworks_common.core.type_systems import _normalize_hive_type
 from hsfs import util
 from hsfs.core import (
     feature_group_api,
@@ -47,6 +49,14 @@ class FeatureGroupBaseEngine:
         self._storage_connector_api = storage_connector_api.StorageConnectorApi()
         self._kafka_api = kafka_api.KafkaApi()
 
+    @events.tracking(
+        "fg",
+        "delete",
+        key=lambda self, feature_group, *a, **k: {
+            "name": feature_group.name,
+            "version": feature_group.version,
+        },
+    )
     def _delete(self, feature_group, force=False, delete_feature_views=False):
         self._feature_group_api._delete(
             feature_group, force=force, delete_feature_views=delete_feature_views
@@ -234,7 +244,13 @@ class FeatureGroupBaseEngine:
                 new_features.append(feature)
         return new_features + updated_features
 
-    def _verify_schema_compatibility(self, feature_group_features, dataframe_features):
+    def _verify_schema_compatibility(
+        self,
+        feature_group_features,
+        dataframe_features,
+        decimals_cast=False,
+        timestamp_ntz_converts=False,
+    ):
         err = []
         feature_df_dict = {
             util._autofix_feature_name(feat.name): feat.type
@@ -250,9 +266,19 @@ class FeatureGroupBaseEngine:
                 del feature_df_dict[name]
 
                 # check if types match
-                if fg_type != df_type:
+                # the Delta write converts timestamp_ntz to the table's timestamp flavour
+                if _normalize_hive_type(
+                    fg_type, timestamp_ntz_converts
+                ) != _normalize_hive_type(df_type, timestamp_ntz_converts):
                     # don't check structs for exact match
                     if fg_type.startswith("struct") and df_type.startswith("struct"):
+                        continue
+                    # The delta-rs write casts decimals to the table's type and raises on overflow or a fraction.
+                    if (
+                        decimals_cast
+                        and fg_type.startswith("decimal")
+                        and df_type.startswith("decimal")
+                    ):
                         continue
 
                     err += [

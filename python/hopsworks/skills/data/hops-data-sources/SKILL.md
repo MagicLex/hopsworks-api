@@ -5,6 +5,10 @@ description: Mount or ingest a table from a supported datasource. Mount tables f
 
 Prefer the `hops` CLI for mounting or ingesting external tables from a datasource. Use the `hopsworks` Python SDK if the CLI is unsuccessful.
 
+Read a data source only through Hopsworks: mount it as an external feature group, look at it with a query that has a LIMIT, or ingest it. Never open a database driver (psycopg2, SQLAlchemy, pymysql, JDBC) with a credential copied from a secret, a variable or the connector. To look at a table, run `hops datasource preview <ds> --table <t> [--database <db>]` (`<schema>.<t>` when the name is in several schemas), or mount a query and read it: `hops fg create-external <fg> --connector <ds> --query "SELECT ... LIMIT 100" --primary-key <col> --no-statistics`, then `hops fg preview <fg>` (notebook: `fs.get_feature_group("<fg>", 1).read()`). A query mount is written against the source's schema (`schema.table`, as `hops datasource tables <ds>` shows), not the `--database` name. `read()` pulls the whole mount, so put the LIMIT or filter in the query. `connector.read()` raises `NotImplementedError` for a SQL source on the Python engine. `hops sql` cannot read a mount (`TABLE_NOT_FOUND`); use `hops fg preview` or `fg.read()`. A failed read is reported with its error, not routed around with a driver.
+
+`hops datasource infer-metadata` is optional: it needs the cluster's platform intelligence key and comes after the look, never before it.
+
 A secret option of `hops datasource create` (`--password`, `--api-key`, ...) takes the value itself, `-` to read it from stdin, or `account:NAME` to read your account variable `NAME`. Use `account:NAME` for a credential the user saved in their account (the Factory's forms do): the value goes to the data source without a shell, a file or a printout, and never through `$(...)` around a command that also prints, such as `hopsworks.login()`.
 
 Never ask the user for a password, token or key in the conversation, in a message or with AskUserQuestion: whatever is typed there reaches the model. In the Factory's chat, end your reply with a `hops-secret` block instead. It is a form: the secret as a hidden field, the plain settings that go with it (`fields`, never a secret) and, for a data source, a `test` command the form's Test button runs:
@@ -20,6 +24,8 @@ Never ask the user for a password, token or key in the conversation, in a messag
 
 Mounting and ingesting both build a feature pipeline's input side: an external feature group leaves data in the source (no copy, no copy-time MITs); a DLTHub ingest copies the source into a managed feature group. Mounting is the lower-cost path when the source already holds the data you want, since reuse beats rebuilding a pipeline.
 
+Google Drive and Google Analytics sources have no tables: [references/google-sources.md](references/google-sources.md).
+
 ## Contract
 - **Input:** a configured connector + a table from it.
 - **Output:** an external feature group (mounted in place), or a managed feature group ingested via DLTHub.
@@ -29,8 +35,8 @@ Mounting and ingesting both build a feature pipeline's input side: an external f
 ## Smoke-test: what connectors exist
 
 ```bash
-hops datasource list                 # configured connectors
-hops datasource info <connector>     # detail for one
+hops datasource list                 # configured connectors; STATE is the owner's last answer
+hops datasource info <connector>     # detail for one, with its state and Hopsworks' message
 ```
 
 ## Infer metadata (platform intelligence)
@@ -48,6 +54,12 @@ Programmatic equivalent: `data_source.infer_metadata()` on a `DataSource` return
 ## Preview source schema and data (CRM / Google Sheets / REST)
 
 Non-SQL sources (CRM, Google Sheets, REST) have no catalog to read the schema from, so Hopsworks samples the source with a server-side schema-fetch job and infers it.
+
+```bash
+hops datasource tables <connector>                     # a CRM's resources (account, contact, ...)
+hops datasource preview <connector> --table account    # its inferred schema and sampled rows
+```
+
 `StorageConnector.get_data(data_source)` fetches one resource and starts one job per call.
 `StorageConnector.get_data_batch(data_sources)` fetches several resources with ONE job that processes them sequentially in a single container — prefer it whenever you preview more than one resource.
 
@@ -65,7 +77,7 @@ data = sc.get_data(tables[0])             # single resource fallback
 Both calls block until the fetch finishes and raise `hopsworks.client.exceptions.DataSourceException` with the job logs when it fails; `get_data_batch` reports every failed resource in one exception.
 `get_data` raises the same exception for SQL sources, where the read is served inline rather than by a job: a refused read is answered with HTTP 200 and the source's own message, so the exception carries that message.
 `DataSourceException` is a subclass of `FeatureStoreException`, so an `except FeatureStoreException` around `fg.save()` catches a failed schema fetch during schema inference.
-Results are cached server-side per resource — pass `use_cached=False` to force a refetch.
+Results are cached server-side per resource, failed fetches too. Updating or deleting the data source (after fixing a credential, for example) clears its cache, so the next call fetches again; pass `use_cached=False` to force a refetch otherwise.
 For REST connectors there is no `get_tables()`; build each entry yourself with `DataSource(table="issues", rest_endpoint=RestEndpointConfig(relative_url="v1/issues"))` so every endpoint carries its own request config.
 
 ## Mount a table as an external feature group
@@ -91,6 +103,18 @@ ext_fg = fs.create_external_feature_group(
     online_enabled=False,
 )
 ext_fg.save()
+```
+
+### A folder in the project (HopsFS)
+
+A folder of parquet, csv or orc files, or a Delta or Iceberg table folder, in a project dataset mounts through a HOPSFS data source on that dataset. `--dataset` takes the dataset's name, never a path: `Resources`, `<project>_Training_Datasets`, or `<backing name>_featurestore.db`, where each feature group's table is the folder `<name>_<version>`. Reuse a HOPSFS data source on that dataset when `hops datasource list` shows one. A HOPSFS data source has no connection test: its create checks that the dataset exists. `--path` is the folder relative to the dataset. A folder with `_delta_log/` is Delta, one with `metadata/` is Iceberg; otherwise the files' extension names the format. The create reads the schema from the files, so `--features` is not needed, and `--primary-key` can wait until `hops fg info` has shown the columns.
+
+```bash
+hops files list /apps/hive/warehouse/<backing name>_featurestore.db   # the feature store's table folders; other datasets: hops files list <dataset>
+hops datasource create hopsfs <ds> --dataset <backing name>_featurestore.db
+hops fg create-external <fg> --connector <ds> --path <folder> --data-format <parquet|csv|orc|delta|iceberg> --no-statistics
+hops fg info <fg>               # the columns
+hops fg preview <fg> --limit 5
 ```
 
 ## Create a connector
@@ -137,7 +161,9 @@ Files a connector points at (`--key-path`, truststores, keystores, wallets) are 
 
 `--argument key=value` (and Kafka's or MongoDB's `--option`) carries plain connector settings only. Those values are stored and returned in clear text, so a key that looks like a credential (`sasl.jaas.config`, anything containing `password`, `secret`, `token`) is refused; there is no safe way to pass Kafka SASL credentials through the CLI until the backend keeps them in the secret store.
 
-**Confirm before deleting.** `hops datasource delete` removes the storage connector irreversibly; confirm the exact name with the user, and never delete one that feature groups still read from unless they asked.
+A source whose STATE is REFUSED (AWS no longer trusts Hopsworks) or REVOKED (the vendor grant is gone) cannot be read; tell the user before reading from it. `-` means Hopsworks keeps no state for that type.
+
+**Confirm before deleting.** `hops datasource delete` removes the source and every feature group made from it, with their data and the jobs Hopsworks made for them; it lists those groups first. Confirm the exact name and that list with the user. It deletes only the source it read, never a same-name one made since. In `--json` mode it needs `--yes`.
 
 ## Provided credentials (Oracle)
 
@@ -151,7 +177,7 @@ hops datasource create sql oracle_sales --database-type ORACLE --credentials-mod
 hops datasource credentials set oracle_sales --user SCOTT --password - < pw.txt     # validates, then saves to your account
 HOPSWORKS_DS_CREDENTIALS_WALLET_PASSWORD=... hops datasource credentials set oracle_sales --user SCOTT --password - --wallet ./Wallet_db.zip < pw.txt   # only one secret per call can come from stdin
 hops datasource credentials set oracle_sales --password - < new_pw.txt            # rotate the password; the bound username and wallet stay
-hops datasource credentials show oracle_sales                                       # status and the names of your secret and env var, never values
+hops datasource credentials info oracle_sales                                       # status and the names of your secret and env var, never values
 hops datasource list                                                                 # CREDENTIALS column: shared, provided: yours set, provided: missing
 hops fg list                                                                         # ACCESS column per mounted table: ok, no_credentials, invalid_credentials, no_access, error
 hops fg test-access sales_external                                                   # re-check your access to one mounted table now
@@ -170,7 +196,25 @@ SDK equivalents, the naming rules and the access states are in [references/provi
 
 DLTHub copies a source into a managed feature group for the cases mounting cannot serve: loading the online store or a vector index, or pulling from an API/SaaS/REST endpoint. Ingestion runs server-side in the `dlthub-ingestion-pipeline` environment, driven by a `SinkJobConfiguration` attached to a sink-enabled feature group. It is configuration plus a server job, not an in-process `dlt` call.
 
-The per-feature-group `sink_job` shown here is for ingesting a **single** table. When ingesting more than one table from the same connector, default to one multi-table job for all of them — see [Ingest many tables with one job](#ingest-many-tables-with-one-job) — instead of looping this pattern.
+One table, from the CLI: the group's schema is read from the source, then its ingestion job runs once and the command waits for it.
+
+```bash
+hops fg ingest sf_accounts --connector my_salesforce --table account --primary-key id
+hops job run <job printed above>      # copy again later
+```
+
+Copy only new rows on later runs: pick the strategy by the cursor column's type, `incremental-id` (an increasing number), `incremental-timestamp` (a timestamp) or `incremental-date` (a date). Each run reads from where the last one stopped; `--start` sets where the first run begins: an id for `incremental-id`; for `incremental-timestamp` epoch milliseconds or an ISO time or dashed date (`2026-11-01`), read as UTC when it names no zone; for `incremental-date` a date (`2026-11-01` or `20261101`) or an ISO time. The default `--strategy full` copies the whole table each run.
+
+```bash
+hops fg ingest orders --connector pg --table orders --primary-key id \
+  --strategy incremental-id --cursor id --start 0
+hops fg ingest events --connector pg --table events --primary-key id \
+  --strategy incremental-timestamp --cursor updated_at --start 2026-11-01T00:00:00Z
+```
+
+In the SDK the same settings sit inside `loading_config`: `SinkJobConfiguration(loading_config=LoadingConfig(loading_strategy="INCREMENTAL_ID", source_cursor_field="id", initial_value="0"))` (`from hopsworks.core import LoadingConfig, SinkJobConfiguration`). A dict passed as `sink_job_conf` takes the response shape: `{"loading_config": {"loading_strategy": "INCREMENTAL_ID", "incremental_loading_config": {"source_cursor_field": "id", "initial_value": "0"}}}`; loading keys at its top level are refused.
+
+The per-feature-group `sink_job` shown here is for ingesting a **single** table. Without `features`, `save()` reads the schema from the data source, as `hops datasource preview` shows it. When ingesting more than one table from the same connector, default to one multi-table job for all of them — see [Ingest many tables with one job](#ingest-many-tables-with-one-job) — instead of looping this pattern.
 
 ```python
 import hopsworks
