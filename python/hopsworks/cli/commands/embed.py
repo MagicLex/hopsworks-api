@@ -62,9 +62,9 @@ def fg_embed_group() -> None:
 )
 @click.option(
     "--embedding-deployment",
-    envvar="HOPSABLE_EMBEDDING_DEPLOYMENT",
+    envvar="HOPSABLE_EMBEDDING_BUILD_DEPLOYMENT",
     show_envvar=True,
-    help="The embedding deployment's name.",
+    help="The build embedding deployment's name; embedderbuild by default.",
 )
 @click.option(
     "--embedding-model",
@@ -164,11 +164,11 @@ def fg_embed(
         )
     try:
         endpoint = embed_client.endpoint(
-            embedding_project, embedding_deployment, embedding_model
+            embedding_project, embedding_deployment, embedding_model, build=True
         )
     except ValueError as exc:
         raise click.UsageError(
-            f"{exc} Or pass --embedding-project, --embedding-deployment and --embedding-model."
+            f"{exc} Or pass --embedding-project and --embedding-model."
         ) from exc
     src = fg_commands._get_fg(ctx, source, version)
     if text not in [f.name for f in getattr(src, "features", []) or []]:

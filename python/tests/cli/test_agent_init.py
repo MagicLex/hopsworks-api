@@ -118,6 +118,8 @@ def test_init_search_with_the_embedding_module(mock_project, tmp_path):
     assert "from hopsworks_agents.embed import embed_query" in code
     assert "min(int(k), 10)" in code
     assert 'SEARCH_SKIP = ["vec"]' in code
+    assert "search_unavailable" in code
+    assert "say so in your answer and answer without it" in code
 
 
 @pytest.mark.parametrize(
