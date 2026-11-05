@@ -498,6 +498,7 @@ _SOURCE_LABELS = {
     "query": "Query",
     "path": "Path",
     "database": "Database",
+    "group": "Schema",
     "table": "Table",
     "data_format": "Data format",
 }
@@ -513,6 +514,7 @@ def _source_to_dict(fg: Any) -> dict[str, Any] | None:
         "query": getattr(ds, "query", None),
         "path": getattr(ds, "path", None),
         "database": getattr(ds, "database", None),
+        "group": getattr(ds, "group", None),
         "table": getattr(ds, "table", None),
         "data_format": getattr(fg, "data_format", None),
     }
