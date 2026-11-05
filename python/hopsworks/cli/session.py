@@ -129,7 +129,7 @@ def get_accessible_feature_stores(ctx: click.Context) -> list[Any]:
     from hsfs.core.feature_store_api import FeatureStoreApi
 
     try:
-        stores = FeatureStoreApi().get_all()
+        stores = FeatureStoreApi()._get_all()
     except Exception:  # noqa: BLE001 - degrade to just the project store
         stores = [own]
     own_id = getattr(own, "id", None)

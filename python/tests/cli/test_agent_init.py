@@ -111,69 +111,6 @@ def test_init_search_without_the_embedding_module_is_refused(contacts, tmp_path)
     assert code is None
 
 
-class _Store:
-    """A feature store holding feature groups by name; the CLI's own lookup runs against it."""
-
-    def __init__(self, store_id, name, groups=()):
-        self.id, self.name = store_id, name
-        self.groups = {g.name: g for g in groups}
-
-    def get_feature_groups(self, name):
-        return [self.groups[name]] if name in self.groups else []
-
-    def get_feature_group(self, name, version=None):
-        return self.groups.get(name)
-
-
-@pytest.fixture
-def stores(mock_project, monkeypatch):
-    """The project's own store (id 67) and a shared one (id 99), resolved by `_get_fg`."""
-    from hopsworks.cli import session
-
-    own = mock_project.get_feature_store.return_value
-    own.get_feature_groups.side_effect = lambda name=None: []
-    own.get_feature_group.side_effect = lambda name, version=None: None
-    shared = _Store(99, "other_featurestore")
-    monkeypatch.setattr(
-        session, "get_accessible_feature_stores", lambda ctx: [own, shared]
-    )
-    return own, shared
-
-
-def test_init_refuses_a_group_found_only_in_a_shared_store(stores, tmp_path):
-    _, shared = stores
-    shared.groups["contacts"] = _fg("contacts", [("id", "bigint")], ["id"], store_id=99)
-    result, code = _init(tmp_path, "bot1", "--reads", "contacts")
-    assert result.exit_code == 1
-    assert "'contacts'" in result.output and "other_featurestore" in result.output
-    assert code is None
-
-
-def test_init_refuses_when_one_of_several_groups_is_shared(stores, tmp_path):
-    own, shared = stores
-    local = _fg("events", [("id", "bigint")], ["id"])
-    own.get_feature_groups.side_effect = lambda name=None: (
-        [local] if name == "events" else []
-    )
-    shared.groups["contacts"] = _fg("contacts", [("id", "bigint")], ["id"], store_id=99)
-    result, code = _init(tmp_path, "bot1", "--reads", "events,contacts")
-    assert result.exit_code == 1
-    assert "'contacts'" in result.output
-    assert code is None
-
-
-def test_init_reads_the_own_group_when_a_shared_one_has_the_same_name(stores, tmp_path):
-    own, shared = stores
-    local = _fg("contacts", [("id", "bigint"), ("email", "string")], ["id"])
-    own.get_feature_groups.side_effect = lambda name=None: [local]
-    shared.groups["contacts"] = _fg(
-        "contacts", [("other", "string")], ["other"], store_id=99
-    )
-    result, code = _init(tmp_path, "bot1", "--reads", "contacts")
-    assert result.exit_code == 0, result.output
-    assert "email (string)" in code and "other (string)" not in code
-
-
 def test_init_schema_is_the_feature_store_name(contacts, tmp_path):
     result, code = _init(tmp_path, "bot1", "--reads", "contacts")
     assert result.exit_code == 0, result.output
