@@ -207,7 +207,7 @@ class TestCertFolder:
         client._project_backing_name = "demo_x1"
         client._username = "u"
 
-        assert client._get_certs_folder() == "/tmp/h/demo_x1/u"
+        assert client._user_certs_folder() == "/tmp/h/demo_x1/u"
 
     def test_the_cert_dir_falls_back_to_the_name(self):
         client = ExternalClient.__new__(ExternalClient)
@@ -217,7 +217,7 @@ class TestCertFolder:
         client._project_backing_name = None
         client._username = "u"
 
-        assert client._get_certs_folder() == "/tmp/h/demo/u"
+        assert client._user_certs_folder() == "/tmp/h/demo/u"
 
 
 class TestModelRegistryById:

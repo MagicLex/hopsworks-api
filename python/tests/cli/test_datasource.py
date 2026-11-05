@@ -562,7 +562,7 @@ def test_only_one_secret_can_come_from_stdin():
 
 
 def test_a_required_secret_is_prompted_for_without_echo_on_a_terminal(monkeypatch):
-    monkeypatch.setattr(ds, "_interactive", lambda: True)
+    monkeypatch.setattr(ds.output, "no_input", lambda: False)
     with mock.patch.object(ds, "_create_connector") as create:
         result = CliRunner().invoke(
             cli,
@@ -577,7 +577,7 @@ def test_a_required_secret_is_prompted_for_without_echo_on_a_terminal(monkeypatc
 
 def test_an_empty_required_secret_is_treated_as_missing(monkeypatch):
     """An empty value must not satisfy a required secret and carry an empty credential."""
-    monkeypatch.setattr(ds, "_interactive", lambda: False)
+    monkeypatch.setattr(ds.output, "no_input", lambda: True)
 
     result, create = _invoke(
         ["sap-hana", "n", "--host", "h", "--user", "u", "--password", ""]
@@ -1029,6 +1029,16 @@ def test_test_only_checks_the_connection_and_creates_nothing():
     create.assert_not_called()
     assert send.call_args.args[1][-1] == "testConnection"
     assert send.call_args.kwargs["json_body"]["storageConnectorType"] == "SQL"
+
+
+def test_hopsfs_has_no_connection_test():
+    # The backend's ConnectionChecker refuses HOPSFS; create already checks the dataset.
+    result = CliRunner().invoke(
+        cli, ["datasource", "create", "hopsfs", "n", *_MINIMAL["hopsfs"], "--test"]
+    )
+
+    assert result.exit_code == 2
+    assert "No such option: --test" in result.output
 
 
 def test_a_failed_test_exits_with_the_checkers_output():

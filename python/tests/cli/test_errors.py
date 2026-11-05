@@ -10,10 +10,12 @@ exceptions still propagate.
 from __future__ import annotations
 
 import json
+from unittest import mock
 
 import click
 import requests
 from click.testing import CliRunner
+from hopsworks.cli import config
 from hopsworks.cli.main import _explain_rest_error, cli
 from hopsworks_common.client.exceptions import RestAPIError
 
@@ -41,11 +43,18 @@ def _rest_error(
     )
 
 
-def _run_command_raising(tmp_home, exc: BaseException, wrap: str | None = None):
+def _run_command_raising(
+    tmp_home,
+    exc: BaseException,
+    wrap: str | None = None,
+    args: tuple[str, ...] = (),
+    stdin: str | None = None,
+):
     """Invoke a throwaway ``hops boom`` whose body raises ``exc``.
 
     With ``wrap`` set the command catches the error and re-raises it inside a
-    ``ClickException`` with that prefix, the way most commands do.
+    ``ClickException`` with that prefix, the way most commands do. ``args`` go
+    before ``boom``, as root options.
     """
 
     @click.command("boom")
@@ -59,7 +68,7 @@ def _run_command_raising(tmp_home, exc: BaseException, wrap: str | None = None):
 
     cli.commands["boom"] = boom
     try:
-        return CliRunner().invoke(cli, ["boom"])
+        return CliRunner().invoke(cli, [*args, "boom"], input=stdin)
     finally:
         del cli.commands["boom"]
 
@@ -113,15 +122,91 @@ def test_other_rest_errors_keep_status_code_and_server_message(tmp_home):
     assert "Traceback" not in result.output
 
 
-def test_unauthorized_points_at_the_cached_key(tmp_home):
+def _unauthorized() -> RestAPIError:
     body = {"errorCode": 200003, "usrMsg": "Invalid API key."}
+    return _rest_error(401, body, reason="Unauthorized")
 
-    result = _run_command_raising(
-        tmp_home, _rest_error(401, body, reason="Unauthorized")
-    )
+
+def test_unauthorized_names_the_config_file_profile(tmp_home):
+    config.save(config.HopsConfig(host="https://c.app.hopsworks.ai", api_key="A.B"))
+
+    result = _run_command_raising(tmp_home, _unauthorized())
 
     assert "HTTP 401, error 200003" in result.output
+    assert (
+        f"The key came from {config.CONFIG_PATH} (profile default): check it, "
+        "or run `hops setup --force`" in result.output
+    )
+
+
+def test_unauthorized_names_the_env_var_not_the_config_file(tmp_home, monkeypatch):
+    config.save(config.HopsConfig(host="https://c.app.hopsworks.ai", api_key="A.B"))
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "C.D")
+
+    result = _run_command_raising(tmp_home, _unauthorized())
+
+    assert "The key came from HOPSWORKS_API_KEY: check it" in result.output
+    assert "hops setup --force" not in result.output
+
+
+def test_unauthorized_names_the_api_key_flag(tmp_home, monkeypatch):
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "C.D")
+
+    result = _run_command_raising(tmp_home, _unauthorized(), args=("--api-key", "E.F"))
+
+    assert "The key came from --api-key: check it." in result.output
+    assert "HOPSWORKS_API_KEY" not in result.output
+
+
+def test_unauthorized_names_the_api_key_stdin_flag(tmp_home):
+    result = _run_command_raising(
+        tmp_home, _unauthorized(), args=("--api-key-stdin",), stdin="E.F\n"
+    )
+
+    assert "The key came from --api-key-stdin: check it." in result.output
+
+
+def test_unauthorized_without_a_key_points_at_setup(tmp_home):
+    result = _run_command_raising(tmp_home, _unauthorized())
+
+    assert f"Check the key in {config.CONFIG_PATH}" in result.output
     assert "hops setup --force" in result.output
+
+
+def test_unauthorized_names_the_sdk_key_cache(tmp_home, monkeypatch):
+    config.save(config.HopsConfig(host="https://eu-west.cloud.hopsworks.ai"))
+    monkeypatch.chdir(tmp_home)
+    (tmp_home / ".hw_api_key").write_text("A.B")
+
+    result = _run_command_raising(tmp_home, _unauthorized())
+
+    cache = tmp_home / ".hw_api_key"
+    assert f"The key came from the SDK's key cache {cache}: delete it" in result.output
+    assert str(config.CONFIG_PATH) not in result.output
+
+
+def test_unauthorized_in_internal_mode_adds_no_key_hint(tmp_home, monkeypatch):
+    (tmp_home / "token.jwt").write_text("jwt\n")
+    monkeypatch.setenv(
+        "REST_ENDPOINT", "https://hopsworks.glassfish.service.consul:8182"
+    )
+    monkeypatch.setenv("SECRETS_DIR", str(tmp_home))
+
+    result = _run_command_raising(tmp_home, _unauthorized())
+
+    assert result.output == (
+        "Error: Hopsworks refused the request (HTTP 401, error 200003): "
+        "Invalid API key.\n"
+    )
+
+
+def test_missing_tag_schema_says_nothing_was_tagged():
+    body = {"errorCode": 370000, "usrMsg": "schema: analytics_table is not defined"}
+
+    text = _explain_rest_error(_rest_error(404, body, reason="Not Found"))
+
+    assert "(HTTP 404, error 370000): schema: analytics_table is not defined. " in text
+    assert "only a Hopsworks admin can define one; nothing was tagged" in text
 
 
 def test_non_json_error_body_falls_back_to_the_http_reason():
@@ -139,3 +224,78 @@ def test_unrelated_exceptions_are_not_rewritten(tmp_home):
     result = _run_command_raising(tmp_home, ValueError("boom"))
 
     assert isinstance(result.exception, ValueError)
+
+
+ROLE_FORBIDDEN = {
+    "errorCode": 150068,
+    "errorMsg": "Your project role does not allow to perform this action.",
+}
+
+
+def _owned_by_jane(mock_project):
+    mock_project.owner = "jane@example.com"
+    mock_project.project_team = [
+        {
+            "user": {"email": "dan@example.com", "fname": "Dan", "lname": "Lee"},
+            "team_role": "Data scientist",
+        },
+        {
+            "user": {"email": "jane@example.com", "fname": "Jane", "lname": "Doe"},
+            "team_role": "Data owner",
+        },
+    ]
+
+
+def test_role_refusal_names_the_project_owner_and_is_not_retried(mock_project):
+    _owned_by_jane(mock_project)
+    deployment = mock.MagicMock()
+    deployment.stop.side_effect = _rest_error(403, ROLE_FORBIDDEN)
+    mock_project.get_model_serving.return_value.get_deployment.return_value = deployment
+
+    result = CliRunner().invoke(cli, ["deployment", "stop", "fraud"])
+
+    assert result.exit_code == 1
+    assert result.output.endswith(
+        "Only the project's Data owner can do this: ask Jane Doe\n"
+    )
+    assert len(result.output.splitlines()) == 1
+    deployment.stop.assert_called_once()
+    deployment.get_state.assert_not_called()
+
+
+def test_role_refusal_inside_a_wait_stops_it_at_once(mock_project, clock):
+    _owned_by_jane(mock_project)
+    deployment = mock.MagicMock()
+    deployment.get_state.side_effect = _rest_error(403, ROLE_FORBIDDEN)
+    mock_project.get_model_serving.return_value.get_deployment.return_value = deployment
+
+    result = CliRunner().invoke(cli, ["deployment", "stop", "fraud"])
+
+    assert result.exit_code == 1
+    assert "Only the project's Data owner can do this: ask Jane Doe" in result.output
+    assert deployment.get_state.call_count == 1
+    assert clock.now == 0
+
+
+def test_role_refusal_names_the_owner_email_when_no_name_is_known(mock_project):
+    mock_project.owner = "jane@example.com"
+    mock_project.project_team = None
+
+    result = _run_command_raising(None, _rest_error(403, ROLE_FORBIDDEN))
+
+    assert result.output == (
+        "Error: Only the project's Data owner can do this: ask jane@example.com\n"
+    )
+
+
+def test_role_refusal_without_a_readable_project_asks_the_data_owner(tmp_home):
+    result = _run_command_raising(tmp_home, _rest_error(403, ROLE_FORBIDDEN))
+
+    assert result.exit_code == 1
+    assert result.output == (
+        "Error: Only the project's Data owner can do this: "
+        "ask the project's Data owner\n"
+    )
+    assert _explain_rest_error(_rest_error(403, ROLE_FORBIDDEN)) == (
+        "Only the project's Data owner can do this: ask the project's Data owner"
+    )

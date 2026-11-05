@@ -33,7 +33,7 @@ import avro.schema
 import hsfs.expectation_suite
 import humps
 from hopsworks_apigen import deprecated, deprecation, public
-from hopsworks_common import client, job, spark_connect_utils
+from hopsworks_common import client, events, job, spark_connect_utils
 from hopsworks_common.client.exceptions import FeatureStoreException, RestAPIError
 from hopsworks_common.core import alerts_api
 from hopsworks_common.core.constants import (
@@ -42,6 +42,7 @@ from hopsworks_common.core.constants import (
     HAS_NUMPY,
     HAS_POLARS,
     HAS_PYICEBERG,
+    lazy_module,
 )
 from hopsworks_common.core.sink_job_configuration import SinkJobConfiguration
 from hsfs import (
@@ -119,7 +120,7 @@ if TYPE_CHECKING:
 
 
 if HAS_GREAT_EXPECTATIONS:
-    import great_expectations
+    great_expectations = lazy_module("great_expectations")
 
 _logger = logging.getLogger(__name__)
 
@@ -3140,10 +3141,21 @@ class FeatureGroupBase:
             | None
         ),
     ) -> None:
-        if isinstance(expectation_suite, hsfs.expectation_suite.ExpectationSuite):
+        # The Great Expectations check comes last: it loads the package, which every
+        # feature group read from the backend would otherwise pay for.
+        if expectation_suite is None:
+            self._expectation_suite = None
+        elif isinstance(expectation_suite, hsfs.expectation_suite.ExpectationSuite):
             tmp_expectation_suite = expectation_suite.to_json_dict(decamelize=True)
             tmp_expectation_suite["feature_group_id"] = self._id
             tmp_expectation_suite["feature_store_id"] = self._feature_store_id
+            self._expectation_suite = hsfs.expectation_suite.ExpectationSuite(
+                **tmp_expectation_suite
+            )
+        elif isinstance(expectation_suite, dict):
+            tmp_expectation_suite = expectation_suite.copy()
+            tmp_expectation_suite["feature_store_id"] = self._feature_store_id
+            tmp_expectation_suite["feature_group_id"] = self._id
             self._expectation_suite = hsfs.expectation_suite.ExpectationSuite(
                 **tmp_expectation_suite
             )
@@ -3156,15 +3168,6 @@ class FeatureGroupBase:
                 feature_store_id=self._feature_store_id,
                 feature_group_id=self._id,
             )
-        elif isinstance(expectation_suite, dict):
-            tmp_expectation_suite = expectation_suite.copy()
-            tmp_expectation_suite["feature_store_id"] = self._feature_store_id
-            tmp_expectation_suite["feature_group_id"] = self._id
-            self._expectation_suite = hsfs.expectation_suite.ExpectationSuite(
-                **tmp_expectation_suite
-            )
-        elif expectation_suite is None:
-            self._expectation_suite = None
         else:
             raise TypeError(
                 f"The argument `expectation_suite` has to be `None` of type `ExpectationSuite` or `dict`, but is of type: `{type(expectation_suite)}`"
@@ -4457,6 +4460,20 @@ class FeatureGroup(FeatureGroupBase):
                 "Sink can only be enabled for feature groups with time travel format DELTA."
             )
 
+        # A sink group's schema is its source's, as Hopsworks reads it (a CRM or REST
+        # source has no catalog, so a schema-fetch job samples it).
+        if (
+            self._sink_enabled
+            and features is None
+            and not self._features
+            and (
+                self._data_source.table
+                or self._data_source.query
+                or self._data_source.path
+            )
+        ):
+            self._features = external_feature_group_engine.schema_from_data_source(self)
+
         # A copy, so the defaults set below stay out of the caller's dict.
         write_options = dict(write_options or {})
         if not self._id and self.time_travel_format == "DELTA":
@@ -5053,6 +5070,11 @@ class FeatureGroup(FeatureGroupBase):
         return self._feature_group_engine._commit_details(self, wallclock_time, limit)
 
     @public
+    @events.tracking(
+        "fg",
+        "update",
+        key=lambda self, *a, **k: {"name": self.name, "version": self.version},
+    )
     def remove_rows(
         self,
         delete_df: TypeVar("pyspark.sql.DataFrame"),  # noqa: F821
@@ -5282,9 +5304,10 @@ class FeatureGroup(FeatureGroupBase):
 
         A reader opening a Delta table replays every commit since the last checkpoint, so
         without one the cost of opening the table grows with the number of commits.
-        Spark writes checkpoints on its own every `delta.checkpointInterval` commits;
-        delta-rs writes none, so on a table only ever written from Python this is the only
-        thing that bounds the replay.
+        Spark and delta-rs both write a checkpoint on their own every `delta.checkpointInterval` commits.
+        Hopsworks sets that property from the cluster's `featurestore_delta_checkpoint_interval` variable
+        only when the variable is available and the table has no `delta.checkpointInterval` yet.
+        A reader replays at most the table's own interval of commits, so this call forces one early.
 
         Expiring the log entries a checkpoint covers is a separate call,
         [`delta_cleanup_metadata`][hsfs.feature_group.FeatureGroup.delta_cleanup_metadata].

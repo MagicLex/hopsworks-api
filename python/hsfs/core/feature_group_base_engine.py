@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hopsworks_common import events
 from hopsworks_common.client.exceptions import FeatureStoreException
 from hopsworks_common.core.type_systems import _normalize_hive_type
 from hsfs import util
@@ -48,6 +49,14 @@ class FeatureGroupBaseEngine:
         self._storage_connector_api = storage_connector_api.StorageConnectorApi()
         self._kafka_api = kafka_api.KafkaApi()
 
+    @events.tracking(
+        "fg",
+        "delete",
+        key=lambda self, feature_group, *a, **k: {
+            "name": feature_group.name,
+            "version": feature_group.version,
+        },
+    )
     def _delete(self, feature_group, force=False, delete_feature_views=False):
         self._feature_group_api._delete(
             feature_group, force=force, delete_feature_views=delete_feature_views

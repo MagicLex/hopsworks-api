@@ -41,9 +41,13 @@ class Environment:
         commands=None,
         href=None,
         type=None,
+        is_preinstalled_docker_image=None,
+        creator=None,
         **kwargs,
     ):
         self._name = name
+        self._preinstalled = is_preinstalled_docker_image
+        self._creator = creator
         self._description = description
         self._python_version = python_version
         self._python_conflicts = python_conflicts
@@ -82,6 +86,35 @@ class Environment:
     def description(self):
         """Description of the environment."""
         return self._description
+
+    @property
+    def preinstalled(self) -> bool | None:
+        """Whether this is a built-in environment of the cluster, not one of the project's; `None` when unknown."""
+        return self._preinstalled
+
+    @property
+    def library_versions(self) -> dict[str, str] | None:
+        """Each library installed in the environment with its version; `None` when the response carried none."""
+        if not isinstance(self._libraries, dict):
+            return None
+        return {item.get("library"): item.get("version") for item in self._libraries.get("items") or []}
+
+    @property
+    def library_names(self) -> list[str] | None:
+        """Names of the libraries installed in the environment; `None` when the response carried none."""
+        if not isinstance(self._libraries, dict):
+            return None
+        return [item.get("library") for item in self._libraries.get("items") or []]
+
+    @property
+    def commands(self) -> list | None:
+        """The environment's own commands, such as its build; `None` when the response carried none."""
+        return self._commands
+
+    @property
+    def creator(self) -> str | None:
+        """Username of whoever created the environment; `None` for a built-in, or when the cluster does not say."""
+        return self._creator
 
     @public
     @usage._method_logger

@@ -9,18 +9,18 @@ description: Use when writing Streamlit, Flask, Gradio, Node.js or custom apps
   output a running app and its URL.
 ---
 
-# Hopsworks Apps — Python SDK Best Practices
+# Hopsworks apps
 
 Hopsworks runs web apps as managed apps backed by a Hopsworks job, sourced from
 HopsFS or a Git repository. The app type (`app_kind`) decides how it starts:
 
 | Kind | App file | Started as | Port |
 |---|---|---|---|
-| `STREAMLIT` (default) | `.py` | `streamlit run <file>` | 8501, fixed |
+| `STREAMLIT` | `.py` | `streamlit run <file>` | 8501, fixed |
 | `FLASK` (5.2+) | `.py` with an `app` object | `flask --app <file> run --host 0.0.0.0 --port $APP_PORT` | `app_port`, default 8080 |
 | `GRADIO` (5.2+) | `.py` that calls `demo.launch()` | `python <file>`; `GRADIO_SERVER_NAME`/`GRADIO_SERVER_PORT`/`GRADIO_ROOT_PATH` are set | `app_port`, default 8080 |
 | `NODEJS` (5.2+) | `.js`, `.mjs`, `.cjs`, `.ts`, `.mts` | `node <file>`; `PORT` and `HOST` are set | `app_port`, default 8080 |
-| `CUSTOM` | optional | your `entrypoint_command` | `app_port`, default 8080 |
+| `CUSTOM` (default) | optional | your `entrypoint_command` | `app_port`, default 8080 |
 
 Every kind but `CUSTOM` is **launched from its app file** with a command Hopsworks
 generates: no `entrypoint_command`, and a git-backed app gives the file as
@@ -31,7 +31,18 @@ them, or embeds a downloaded model to predict locally. A custom app is any other
 web service (FastAPI, Django, any WSGI/ASGI server) that binds to `0.0.0.0` and the
 injected `$APP_PORT`. Node.js apps get their dependencies from the npm packages
 installed in the environment (see [hops-environments](../../platform/hops-environments/SKILL.md),
-*npm packages*): nothing is `npm install`ed at app start.
+*npm packages*): nothing is `npm install`ed at app start. `hops app deploy`
+installs package.json `dependencies`, at package-lock.json's versions, into
+`<name>-app-env`, and never uploads `node_modules`. `<name>-app-env` is a clone of
+`python-agent-pipeline`, an agent environment: it runs apps, and Hopsworks
+refuses a job on it (error 300021).
+
+`hops app deploy` puts the app in `Resources/apps/<name>/`, so any member of the
+project can start it, and records a hash of the folder in the app; a start runs
+a copy of the folder only when it matches, so a file someone else writes there
+fails the next start until a redeploy. An app runs as whoever starts it, like a
+job. It reads its folder once at start: keep data in the project's datasets or
+the feature store, never in the app's folder.
 
 ## Contract
 
@@ -43,14 +54,14 @@ installed in the environment (see [hops-environments](../../platform/hops-enviro
 
 ```bash
 hops app list                 # apps + state; verify RUNNING/serving after
-hops app info <name>          # detail (id, type, source, monitoring state and routes)
+hops app info <name>          # detail (id, type, source, monitoring state and routes, public link on/off)
 hops app url <name>           # the app URL
 hops app start <name> / stop <name>
 hops app logs <name>          # tail logs (a running app is directed to the live logs in the UI)
 hops app delete <name> --yes  # non-interactive
 ```
 
-`hops app create <name> --path /Projects/<project>/Users/<user>/app.py --start`
+`hops app create <name> --path /Projects/<project>/Users/<user>/app.py --entrypoint-command "python app.py" --start`
 creates, starts, and waits for serving in one call. It takes a **HopsFS-absolute**
 path, while the SDK `create_app(app_path=...)` takes a **project-relative** one
 (`Users/<username>/app.py`); each surface rejects the other's form. Routing and
@@ -59,10 +70,10 @@ may be absent on older deployed `hops` binaries.
 
 ## Ask the user (only when state is ambiguous)
 
-- Does the app need **custom libraries** not in `python-app-pipeline`? If so, clone the env and install `app-requirements.txt` (see **Custom libraries**).
+- Does the app need **custom libraries** not in `python-app-pipeline`? If so, clone the env and install `app-requirements.txt` ([references/libraries.md](references/libraries.md)).
 - Does the app come from **HopsFS or Git**? If Git, ask for `git_url`, `git_provider`, and (if needed) `git_branch` plus the entrypoint.
 - Should a git-backed app **auto-redeploy** on new commits (`git_auto_redeploy=True`)? It only applies to git-backed apps.
-- What **memory / cores** should the app get? Defaults are `memory=2048` MB, `cores=1.0`.
+- What **memory / cores** should the app get? Unset = the cluster default (`pythonapp_memory`/`pythonapp_cores`).
 - Does the app still depend on `APP_BASE_URL_PATH`? Then it is a **migration** task (see **Routing and readiness**); confirm whether the code can switch to root routing.
 - Does the app need **monitoring** narrowed to specific routes? Monitoring is on by default and routes are optional.
 - Does the app need **public access**? Public sharing of any app kind is feature-flagged; only ask for it when the platform has it enabled.
@@ -88,59 +99,39 @@ public mount you want (`/` or `/myapp`); keep the readiness path separate (custo
 apps `/` or `/health`, Streamlit `/_stcore/health` or `/<base>/_stcore/health`);
 then delete any code that still builds absolute links from `APP_BASE_URL_PATH`.
 
----
+## References
 
-## Writing the app
+Read the one a step needs, with `hops skills info hops-app references/<file>` (or from this
+skill's `references/` directory):
 
-### Streamlit
+- [references/hops-app-built.md](references/hops-app-built.md): the app `/hops app` and
+  **hops-app-builder** make from [references/app_skeleton/](references/app_skeleton/), and
+  `hops app deploy`.
+- [references/data.md](references/data.md): reading feature groups (Trino by default), a model or
+  a deployment from the app, and Trino from a JavaScript app.
+- [references/look.md](references/look.md): the hops-design tokens and components in the
+  skeleton's `app.css`, and the look check.
+- [references/frameworks.md](references/frameworks.md): writing a Streamlit, Flask, Gradio,
+  Node.js or custom app by hand, the Streamlit theme, and Streamlit caching.
+- [references/libraries.md](references/libraries.md): a library the environment lacks, or a
+  pickled model.
+- [references/git.md](references/git.md): an app whose source is a git repository.
 
-Stay Streamlit-native and root-based. Prefer seaborn over plotly for charts;
-plotly is not installed by default.
+## A chat app for an agent (5.3+)
+
+For a chat page in front of an **agent deployment**, do not write one: every agent can have a ready-made chat app, and it already handles what a hand-written one gets wrong (who is chatting, keeping each person's conversations apart, no serving key in the browser, the agent's questions, feedback, attachments, waking an agent that scales to zero).
 
 ```python
-# Users/<username>/app.py
-import hopsworks
-import streamlit as st
-
-st.title("Feature Store Dashboard")
-
-@st.cache_resource
-def get_feature_store():
-    project = hopsworks.login()          # auto-authenticates inside the cluster
-    return project.get_feature_store()
-
-fs = get_feature_store()
-
-@st.cache_data(ttl=300)
-def load_data():
-    return fs.get_feature_group("transactions", version=1).read(dataframe_type="pandas")
-
-df = load_data()
-st.subheader("Transaction Data")
-st.dataframe(df.head(100))
-st.subheader("Amount Distribution")
-st.bar_chart(df["amount"].value_counts().head(20))
+agent = project.get_agent_serving().get_agent("support")
+app = agent.create_chat_app()  # app "support_chat", started; or deploy_agent(..., chat_app=True)
 ```
 
-### Flask, Gradio and Node.js (5.2+)
+Members open it with their Hopsworks login; `app.make_public()` shares it with anyone holding the link. Branding without code: the app's `CHAT_TITLE`, `CHAT_WELCOME`, `CHAT_ACCENT_COLOR`, `CHAT_LOGO_URL` and `CHAT_THEME_DIR` variables (details in **hops-agent-deployment**).
 
-Flask: an `app` object in the file; routes at `/` and `/health`; the app is served
-at its root, and `APP_PUBLIC_PATH` / `X-Forwarded-Prefix` carry the public path for
-an app that builds absolute links (`ProxyFix(app.wsgi_app, x_prefix=1)`).
+To change its page, layout or server, **customize** it rather than starting over:
 
 ```python
-# Users/<username>/flaskapp.py  — app_kind="FLASK"
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.get("/health")
-def health():
-    return jsonify(status="ok")
-
-@app.get("/")
-def home():
-    return jsonify(status="ready")
+app = agent.customize_chat_app()  # runs from Resources/chat-apps/support_chat
 ```
 
 Gradio: call `demo.launch()` with no `server_port` or `root_path`; Hopsworks sets
@@ -427,47 +418,15 @@ without asking, at most five attempts:
 2. Change the source. A missing library is an environment fix (a pin in
    `app-requirements.txt` installed into the clone), never a workaround in the
    code. Out of memory: raise `--memory` once and say so.
-3. Upload (`hops files upload ... --overwrite`), or push for a git-backed app.
-4. A running app: `hops app redeploy <name>`. An app that failed to start:
-   `hops app start <name>` (redeploy refuses an app that is not running). Wait
-   for `RUNNING` and serving, and rerun the smoke tests.
+3. `hops app deploy <name> <dir>` (push, for a git-backed app), and rerun the
+   smoke tests.
 
 After the fifth attempt, stop with the last lines of the logs and what was tried.
 
-**Edit** changes the source as asked, updates the docstring, redeploys and
-reruns the smoke tests. **Delete** confirms the exact name, runs
-`hops app delete <name> --yes`, and removes the source directory and the
-environment clone when one was created for the app.
-
-## Custom libraries
-
-If the app needs libraries not in `python-app-pipeline`, clone that base env and
-install the app's `app-requirements.txt` into the **clone** (never the base). It
-takes a few minutes; warn the user, and prompt for a requirements file if none
-exists. Full workflow, including the project-path rule for the requirements
-file: [hops-environments](../../platform/hops-environments/SKILL.md).
-
-```python
-env_api = project.get_environment_api()
-# get_environment returns None for a missing environment, it does NOT raise:
-# guard with `is None`, a try/except never fires.
-cloned_env = env_api.get_environment("my_cloned_env")
-if cloned_env is None:
-    cloned_env = env_api.create_environment(
-        "my_cloned_env", base_environment_name="python-app-pipeline",
-    )
-cloned_env.install_requirements("Users/<username>/app-requirements.txt", await_installation=True)
-```
-
-Then pass `environment="my_cloned_env"` to `create_app(...)`, not the base.
-
-If the app loads a pickled model (e.g. scikit-learn via `joblib`), the base
-`python-app-pipeline` may ship a different scikit-learn than the one that pickled
-it, and the load fails. The base env exposes no library list (no `get_libraries`),
-so pin the model's exact training versions (e.g. `scikit-learn==1.8.0` plus
-matching `numpy`/`scipy`/`joblib`) in the requirements file.
-
----
+**Edit** changes the source as asked, updates the docstring, runs
+`hops app deploy` and reruns the smoke tests. **Delete** confirms the exact name, runs
+`hops app delete <name> --yes`, and removes the source directory. Hopsworks
+removes an app's cloned environment once nothing uses it.
 
 ## Creating and running the app
 
@@ -480,7 +439,8 @@ apps = project.get_app_api()
 app = apps.create_app(
     name="my_dashboard",
     app_path="Users/<username>/app.py",   # project-relative (CLI --path is HopsFS-absolute)
-    environment="python-app-pipeline",    # or the clone from Custom libraries
+    entrypoint_command="python app.py",   # a CUSTOM app, the default kind
+    environment="python-app-pipeline",    # or the clone from references/libraries.md
     memory=2048,                          # MB
     cores=1.0,
     db_access=True,                       # default: project database created at start, MYSQL_* injected
@@ -491,57 +451,9 @@ if app.serving:
     print(f"App URL: {app.app_url}")
 ```
 
-### Git-backed apps
+A git-backed app leaves `app_path` unset: [references/git.md](references/git.md).
 
-Leave `app_path` unset and provide the repository fields. Git-backed apps are
-cloned again on each start, so a restart or redeploy picks up new commits;
-`git_auto_redeploy=True` rolls to the branch HEAD on every new commit. Supported
-providers: `GitHub`, `GitLab`, `BitBucket`.
-
-- Streamlit, Flask, Gradio, Node.js: the kind and `entrypoint_script` (the app file) relative to the repository root; `app_port` for all but Streamlit.
-- Custom: `app_kind="CUSTOM"`, an `entrypoint_command`, and `app_port`.
-
-```python
-streamlit_app = apps.create_app(
-    name="streamlitfromgithub",
-    app_kind="STREAMLIT",
-    git_url="https://github.com/<org>/<repo>.git",
-    git_provider="GitHub",
-    git_branch="main",
-    git_auto_redeploy=True,
-    entrypoint_script="streamlitapp.py",
-    environment="python-app-pipeline",
-)
-
-node_app = apps.create_app(
-    name="greeterfromgithub",
-    app_kind="NODEJS",
-    git_url="https://github.com/<org>/<repo>.git",
-    git_provider="GitHub",
-    git_branch="main",
-    entrypoint_script="npm-packages/greeterapp.mjs",
-    app_port=8080,
-    environment="my_cloned_env",          # with express installed via install_npm
-)
-
-fastapi_app = apps.create_app(
-    name="fastapifromgithub",
-    app_kind="CUSTOM",
-    git_url="https://github.com/<org>/<repo>.git",
-    git_provider="GitHub",
-    git_branch="main",
-    entrypoint_command=(
-        'bash -lc "python -m uv pip install --no-cache fastapi uvicorn && '
-        'exec python -m uvicorn fastapiapp:app --host 0.0.0.0 --port \\"$APP_PORT\\""'
-    ),
-    app_port=8080,
-    environment="python-app-pipeline",
-)
-fastapi_app.run()
-print(fastapi_app.app_url)
-```
-
-### Lifecycle and states
+## Lifecycle and states
 
 ```python
 app.run(await_serving=True)
@@ -550,7 +462,7 @@ app.redeploy()                # re-clone / re-read the source and restart
 app.stop()
 app.delete()
 
-apps.get_apps()               # list; each has .name, .state, .serving
+apps.get_apps()               # list; each has .job_id, .name, .state, .serving
 app = apps.get_app("my_dashboard")
 ```
 
@@ -563,7 +475,7 @@ app = apps.get_app("my_dashboard")
 
 An app is accessible only when `state == "RUNNING"` **and** `serving == True`.
 
-### Monitoring
+## Monitoring
 
 Monitoring is enabled by default. Leave routes empty for the default
 ignored-path behaviour, or add routes to narrow the signal:

@@ -20,7 +20,7 @@ import ast
 import datetime
 import decimal
 import re
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import TYPE_CHECKING, Literal, NewType
 
 import pytz
@@ -34,12 +34,16 @@ from hopsworks_common.decorators import _uses_polars
 
 
 if TYPE_CHECKING:
-    import numpy as np
     import pandas as pd
     import polars as pl
+    import pyarrow as pa
     from hsfs.core.feature_logging import LoggingMetaData
 
-if HAS_PYARROW:
+
+@cache
+def _pyarrow_hopsworks_dtype_mapping() -> dict:
+    if not HAS_PYARROW:
+        return {}
     import pyarrow as pa
 
     # Decimal types are currently not supported
@@ -53,7 +57,7 @@ if HAS_PYARROW:
     _DATE_TYPES = [pa.date32(), pa.date64()]
     _BINARY_TYPES = [pa.binary(), pa.large_binary()]
 
-    PYARROW_HOPSWORKS_DTYPE_MAPPING = {
+    return {
         **dict.fromkeys(_INT_TYPES, "int"),
         **dict.fromkeys(_BIG_INT_TYPES, "bigint"),
         **dict.fromkeys(_FLOAT_TYPES, "float"),
@@ -88,8 +92,28 @@ if HAS_PYARROW:
         **dict.fromkeys(_DATE_TYPES, "date"),
         **dict.fromkeys(_BINARY_TYPES, "binary"),
     }
-else:
-    PYARROW_HOPSWORKS_DTYPE_MAPPING = {}
+
+
+# A type in type position: the whole type, or after ":", "<" or "," in a nested
+# type. A struct field named like a type is followed by ":", so it is left alone.
+_DECIMAL_NO_SCALE = re.compile(r"(?<![^:<,])decimal\((\d+)\)")
+_DECIMAL_BARE = re.compile(r"(?<![^:<,])decimal(?![\w(:])")
+_TIMESTAMP_NTZ = re.compile(r"(?<![^:<,])timestamp_ntz(?![\w(:])")
+
+
+def _normalize_hive_type(hive_type: str, timestamp_ntz_as_timestamp=True) -> str:
+    """Spell a Hive type one way: decimal(p) is decimal(p,0), decimal is decimal(10,0).
+
+    With *timestamp_ntz_as_timestamp*, timestamp_ntz is timestamp too: Spark derives
+    timestamp_ntz for a TimestampNTZType column.
+    Expects a lower case type without inner spaces, as Spark and Hive render them.
+    """
+    hive_type = _DECIMAL_NO_SCALE.sub(r"decimal(\1,0)", hive_type)
+    hive_type = _DECIMAL_BARE.sub("decimal(10,0)", hive_type)
+    if timestamp_ntz_as_timestamp:
+        hive_type = _TIMESTAMP_NTZ.sub("timestamp", hive_type)
+    return hive_type
+
 
 # A type in type position: the whole type, or after ":", "<" or "," in a nested
 # type. A struct field named like a type is followed by ":", so it is left alone.
@@ -126,6 +150,8 @@ if HAS_PYARROW:
         Returns:
             The corresponding PyArrow type.
         """
+        import pyarrow as pa
+
         offline_type = _normalize_hive_type(offline_type.strip().lower())
 
         # Handle array types: array<type>
@@ -250,10 +276,11 @@ def _split_map_types(content: str) -> tuple[str, str]:
 
 
 # python cast column to offline type
-if HAS_POLARS:
+@cache
+def _polars_offline_dtype_mapping() -> dict:
     import polars as pl
 
-    polars_offline_dtype_mapping = {
+    return {
         "bigint": pl.Int64,
         "int": pl.Int32,
         "smallint": pl.Int16,
@@ -262,7 +289,12 @@ if HAS_POLARS:
         "double": pl.Float64,
     }
 
-    polars_online_dtype_mapping = {
+
+@cache
+def _polars_online_dtype_mapping() -> dict:
+    import polars as pl
+
+    return {
         "bigint": pl.Int64,
         "int": pl.Int32,
         "smallint": pl.Int16,
@@ -271,11 +303,12 @@ if HAS_POLARS:
         "double": pl.Float64,
     }
 
-if HAS_PANDAS:
-    import numpy as np
+
+@cache
+def _pandas_offline_dtype_mapping() -> dict:
     import pandas as pd
 
-    pandas_offline_dtype_mapping = {
+    return {
         "bigint": pd.Int64Dtype(),
         "int": pd.Int32Dtype(),
         "smallint": pd.Int16Dtype(),
@@ -284,7 +317,12 @@ if HAS_PANDAS:
         "double": pd.Float64Dtype(),
     }
 
-    pandas_online_dtype_mapping = {
+
+@cache
+def _pandas_online_dtype_mapping() -> dict:
+    import pandas as pd
+
+    return {
         "bigint": pd.Int64Dtype(),
         "int": pd.Int32Dtype(),
         "smallint": pd.Int16Dtype(),
@@ -292,6 +330,20 @@ if HAS_PANDAS:
         "float": pd.Float32Dtype(),
         "double": pd.Float64Dtype(),
     }
+
+
+def __getattr__(name: str):
+    # The mappings need pyarrow, polars or pandas, so they are built on first read.
+    builders = {
+        "PYARROW_HOPSWORKS_DTYPE_MAPPING": _pyarrow_hopsworks_dtype_mapping,
+        "pandas_offline_dtype_mapping": _pandas_offline_dtype_mapping,
+        "pandas_online_dtype_mapping": _pandas_online_dtype_mapping,
+        "polars_offline_dtype_mapping": _polars_offline_dtype_mapping,
+        "polars_online_dtype_mapping": _polars_online_dtype_mapping,
+    }
+    if name in builders:
+        return builders[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @lru_cache(maxsize=32)
@@ -321,6 +373,9 @@ HopsworksLoggingMetadataType = NewType(
 
 
 def _convert_pandas_dtype_to_offline_type(arrow_type: str) -> str:
+    if HAS_PYARROW:
+        import pyarrow as pa
+
     # This is a simple type conversion between pandas dtypes and pyspark (hive) types,
     # using pyarrow types obatined from pandas dataframe to convert pandas typed fields,
     # A recurisive function  "_convert_pandas_object_type_to_offline_type" is used to convert complex types like lists and structures
@@ -338,6 +393,9 @@ def _convert_pandas_dtype_to_offline_type(arrow_type: str) -> str:
 
 
 def _convert_pandas_object_type_to_offline_type(arrow_type: str) -> str:
+    if HAS_PYARROW:
+        import pyarrow as pa
+
     if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type):
         # figure out sub type
         sub_arrow_type = arrow_type.value_type
@@ -365,6 +423,10 @@ def _convert_pandas_object_type_to_offline_type(arrow_type: str) -> str:
 def _cast_pandas_column_to_offline_type(
     feature_column: pd.Series, offline_type: str
 ) -> pd.Series:
+    if HAS_PANDAS:
+        import numpy as np
+        import pandas as pd
+
     offline_type = offline_type.lower()
     if offline_type == "timestamp":
         return pd.to_datetime(feature_column, utc=True).dt.tz_localize(None)
@@ -390,8 +452,8 @@ def _cast_pandas_column_to_offline_type(
         return feature_column.apply(
             lambda x: decimal.Decimal(x) if (x is not None) else None
         )
-    if offline_type in pandas_offline_dtype_mapping:
-        return feature_column.astype(pandas_offline_dtype_mapping[offline_type])
+    if offline_type in _pandas_offline_dtype_mapping():
+        return feature_column.astype(_pandas_offline_dtype_mapping()[offline_type])
     return feature_column  # handle gracefully, just return the column as-is
 
 
@@ -399,6 +461,9 @@ def _cast_pandas_column_to_offline_type(
 def _cast_polars_column_to_offline_type(
     feature_column: pl.Series, offline_type: str
 ) -> pl.Series:
+    if HAS_POLARS:
+        import polars as pl
+
     offline_type = offline_type.lower()
     if offline_type == "timestamp":
         # convert (if tz!=UTC) to utc, then make timezone unaware
@@ -424,14 +489,20 @@ def _cast_polars_column_to_offline_type(
         return feature_column.map_elements(
             lambda x: decimal.Decimal(x) if (x is not None) else None
         )
-    if offline_type in polars_offline_dtype_mapping:
-        return feature_column.cast(polars_offline_dtype_mapping[offline_type])
+    if offline_type in _polars_offline_dtype_mapping():
+        return feature_column.cast(_polars_offline_dtype_mapping()[offline_type])
     return feature_column  # handle gracefully, just return the column as-is
 
 
 def _cast_column_to_offline_type(
     feature_column: pd.Series | pl.Series, offline_type: str
 ) -> pd.Series:
+    if HAS_PANDAS:
+        import pandas as pd
+
+    if HAS_POLARS:
+        import polars as pl
+
     if isinstance(feature_column, pd.Series):
         return _cast_pandas_column_to_offline_type(feature_column, offline_type.lower())
     if HAS_POLARS and isinstance(feature_column, pl.Series):
@@ -442,6 +513,9 @@ def _cast_column_to_offline_type(
 def _cast_column_to_online_type(
     feature_column: pd.Series, online_type: str
 ) -> pd.Series:
+    if HAS_PANDAS:
+        import pandas as pd
+
     online_type = online_type.lower()
     if online_type == "timestamp":
         # convert (if tz!=UTC) to utc, then make timezone unaware
@@ -462,14 +536,17 @@ def _cast_column_to_online_type(
         return feature_column.apply(
             lambda x: decimal.Decimal(x) if (x is not None) else None
         )
-    if online_type in pandas_online_dtype_mapping:
-        return feature_column.astype(pandas_online_dtype_mapping[online_type])
+    if online_type in _pandas_online_dtype_mapping():
+        return feature_column.astype(_pandas_online_dtype_mapping()[online_type])
     return feature_column  # handle gracefully, just return the column as-is
 
 
 def _convert_simple_pandas_dtype_to_offline_type(arrow_type: str) -> str:
+    if HAS_PYARROW:
+        import pyarrow as pa
+
     # Decimal types are parameterised by (precision, scale), so they can't live
-    # in the static PYARROW_HOPSWORKS_DTYPE_MAPPING table — render the Hive
+    # in the static `_pyarrow_hopsworks_dtype_mapping()` table — render the Hive
     # `decimal(p,s)` string from the Arrow type's own precision/scale. Covers
     # both decimal128 and decimal256 source widths; the offline type carries
     # no width distinction so they share one branch. `pa.types.is_decimal`
@@ -483,7 +560,7 @@ def _convert_simple_pandas_dtype_to_offline_type(arrow_type: str) -> str:
     ):
         return f"decimal({arrow_type.precision},{arrow_type.scale})"
     try:
-        return PYARROW_HOPSWORKS_DTYPE_MAPPING[arrow_type]
+        return _pyarrow_hopsworks_dtype_mapping()[arrow_type]
     except KeyError as err:
         raise ValueError(f"dtype '{arrow_type}' not supported") from err
 
@@ -559,6 +636,9 @@ def _convert_spark_type_to_offline_type(spark_type_string: str) -> str:
 
 
 def _infer_spark_type(output_type):
+    if HAS_PANDAS:
+        import numpy as np
+
     if not output_type:
         return "STRING"  # STRING is default type for spark udfs
 

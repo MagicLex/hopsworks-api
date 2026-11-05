@@ -86,7 +86,7 @@ def get_project(ctx: click.Context) -> Project:
                 f"Login failed: the saved project id {cfg.project_id} is not found "
                 f"(deleted, or no longer a member). Run `hops project use <name>`."
             ) from exc
-        raise click.ClickException(f"Login failed: {exc}") from exc
+        auth.login_failed(exc, cfg.api_key_source)
     obj["project"] = project
     return project
 

@@ -56,13 +56,14 @@ def load_sample(name, version):
 st.dataframe(load_sample(fg_name, fg_version))
 ```
 
-Deploy it:
+Deploy it, only when the user asked for Streamlit:
 
 ```python
 apps = project.get_app_api()
 app = apps.create_app(
     name="monitoring_dashboard",
     app_path="Resources/monitoring_dashboard.py",
+    app_kind="STREAMLIT",
     memory=4096,
 )
 app.run()
