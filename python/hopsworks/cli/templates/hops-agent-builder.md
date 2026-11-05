@@ -26,7 +26,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    from scratch:
 
    ```bash
-   hops agent init <name> --reads <fg[:version]> [<fg[:version]> ...] [--search <embedding fg[:version]>] \
+   hops agent init <name> --reads <fg[:version]> [--reads <fg[:version]> ...] \
      --model <model> --key-secret <key_secret>
    ```
 
@@ -36,10 +36,8 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    8080, one login at start, the API key read once from the secret (never printed), the provider's
    SDK called with tools, a TOOL span per tool call and an LLM span per model call carrying the
    token counts once, `asyncio.to_thread` around the blocking calls, and per feature group a
-   Trino aggregate (`LIMIT 50`, schema from the project's backing name) and, for a group with a
-   primary key and an online store, a primary-key lookup. With `--search` it adds a `search`
-   tool (at most 10 neighbours); when init says search needs the embedding endpoint, the tool is
-   not in the script and the agent answers without it. Its last lines print the `deploy_agent` call
+   Trino aggregate (`LIMIT 50`, schema from the project's feature store name) and, for a group with a
+   primary key and an online store, a primary-key lookup. Its last lines print the `deploy_agent` call
    with the model's prices.
 
    Edit what the description changes: the system prompt (what the agent is for, from

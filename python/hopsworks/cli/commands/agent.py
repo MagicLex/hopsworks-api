@@ -569,13 +569,11 @@ def agent_init(
     search_group = None
     if search:
         if importlib.util.find_spec("hopsworks_agents.embed") is None:
-            output.warn(
-                "Search needs the embedding endpoint, which this install does not "
-                "have (hopsworks_agents.embed): the agent is written without a "
-                "search tool."
+            raise click.ClickException(
+                "Search needs the embedding endpoint (hopsworks_agents.embed), "
+                "which this install does not have. Run without --search."
             )
-        else:
-            search_group = _read_group(ctx, fg_commands, search, search=True)
+        search_group = _read_group(ctx, fg_commands, search, search=True)
 
     code = _render_agent(
         name, model_name, key_secret or f"{provider}_api_key", groups, search_group
@@ -607,6 +605,14 @@ def _read_group(ctx: click.Context, fg_commands: Any, ref: str, search: bool) ->
             f"Version of '{fg_name}' must be a number.", param_hint="--reads"
         ) from None
     fg = fg_commands._get_fg(ctx, fg_name, version)
+    own_id = session.get_feature_store(ctx).id
+    if getattr(fg, "feature_store_id", own_id) != own_id:
+        raise click.ClickException(
+            f"Feature group '{fg.name}' is in the shared feature store "
+            f"'{getattr(fg, 'feature_store_name', None) or fg.feature_store_id}', "
+            "not this project's own. An agent reads its own store only: "
+            "copy the group into this project first."
+        )
     features = getattr(fg, "features", []) or []
     group = {
         "name": fg.name,

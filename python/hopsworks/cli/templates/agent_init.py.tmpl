@@ -37,7 +37,7 @@ agent_app = AgentApp(
 # One login, one feature store handle, one key read, all at start.
 project = hopsworks.login()
 fs = project.get_feature_store()
-SCHEMA = f"{getattr(project, 'backing_name', project.name).lower()}_featurestore"
+SCHEMA = fs.name.lower()
 client = Anthropic(api_key=hopsworks.get_secrets_api().get(KEY_SECRET))
 
 
