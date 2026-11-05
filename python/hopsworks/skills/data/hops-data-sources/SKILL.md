@@ -101,9 +101,12 @@ ext_fg = fs.create_external_feature_group(
     primary_key=meta.primary_key,
     event_time=meta.event_time,
     online_enabled=False,
+    statistics_config=False,                      # statistics later, see below
 )
 ext_fg.save()
 ```
+
+Statistics read the whole source in a job that `save()` waits for, so mount without them. To compute them later: `ext_fg.statistics_config.enabled = True`, `ext_fg.update_statistics_config()`, then `ext_fg.compute_statistics()` (it waits for the job).
 
 ### A folder in the project (HopsFS)
 
@@ -441,7 +444,8 @@ A field holding arrays becomes `array<...>` when the preview sees a list; a list
 ds = fs.get_data_source("my_elasticsearch")
 index = [t for t in ds.get_tables() if t.table == "events"][0]
 ext_fg = fs.create_external_feature_group(
-    name="events", version=1, data_source=index, primary_key=["event_id"], event_time="timestamp"
+    name="events", version=1, data_source=index, primary_key=["event_id"], event_time="timestamp",
+    statistics_config=False,
 )
 ext_fg.save()
 df = ext_fg.read()   # Python engine: via the Hopsworks Query Service
