@@ -18,7 +18,6 @@ from hopsworks.cli.commands import model as model_cmd
 from hopsworks.cli.main import cli
 
 
-
 def _path_not_found():
     """A missing HopsFS path, as the backend answers it: a 400 with error code 110018."""
     from hopsworks_common.client.exceptions import RestAPIError

@@ -336,7 +336,7 @@ def test_fv_create_joins_on_a_composite_key(mock_project):
 def _base_fg(*names):
     base = mock.MagicMock()
     base.features = [mock.MagicMock() for _ in names]
-    for f, n in zip(base.features, names):
+    for f, n in zip(base.features, names, strict=True):
         f.name = n
     return base
 

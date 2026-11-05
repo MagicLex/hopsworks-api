@@ -70,5 +70,5 @@ def test_a_missing_key_splits_the_same_from_a_nullable_int_or_a_float_read(split
     assert as_int["order_id"].map(key_bucket).tolist() == as_float["order_id"].map(key_bucket).tolist()
     a = split["split_by_key"](as_int, y, key="order_id")
     b = split["split_by_key"](as_float, y, key="order_id")
-    for part_a, part_b in zip(a[:3], b[:3]):
+    for part_a, part_b in zip(a[:3], b[:3], strict=True):
         assert list(part_a.index) == list(part_b.index)
