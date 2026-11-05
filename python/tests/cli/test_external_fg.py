@@ -457,3 +457,29 @@ def test_create_external_sends_google_analytics_to_its_report_sync(mock_project)
     assert "report sync" in result.output
     assert "fg ingest" not in result.output
     fs.create_external_feature_group.assert_not_called()
+
+
+def test_create_external_keeps_the_schema_of_a_listed_table(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fs.get_data_source.return_value = _listing("public")
+    fs.create_external_feature_group.return_value = _external_fg()
+    result = CliRunner().invoke(
+        cli,
+        ["fg", "create-external", "orders", "--connector", "src"]
+        + ["--database", "db", "--table", "orders"],
+    )
+    assert result.exit_code == 0, result.output
+    source = fs.create_external_feature_group.call_args.kwargs["data_source"]
+    assert (source.group, source.table) == ("public", "orders")
+
+
+def test_create_external_refuses_a_table_in_several_schemas(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fs.get_data_source.return_value = _listing("sales", "archive")
+    result = CliRunner().invoke(
+        cli,
+        ["fg", "create-external", "orders", "--connector", "src", "--table", "orders"],
+    )
+    assert result.exit_code != 0
+    assert "archive.orders, sales.orders" in result.output
+    fs.create_external_feature_group.assert_not_called()

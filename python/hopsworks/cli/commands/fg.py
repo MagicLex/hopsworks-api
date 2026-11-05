@@ -694,7 +694,8 @@ def fg_create(
     "table",
     help=(
         "Table or collection to read from (overrides the connector default). For "
-        "MongoDB this is the collection name; for SQL the table name."
+        "MongoDB this is the collection name; for SQL the table name, as "
+        "schema.table when the name is in several schemas."
     ),
 )
 @click.option(
@@ -785,7 +786,7 @@ def fg_create_external(
     if not query and not path and not table:
         raise click.UsageError(
             "Provide one of --query (SQL sources), --path + --data-format "
-            "(S3/ADLS/GCS), or --database + --table (MongoDB)."
+            "(S3/ADLS/GCS), or --table (SQL, MongoDB)."
         )
     if path and not data_format:
         raise click.UsageError("--data-format is required when --path is set.")
@@ -817,16 +818,21 @@ def fg_create_external(
             f"`hops datasource tables {connector_name}` lists the resources."
         )
 
+    if database is not None:
+        data_source.database = database
+    if table is not None:
+        from hopsworks.cli.commands import (
+            datasource as ds_cmd,  # noqa: PLC0415 - it imports fg
+        )
+
+        # The listed table carries its schema (public.orders); a bare name in several schemas is refused.
+        data_source = ds_cmd._resolve_table(data_source, table, database)
     # The SDK ignores query and path passed next to a data source, so the
     # whole source spec goes on the data source itself.
     if query:
         data_source.query = query
     if path:
         data_source.path = path
-    if database is not None:
-        data_source.database = database
-    if table is not None:
-        data_source.table = table
 
     fg = None
     try:
