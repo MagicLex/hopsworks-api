@@ -2338,7 +2338,7 @@ def _call(what: str, fn: Callable[[], Any]) -> Any:
     except click.ClickException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"{what} failed: {exc}") from exc
+        raise click.ClickException(f"Could not complete the {what} request: {exc}") from exc
 
 
 @datasource_group.group("sharepoint")
