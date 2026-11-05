@@ -1,12 +1,15 @@
 """``hops fg embed``: a searchable embedding group over a feature group's text column.
 
-``hops fg embed SOURCE --text COL`` runs the embedding (``embed_run``);
-``hops fg embed delete GROUP`` removes what it made. ``delete`` is the only
-subcommand, so any other first word is the source feature group.
+``hops fg embed SOURCE --text COL`` makes or updates the group's Python job
+``GROUP_embed`` and starts one execution of it; the build runs in that job
+(``embed_run``), never in the caller. ``hops fg embed delete GROUP`` removes
+what it made. ``delete`` is the only subcommand, so any other first word is the
+source feature group.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
@@ -19,12 +22,18 @@ from hopsworks.cli import embed_run, output, session
 
 
 _RUNNER_CODE = (
-    '"""Runs `hops` with the job arguments: the job `hops fg embed --schedule` creates."""\n'
+    '"""Runs `hops` with the job arguments: the script of the job `hops fg embed` makes."""\n'
     "import sys\n\n"
     "from hopsworks.cli.main import cli\n\n"
     'cli.main(args=sys.argv[1:], prog_name="hops")\n'
 )
 _RUN = "run"
+MAX_CONCURRENT = "maxConcurrentExecutions"
+PLATFORM_CLASS_KEY = "platformClass"
+PLATFORM_CLASS = "embed"
+SCHEDULES = ("daily", "hourly")
+#: Interval of the daily default, and the floor when no admin has granted a faster one.
+DAY_MINUTES = 1440
 
 
 class _EmbedGroup(click.Group):
@@ -88,10 +97,20 @@ def fg_embed_group() -> None:
 )
 @click.option(
     "--schedule",
-    "cron",
-    help="Also run it on this cron (Quartz or @daily-style) as a Python job.",
+    "every",
+    is_flag=False,
+    flag_value="daily",
+    help="Also rebuild on a schedule: daily (the default when given alone), hourly, "
+    "or a number of minutes. The minute and hour come from the project and group. "
+    "Faster than daily needs an admin grant.",
 )
-@click.option("--env", "environment", help="Python environment of the scheduled job.")
+@click.option("--env", "environment", help="Python environment of the job.")
+@click.option(
+    "--build-here",
+    is_flag=True,
+    hidden=True,
+    help="Run the build in this process: what the job does.",
+)
 @click.option(
     "--readback-timeout",
     type=click.IntRange(min=0),
@@ -118,12 +137,20 @@ def fg_embed(
     embedding_model: str | None,
     chunk_chars: int,
     chunk_overlap: int,
-    cron: str | None,
+    every: str | None,
     environment: str | None,
+    build_here: bool,
     readback_timeout: int,
     lease_timeout: int,
 ) -> None:
     """Embed a text column of SOURCE into a searchable feature group.
+
+    The build runs as the Python job GROUP_embed, one execution at a time per
+    group. This command creates or updates the job, starts one execution,
+    prints its id and returns; it does not wait. Read the job's state with
+    `hops job info GROUP_embed` and its log with `hops job logs`. A start the
+    platform refuses for capacity exits non-zero and starts nothing: run it
+    again after the time it names.
 
     Each row's text is cut into chunks of --chunk-chars characters that
     overlap by --chunk-overlap; each chunk is a row keyed by (doc_id,
@@ -132,7 +159,8 @@ def fg_embed(
     are in the group's description; another model or dimension makes a new
     version. A rerun embeds only changed chunks and deletes the chunks of
     shortened or deleted rows, from both stores. A failed source read changes
-    nothing.
+    nothing. A source over the supported input (50,000 chunks and 100 MB of
+    text unless an admin granted more) is refused with nothing written.
 
     The embedding deployment is called with your own credentials. Search it
     from an agent with `hops agent init NAME --reads ... --search GROUP`.
@@ -150,8 +178,9 @@ def fg_embed(
         embedding_model: Model name.
         chunk_chars: Characters per chunk.
         chunk_overlap: Overlap between chunks.
-        cron: Schedule for a job running this command.
+        every: Schedule of the job.
         environment: Python environment of the job.
+        build_here: Run the build in this process.
         readback_timeout: Seconds a read-back waits.
         lease_timeout: Seconds before a lease is taken over.
     """
@@ -177,8 +206,59 @@ def fg_embed(
         )
     group = (to or f"{src.name}_{text}_emb").lower()
     project = session.get_project(ctx)
+    if build_here:
+        _build(
+            ctx, src, text, group, endpoint, chunk_chars, chunk_overlap,
+            readback_timeout, lease_timeout,
+        )  # fmt: skip
+        return
+
+    cron = schedule_cron(every, project.id, group) if every else None
+    args = [
+        "fg", "embed", src.name, "--version", str(src.version), "--text", text,
+        "--to", group,
+        "--embedding-project", endpoint[0],
+        "--embedding-deployment", endpoint[1],
+        "--embedding-model", endpoint[2],
+        "--chunk-chars", str(chunk_chars), "--chunk-overlap", str(chunk_overlap),
+        "--readback-timeout", str(readback_timeout),
+        "--lease-timeout", str(lease_timeout),
+        "--build-here",
+    ]  # fmt: skip
+    job = _ensure_job(project, group, src, text, args, environment)
+    execution = _start(job, group)
+    if cron:
+        _schedule(job, group, cron, execution)
+
+    summary = {
+        "group": group,
+        "job": job.name,
+        "execution": getattr(execution, "id", None),
+        "schedule": cron,
+    }
+    if output.JSON_MODE:
+        output.print_json(summary)
+        return
+    output.success(
+        "✓ Started execution %s of job %s: it builds %s and is not waited for",
+        summary["execution"],
+        job.name,
+        group,
+    )
+    if cron:
+        click.echo(f"Scheduled job {job.name} ({cron})")
+
+
+def _build(
+    ctx, src, text, group, endpoint, chunk_chars, chunk_overlap, readback_s, lease_s
+) -> None:
+    """The build itself: what the job's execution runs."""
+    from hopsworks_agents import embed as embed_client  # noqa: PLC0415
+
     fs = session.get_feature_store(ctx)
-    state = embed_run.State(project.get_dataset_api(), group, uuid.uuid4().hex)
+    state = embed_run.State(
+        session.get_project(ctx).get_dataset_api(), group, uuid.uuid4().hex
+    )
 
     def embed(texts: list[str]) -> list[list[float]]:
         return embed_client.embed_texts(
@@ -189,6 +269,7 @@ def fg_embed(
         )
 
     try:
+        max_chunks, max_bytes = embed_run.embed_limits()
         plan = embed_run.run(
             fs=fs,
             source=src,
@@ -199,27 +280,14 @@ def fg_embed(
             state=state,
             size=chunk_chars,
             overlap=chunk_overlap,
-            readback_s=readback_timeout,
-            lease_s=lease_timeout,
+            readback_s=readback_s,
+            lease_s=lease_s,
+            max_chunks=max_chunks,
+            max_bytes=max_bytes,
             log=output.info,
         )
     except embed_run.EmbedError as exc:
         raise click.ClickException(str(exc)) from exc
-
-    job_name = None
-    if cron:
-        args = [
-            "fg", "embed", src.name, "--version", str(src.version), "--text", text,
-            "--to", group,
-            "--embedding-project", endpoint[0],
-            "--embedding-deployment", endpoint[1],
-            "--embedding-model", endpoint[2],
-            "--chunk-chars", str(chunk_chars), "--chunk-overlap", str(chunk_overlap),
-            "--readback-timeout", str(readback_timeout),
-            "--lease-timeout", str(lease_timeout),
-        ]  # fmt: skip
-        job_name = _schedule(project, group, src, text, args, cron, environment)
-
     summary = {
         "group": group,
         "version": plan.version,
@@ -229,7 +297,6 @@ def fg_embed(
         "upserted": plan.upserted,
         "deleted": plan.removed,
         "settled": plan.settled,
-        "job": job_name,
     }
     if output.JSON_MODE:
         output.print_json(summary)
@@ -242,8 +309,6 @@ def fg_embed(
         plan.embedded,
         plan.removed,
     )
-    if job_name:
-        click.echo(f"Scheduled job {job_name} ({cron})")
 
 
 def _owned(thing: Any, group: str) -> bool:
@@ -263,10 +328,58 @@ def _runner(group: str) -> str:
     return f"{embed_run.STATE_DIR}/{group}_embed_job.py"
 
 
-def _schedule(project, group, src, text, args, cron, environment) -> str:
+def _intervals() -> set[int]:
+    """Minutes between builds that repeat evenly: a divisor of an hour, or whole hours dividing a day."""
+    return {m for m in range(1, 60) if 60 % m == 0} | {
+        60 * h for h in range(1, 25) if 24 % h == 0
+    }
+
+
+def schedule_cron(every: str, project_id: Any, group: str) -> str:
+    """The Quartz cron of `--schedule`.
+
+    Daily by default. The minute, and the hour of a daily or multi-hour build, come
+    from a stable hash of the project id and the group name, so groups do not all fire
+    at once. An interval below a day must reach the floor an admin grants in the
+    Hopsworks variable platform_jobs_embed_min_interval_minutes; with none set, a day
+    is the floor.
+    """
+    word = every.strip().lower().removeprefix("@")
+    minutes = {"daily": DAY_MINUTES, "hourly": 60}.get(
+        word, int(word) if word.isdigit() else 0
+    )
+    if minutes not in _intervals():
+        raise click.BadParameter(
+            f"Must be daily, hourly, or minutes that divide an hour or are whole hours "
+            f"dividing a day, not '{every}'.",
+            param_hint="--schedule",
+        )
+    if minutes < DAY_MINUTES:
+        try:
+            floor = embed_run.variable_int(embed_run.VAR_MIN_INTERVAL, DAY_MINUTES)
+        except embed_run.EmbedError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if minutes < floor:
+            raise click.ClickException(
+                f"A build every {minutes} min is faster than this cluster grants "
+                f"({floor} min). Use --schedule daily, or ask an admin for a faster floor."
+            )
+    digest = hashlib.sha256(f"{project_id}/{group}".encode()).digest()
+    minute, hour = digest[0] % 60, digest[1] % 24
+    if minutes == DAY_MINUTES:
+        return f"0 {minute} {hour} * * ?"
+    if minutes == 60:
+        return f"0 {minute} * * * ?"
+    if minutes < 60:
+        return f"0 {digest[0] % minutes}/{minutes} * * * ?"
+    step = minutes // 60
+    return f"0 {minute} {hour % step}/{step} * * ?"
+
+
+def _ensure_job(project, group, src, text, args, environment) -> Any:
+    """The group's job, made or updated to run `args`, one execution at a time, in the embed class."""
     from hopsworks.cli import versions  # noqa: PLC0415
     from hopsworks.cli.commands.files import makedirs  # noqa: PLC0415
-    from hopsworks.cli.commands.job import _expand_cron_alias  # noqa: PLC0415
 
     api = project.get_job_api()
     name = _job_name(group)
@@ -278,7 +391,7 @@ def _schedule(project, group, src, text, args, cron, environment) -> str:
         existing = None
     if existing is not None and not _owned(existing, group):
         raise click.ClickException(
-            f"Job '{name}' exists and was not made by hops fg embed: the group is written, no job is scheduled."
+            f"Job '{name}' exists and was not made by hops fg embed: it is left alone and nothing was started."
         )
     dataset = project.get_dataset_api()
     try:
@@ -288,23 +401,71 @@ def _schedule(project, group, src, text, args, cron, environment) -> str:
             with open(local, "w", encoding="utf-8") as f:
                 f.write(_RUNNER_CODE)
             dataset.upload(local, embed_run.STATE_DIR, overwrite=True)
-        config = api.get_configuration("PYTHON")
+        config = (
+            existing.config if existing is not None else api.get_configuration("PYTHON")
+        )
         config["appPath"] = _runner(group)
         config["defaultArgs"] = shlex.join(args)
+        config[MAX_CONCURRENT] = 1
+        config[PLATFORM_CLASS_KEY] = PLATFORM_CLASS
         if environment:
             config["environmentName"] = environment
         config["description"] = (
             f"Embeds {src.name} v{src.version} {text} into {group}. {embed_run.OWNER}{group}"
         )
-        job = api.create_job(name=name, config=config)
-        job.schedule(cron_expression=_expand_cron_alias(cron))
-    except click.ClickException:
-        raise
+        if existing is None:
+            return api.create_job(name=name, config=config)
+        return existing.save()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
-            f"Could not schedule job '{name}': {exc}. The group is written."
+            f"Could not prepare job '{name}': {exc}. Nothing was started."
         ) from exc
-    return name
+
+
+def start_refusal(exc: BaseException, group: str) -> str | None:
+    """The refusal of an execution start, from the server's answer; None for any other failure.
+
+    429: the platform's embed capacity (start rate or inventory) is full. 409: the job
+    already has an execution (maxConcurrentExecutions is 1).
+    """
+    from hopsworks_common.client.exceptions import (  # noqa: PLC0415 - SDK loaded on use
+        RestAPIError,
+    )
+
+    cause: BaseException | None = exc
+    while cause is not None and not isinstance(cause, RestAPIError):
+        cause = cause.__cause__
+    if cause is None:
+        return None
+    status = cause.response.status_code
+    if status == RestAPIError.STATUS_CODE_CONFLICT:
+        return f"a build of {group} is already running"
+    if status == 429:
+        after = (cause.response.headers.get("Retry-After") or "").strip()
+        when = f"{after} s" if after.isdigit() else "a while"
+        return f"embed jobs are at capacity; nothing was started; retry after {when}"
+    return None
+
+
+def _start(job: Any, group: str) -> Any:
+    """One execution of the job; a refusal exits non-zero, with no retry."""
+    try:
+        return job.run(await_termination=False)
+    except Exception as exc:  # noqa: BLE001
+        refusal = start_refusal(exc, group)
+        if refusal is not None:
+            raise click.ClickException(refusal) from exc
+        raise click.ClickException(f"Could not start job '{job.name}': {exc}") from exc
+
+
+def _schedule(job: Any, group: str, cron: str, execution: Any) -> None:
+    try:
+        job.schedule(cron_expression=cron, max_active_runs=1)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not schedule job '{job.name}': {exc}. "
+            f"Execution {getattr(execution, 'id', '?')} was started."
+        ) from exc
 
 
 @fg_embed_group.command("delete")

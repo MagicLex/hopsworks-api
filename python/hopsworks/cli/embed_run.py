@@ -341,6 +341,8 @@ class Stores:
 
         Streamed; with `limit`, the read stops once the group holds more rows than that.
         """
+        import numpy as np  # noqa: PLC0415
+
         if not self.fg.commit_details(limit=1):
             return {}
         out = {}
@@ -350,7 +352,7 @@ class Stores:
                 for row in batch.to_pylist():
                     out[(str(row["doc_id"]), int(row["chunk_ix"]))] = (
                         row["content_sha"],
-                        list(row["embedding"]),
+                        np.asarray(row["embedding"], dtype=np.float32),
                         row["embedded_at"],
                     )
                 if limit is not None and len(out) > limit:
