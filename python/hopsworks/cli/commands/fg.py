@@ -744,6 +744,9 @@ def fg_create_external(
 ) -> None:
     """Register a feature group that reads a data source.
 
+    Mount with --no-statistics: statistics start a job that reads the whole source, and this
+    command waits for it. Compute them later with `hops fg stats compute <name> --version <v>`.
+
     Exactly one source spec is required:
 
     \b
