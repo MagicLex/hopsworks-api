@@ -4,10 +4,16 @@ The group is keyed by ``(doc_id, chunk_ix)``; ``doc_id`` is the source row's
 primary key. A run converges the group onto the source in this order, so a
 run killed at any point leaves a state the next run finishes:
 
+Input limits come first. Before anything is written or deleted, the run reads
+the pending-delete files, the source (streamed from one pinned commit, stopped
+as soon as it passes the maximum chunks or bytes) and the vectors the group
+holds (stopped at the maximum). Input over the maximum stops the run with
+nothing written: there are no partial runs.
+
 0. Settle: each version with a pending-delete file has its keys removed,
    offline then online, read back absent from both, and the file deleted.
-1. Read the source fully and compute the desired keys D. A failed read stops
-   the run before anything is written or deleted.
+1. The desired keys D are those of the full source read above. A failed read
+   stops the run before anything is written or deleted.
 2. X = the keys the group holds now minus D; X is written to the pending file.
 3. Upsert the changed chunks of D and any unchanged one the online store
    lacks; an unchanged chunk keeps its vector and is not sent to the endpoint.
@@ -46,6 +52,17 @@ LEASE_S = 6 * 3600
 #: Keys per online read-back request.
 READ_BATCH = 200
 POLL_S = 5
+#: The supported input of one group, unless the Hopsworks variables of
+#: embed_limits() grant more: chunks (also the most source rows, pending deletes
+#: and held vectors a run reads) and bytes of source text.
+MAX_CHUNKS = 50_000
+MAX_BYTES = 100_000_000
+#: Source rows per Arrow batch of the source read.
+SOURCE_BATCH = 1_000
+#: Hopsworks variables an admin sets; each is a positive integer, absent for the default.
+VAR_MAX_CHUNKS = "platform_jobs_embed_max_chunks"
+VAR_MAX_BYTES = "platform_jobs_embed_max_source_bytes"
+VAR_MIN_INTERVAL = "platform_jobs_embed_min_interval_minutes"
 
 STATE_DIR = "Resources/hopsable-embed"
 OWNER = "hopsable.embed.owner="
@@ -61,6 +78,37 @@ _DESCRIPTION = re.compile(
 
 class EmbedError(Exception):
     """The run stopped; the message says what was and was not changed."""
+
+
+def variable_int(name: str, default: int) -> int:
+    """A positive-integer Hopsworks variable; `default` when it is not set."""
+    from hopsworks.cli import versions  # noqa: PLC0415
+    from hopsworks_common.core.variable_api import VariableApi  # noqa: PLC0415
+
+    try:
+        raw = VariableApi()._get_variable(name)
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):
+            return default
+        raise EmbedError(
+            f"Could not read the Hopsworks variable {name}: {exc}"
+        ) from exc
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise EmbedError(
+            f"The Hopsworks variable {name} is '{raw}', not a positive integer."
+        )
+    return value
+
+
+def embed_limits() -> tuple[int, int]:
+    """(maximum chunks, maximum source bytes) of one group on this cluster."""
+    return variable_int(VAR_MAX_CHUNKS, MAX_CHUNKS), variable_int(
+        VAR_MAX_BYTES, MAX_BYTES
+    )
 
 
 def chunks(
@@ -98,16 +146,64 @@ def doc_id(values: list[Any]) -> str:
     return json.dumps([str(v) for v in values])
 
 
-def desired(
-    df: Any, primary_key: list[str], text: str, size: int, overlap: int
+def read_source(
+    source: Any,
+    primary_key: list[str],
+    text: str,
+    size: int,
+    overlap: int,
+    max_chunks: int,
+    max_bytes: int,
 ) -> dict:
-    """(doc_id, chunk_ix) -> chunk text, for every row of the source."""
-    out = {}
-    for row in df[[*primary_key, text]].itertuples(index=False, name=None):
-        doc = doc_id(list(row[:-1]))
-        for ix, chunk in enumerate(chunks(row[-1], size, overlap)):
-            out[(doc, ix)] = chunk
+    """(doc_id, chunk_ix) -> chunk text, for every row of the source, read once.
+
+    The query streams in Arrow batches and the read stops at the first row that
+    takes the input past `max_chunks` (rows count too: each is a document) or
+    `max_bytes` of UTF-8 text, so what is held is never more than the maximum.
+    """
+    out: dict = {}
+    rows = 0
+    total = 0
+    columns = [*primary_key, text]
+    with source.select(columns).read_batches(batch_size=SOURCE_BATCH) as batches:
+        for batch in batches:
+            for row in batch.to_pylist():
+                rows += 1
+                value = row[text]
+                if value is not None:
+                    total += len(str(value).encode("utf-8"))
+                if rows > max_chunks or total > max_bytes:
+                    raise _over(source, max_chunks, max_bytes)
+                doc = doc_id([row[k] for k in primary_key])
+                for ix, chunk in enumerate(chunks(value, size, overlap)):
+                    out[(doc, ix)] = chunk
+                if len(out) > max_chunks:
+                    raise _over(source, max_chunks, max_bytes)
     return out
+
+
+def _over(source: Any, max_chunks: int, max_bytes: int) -> EmbedError:
+    return EmbedError(
+        f"Feature group '{source.name}' is over the supported input of {max_chunks} chunks "
+        f"(rows count too) or {max_bytes} bytes of text. Nothing was written or deleted."
+    )
+
+
+def _pin(source: Any) -> str | None:
+    """The source's latest commit id, or None when it keeps no commits."""
+    if str(getattr(source, "time_travel_format", None)).upper() not in (
+        "HUDI",
+        "DELTA",
+        "ICEBERG",
+    ):
+        return None
+    try:
+        commits = source.commit_details(limit=1)
+    except Exception as exc:  # noqa: BLE001 - an unreadable timeline is not an unchanged one
+        raise EmbedError(
+            f"Could not read the commits of feature group '{source.name}': {exc}. Nothing was written."
+        ) from exc
+    return str(max(commits)) if commits else ""
 
 
 def description(
@@ -240,15 +336,29 @@ class Stores:
     def __init__(self, fg: Any):
         self.fg = fg
 
-    def offline(self) -> dict:
-        """(doc_id, chunk_ix) -> (content_sha, embedding, embedded_at) of every offline row."""
+    def offline(self, limit: int | None = None) -> dict:
+        """(doc_id, chunk_ix) -> (content_sha, embedding, embedded_at) of every offline row.
+
+        Streamed; with `limit`, the read stops once the group holds more rows than that.
+        """
         if not self.fg.commit_details(limit=1):
             return {}
-        df = self.fg.select([*KEYS, "content_sha", "embedding", "embedded_at"]).read()
-        return {
-            (str(d), int(i)): (s, list(e), t)
-            for d, i, s, e, t in df.itertuples(index=False, name=None)
-        }
+        out = {}
+        columns = [*KEYS, "content_sha", "embedding", "embedded_at"]
+        with self.fg.select(columns).read_batches() as batches:
+            for batch in batches:
+                for row in batch.to_pylist():
+                    out[(str(row["doc_id"]), int(row["chunk_ix"]))] = (
+                        row["content_sha"],
+                        list(row["embedding"]),
+                        row["embedded_at"],
+                    )
+                if limit is not None and len(out) > limit:
+                    raise EmbedError(
+                        f"The group '{self.fg.name}' holds more than {limit} vectors, "
+                        "over the supported input. Nothing was written or deleted."
+                    )
+        return out
 
     def online_present(self, keys: list[tuple[str, int]]) -> set:
         from hsfs.core.vector_db_client import VectorDbClient  # noqa: PLC0415
@@ -352,6 +462,8 @@ def run(
     overlap: int = CHUNK_OVERLAP,
     readback_s: int = READBACK_S,
     lease_s: int = LEASE_S,
+    max_chunks: int = MAX_CHUNKS,
+    max_bytes: int = MAX_BYTES,
     now: Callable[[], float] = time.time,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -362,9 +474,56 @@ def run(
     try:
         versions = _versions(fs, group)
 
-        # 0. Settle every version's pending deletes before anything else.
+        # Limits: every read below stops past the maximum, and none of it writes.
+        pending = {}
         for fg in versions:
             keys = state.read_pending(fg.version)
+            if keys is not None:
+                pending[fg.version] = keys
+        settling = sum(len(k) for k in pending.values())
+        if settling > max_chunks:
+            raise EmbedError(
+                f"The pending deletes of '{group}' hold {settling} keys, over the supported input of "
+                f"{max_chunks}. Nothing was written or deleted."
+            )
+
+        primary_key = list(getattr(source, "primary_key", []) or [])
+        if not primary_key:
+            raise EmbedError(
+                f"Feature group '{source.name}' has no primary key, so its rows have no stable id. Nothing was written."
+            )
+        pin = _pin(source)
+        try:
+            want = read_source(
+                source, primary_key, text, size, overlap, max_chunks, max_bytes
+            )
+        except EmbedError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any failed read is not an empty source
+            raise EmbedError(
+                f"Could not read feature group '{source.name}': {exc}. Nothing was written or deleted."
+            ) from exc
+        if _pin(source) != pin:
+            raise EmbedError(
+                f"Feature group '{source.name}' was committed to while it was read. "
+                "Nothing was written or deleted; run again."
+            )
+        plan.desired = len(want)
+
+        first = next(iter(want.values()), "dimension")
+        probe = embed([first])
+        dimension = len(probe[0])
+        model_text = description(
+            source.name, source.version, text, model, dimension, group
+        )
+        reused = _reusable(versions, group, model, dimension)
+        held = {}
+        if reused is not None:
+            held = stores_for(reused).offline(max_chunks)
+
+        # 0. Settle every version's pending deletes before anything else.
+        for fg in versions:
+            keys = pending.get(fg.version)
             if keys is None:
                 continue
             log(f"Settling {len(keys)} pending deletes of {group} v{fg.version}")
@@ -375,38 +534,16 @@ def run(
             wait_converged(stores, keys, [], readback_s, clock, sleep)
             state.remove_pending(fg.version)
             plan.settled[fg.version] = len(keys)
+            if fg is reused:
+                for key in keys:
+                    held.pop(key, None)
 
-        # 1. The full source, or nothing changes.
-        primary_key = list(getattr(source, "primary_key", []) or [])
-        if not primary_key:
-            raise EmbedError(
-                f"Feature group '{source.name}' has no primary key, so its rows have no stable id. Nothing was written."
-            )
-        try:
-            frame = source.select([*primary_key, text]).read()
-        except Exception as exc:  # noqa: BLE001 - any failed read is not an empty source
-            raise EmbedError(
-                f"Could not read feature group '{source.name}': {exc}. Nothing was written or deleted."
-            ) from exc
-        want = desired(frame, primary_key, text, size, overlap)
-        plan.desired = len(want)
-
-        first = next(iter(want.values()), "dimension")
-        probe = embed([first])
-        dimension = len(probe[0])
-        fg, created = _group_for(
-            fs,
-            versions,
-            group,
-            model,
-            dimension,
-            description(source.name, source.version, text, model, dimension, group),
-        )
+        # 1. The desired keys D are the source read above.
+        fg, created = _group_for(fs, versions, reused, group, dimension, model_text)
         plan.version, plan.created = fg.version, created
         stores = stores_for(fg)
 
         # 2. Keys to delete, recorded before any write.
-        held = {} if created else stores.offline()
         delete = sorted(set(held) - set(want))
         if delete:
             state.verify()
@@ -497,17 +634,24 @@ def _versions(fs: Any, group: str) -> list[Any]:
     return sorted(found, key=lambda fg: fg.version)
 
 
-def _group_for(fs, versions, group, model, dimension, text):
-    """The latest version when it holds this model and dimension, else a new version."""
+def _reusable(versions, group, model, dimension):
+    """The latest version when it holds this model and dimension, else None (a new version)."""
     latest = versions[-1] if versions else None
-    if latest is not None:
-        info = described(latest)
-        if info is None or info["owner"] != group:
-            raise EmbedError(
-                f"Feature group '{group}' exists and was not made by hops fg embed. Pass --to with another name."
-            )
-        if (info["model"], info["dimension"]) == (model, dimension):
-            return latest, False
+    if latest is None:
+        return None
+    info = described(latest)
+    if info is None or info["owner"] != group:
+        raise EmbedError(
+            f"Feature group '{group}' exists and was not made by hops fg embed. Pass --to with another name."
+        )
+    return latest if (info["model"], info["dimension"]) == (model, dimension) else None
+
+
+def _group_for(fs, versions, reused, group, dimension, text):
+    """`reused` as it is, else a new version."""
+    if reused is not None:
+        return reused, False
+    latest = versions[-1] if versions else None
     from hsfs.embedding import EmbeddingIndex  # noqa: PLC0415
     from hsfs.feature import Feature  # noqa: PLC0415
 
