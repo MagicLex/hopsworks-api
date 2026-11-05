@@ -7,12 +7,14 @@ the steps, read-back on the vector database) runs on a cluster.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from types import SimpleNamespace
 from unittest import mock
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 from click.testing import CliRunner
 from hopsworks.cli import embed_run
@@ -97,7 +99,9 @@ class Stores:
         self.fail_online_remove = fail_online_remove
         self.online_lag = online_lag
 
-    def offline(self):
+    def offline(self, limit=None):
+        if limit is not None and len(self.off) > limit:
+            raise embed_run.EmbedError(f"holds more than {limit} vectors")
         return dict(self.off)
 
     def online_present(self, keys):
@@ -121,6 +125,15 @@ class Stores:
             self.on.add(key)
 
 
+@contextlib.contextmanager
+def batches_of(frame, size=2):
+    """`Query.read_batches`: the frame as Arrow batches, a few rows each."""
+    yield (
+        pa.RecordBatch.from_pandas(frame.iloc[i : i + size], preserve_index=False)
+        for i in range(0, len(frame), size)
+    )
+
+
 class World:
     """A source group, an embedding group's versions, HopsFS and the endpoint."""
 
@@ -135,6 +148,9 @@ class World:
         self.source = mock.MagicMock()
         self.source.name, self.source.version = "notes", 1
         self.source.primary_key = ["id"]
+        self.source.time_travel_format = "DELTA"
+        self.commits = {"1700000000000": {}}
+        self.source.commit_details.side_effect = lambda limit=None: dict(self.commits)
         self.set_source(rows)
         self.fs = mock.MagicMock()
         self.fs.get_feature_groups.side_effect = lambda name: list(self.groups)
@@ -142,7 +158,7 @@ class World:
 
     def set_source(self, rows):
         frame = pd.DataFrame(rows, columns=["id", "body"])
-        self.source.select.return_value.read.return_value = frame
+        self.source.select.return_value.read_batches = lambda **kw: batches_of(frame)
 
     def _create(self, **kw):
         fg = SimpleNamespace(
@@ -241,7 +257,9 @@ def test_the_pending_file_holds_the_deletes_before_any_write():
 def test_a_failed_source_read_writes_and_deletes_nothing():
     w = World([[1, "a longer body text"]])
     w.run()
-    w.source.select.return_value.read.side_effect = RuntimeError("Trino down")
+    w.source.select.return_value.read_batches = mock.MagicMock(
+        side_effect=RuntimeError("Trino down")
+    )
     w.log.clear()
     with pytest.raises(embed_run.EmbedError, match="Nothing was written or deleted"):
         w.run("r2")
@@ -286,7 +304,7 @@ def test_a_run_killed_after_its_settle_leaves_nothing_to_lose_track_of():
     w.set_source([[1, "a longer body text"], [2, "gone soon"]])
     w.stores[1].fail_online_remove = False
     with (
-        mock.patch.object(w, "embed", side_effect=RuntimeError("killed")),
+        mock.patch.object(w.stores[1], "upsert", side_effect=RuntimeError("killed")),
         pytest.raises(RuntimeError),
     ):
         w.run("B")
@@ -325,6 +343,192 @@ def test_a_lease_older_than_the_timeout_is_taken_over():
     w.files.put(w.lease(), {"run_id": "dead", "started_at": 0.0})
     plan = w.run(lease_s=500)
     assert plan.upserted == 1 and not w.files.exists(w.lease())
+
+
+# --- input limits -------------------------------------------------------------
+
+
+def _nothing_written(w):
+    assert w.log == []
+    assert w.groups == [] or all(not st.off for st in w.stores.values())
+    assert not w.files.exists(w.lease())
+
+
+def test_a_source_over_the_chunk_maximum_is_refused_before_any_write():
+    w = World([[1, "a longer body text"], [2, "another long enough body"]])
+    with pytest.raises(
+        embed_run.EmbedError, match="over the supported input of 3 chunks"
+    ):
+        w.run(max_chunks=3)
+    _nothing_written(w)
+    assert w.embedded == [] and w.fs.create_feature_group.call_count == 0
+
+
+def test_a_source_at_the_maximum_runs():
+    w = World([[1, "a longer body text"]])
+    plan = w.run(max_chunks=2, max_bytes=len("a longer body text"))
+    assert plan.desired == 2 and plan.upserted == 2
+
+
+def test_a_source_over_the_byte_maximum_is_refused_before_any_write():
+    w = World([[1, "abcdef"], [2, "ghijkl"]])
+    with pytest.raises(embed_run.EmbedError, match="bytes of text"):
+        w.run(max_bytes=11)
+    _nothing_written(w)
+
+
+def test_bytes_are_utf8_bytes_of_the_text_not_characters():
+    w = World([[1, "ééééé"]])
+    with pytest.raises(embed_run.EmbedError, match="bytes of text"):
+        w.run(max_bytes=9)
+    _nothing_written(w)
+
+
+def test_rows_count_toward_the_maximum_even_with_no_text():
+    w = World([[1, ""], [2, " "], [3, None]])
+    with pytest.raises(embed_run.EmbedError, match="rows count too"):
+        w.run(max_chunks=2)
+    _nothing_written(w)
+
+
+def test_the_source_read_stops_at_the_first_batch_past_the_maximum():
+    w = World([[i, "x"] for i in range(20)])
+    pulled = []
+
+    @contextlib.contextmanager
+    def streaming(**kw):
+        def gen():
+            for i in range(0, 20, 2):
+                pulled.append(i)
+                yield pa.RecordBatch.from_pandas(
+                    pd.DataFrame({"id": [i, i + 1], "body": ["x", "x"]}),
+                    preserve_index=False,
+                )
+
+        yield gen()
+
+    w.source.select.return_value.read_batches = streaming
+    with pytest.raises(embed_run.EmbedError, match="supported input"):
+        w.run(max_chunks=3)
+    assert pulled == [0, 2]
+
+
+def test_pending_deletes_over_the_maximum_are_refused_before_any_write():
+    w = World([[1, "a longer body text"]])
+    w.run()
+    w.files.put(w.pending(), {"run_id": "old", "keys": [["9", i] for i in range(4)]})
+    w.log.clear()
+    w.embedded.clear()
+    with pytest.raises(embed_run.EmbedError, match="pending deletes.*4 keys"):
+        w.run("r2", max_chunks=3)
+    assert w.log == [] and w.embedded == []
+    assert w.files.exists(w.pending()) and not w.files.exists(w.lease())
+
+
+def test_pending_deletes_are_summed_over_versions():
+    w = World([[1, "a longer body text"]])
+    w.run()
+    w.groups.append(SimpleNamespace(**{**vars(w.groups[0]), "version": 2}))
+    for v in (1, 2):
+        w.files.put(w.pending(v), {"run_id": "old", "keys": [["9", 0], ["9", 1]]})
+    w.log.clear()
+    with pytest.raises(embed_run.EmbedError, match="4 keys"):
+        w.run("r2", max_chunks=3)
+    assert w.log == []
+
+
+def test_held_vectors_over_the_maximum_are_refused_before_any_write():
+    w = World([[1, "a longer body text"]])
+    w.run()
+    w.stores[1].off.update({("z", i): ("s", [0.0], None) for i in range(5)})
+    w.log.clear()
+    with pytest.raises(embed_run.EmbedError, match="more than 3 vectors"):
+        w.run("r2", max_chunks=3)
+    assert w.log == [] and not w.files.exists(w.pending())
+
+
+def test_a_source_committed_to_during_the_read_is_refused():
+    w = World([[1, "a longer body text"]])
+    batches = w.source.select.return_value.read_batches
+
+    @contextlib.contextmanager
+    def moving(**kw):
+        with batches(**kw) as b:
+            yield b
+        w.commits["1700000000001"] = {}
+
+    w.source.select.return_value.read_batches = moving
+    with pytest.raises(embed_run.EmbedError, match="committed to while it was read"):
+        w.run()
+    _nothing_written(w)
+
+
+def test_a_source_without_commits_is_read_once_unpinned():
+    w = World([[1, "short"]])
+    w.source.time_travel_format = None
+    w.source.commit_details.side_effect = AssertionError("no commits to read")
+    assert w.run().upserted == 1
+
+
+def test_an_unreadable_commit_timeline_stops_the_run():
+    w = World([[1, "short"]])
+    w.source.commit_details.side_effect = RuntimeError("backend down")
+    with pytest.raises(embed_run.EmbedError, match="Could not read the commits"):
+        w.run()
+    _nothing_written(w)
+
+
+def _rest_error(status):
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = mock.MagicMock(status_code=status)
+    response.json.return_value = {}
+    return RestAPIError("http://x", response)
+
+
+def _variables(values):
+    def get(self, name):
+        if name not in values:
+            raise _rest_error(404)
+        return values[name]
+
+    return mock.patch(
+        "hopsworks_common.core.variable_api.VariableApi._get_variable", get
+    )
+
+
+def test_limits_default_when_the_variables_are_not_set():
+    with _variables({}):
+        assert embed_run.embed_limits() == (50_000, 100_000_000)
+
+
+def test_an_admin_grants_a_larger_input_through_the_variables():
+    with _variables(
+        {embed_run.VAR_MAX_CHUNKS: "80000", embed_run.VAR_MAX_BYTES: " 250000000 "}
+    ):
+        assert embed_run.embed_limits() == (80_000, 250_000_000)
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-5", ""])
+def test_a_variable_that_is_not_a_positive_integer_stops_the_run(bad):
+    with (
+        _variables({embed_run.VAR_MAX_CHUNKS: bad}),
+        pytest.raises(embed_run.EmbedError, match="not a positive integer"),
+    ):
+        embed_run.embed_limits()
+
+
+def test_a_variable_read_that_fails_is_not_a_default():
+    def get(self, name):
+        raise _rest_error(500)
+
+    with (
+        mock.patch("hopsworks_common.core.variable_api.VariableApi._get_variable", get),
+        pytest.raises(
+            embed_run.EmbedError, match="Could not read the Hopsworks variable"
+        ),
+    ):
+        embed_run.embed_limits()
 
 
 def test_another_model_makes_a_new_version():
@@ -590,7 +794,10 @@ def test_the_client_posts_to_the_serving_project_by_its_backing_name(monkeypatch
         mock.patch("hopsworks_common.client.istio._get_instance", return_value=istio),
     ):
         vectors = embed.embed_texts(
-            ["hi"], project="hopsable_embeddings", deployment="embedderbuild", model="bge"
+            ["hi"],
+            project="hopsable_embeddings",
+            deployment="embedderbuild",
+            model="bge",
         )
     assert vectors == [[0.5]]
     call = istio._send_request.call_args
