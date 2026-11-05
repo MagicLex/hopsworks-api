@@ -57,8 +57,15 @@ def _hops(*args):
 
 
 def _exists(name):
+    """True or False from `fg info`; any other failure (login, server) fails the test."""
     result = _hops("--json", "fg", "info", name, "--version", "1")
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True
+    # A lookup error is appended after a colon; the bare message means no store has the group.
+    missing = f"Error: Feature group '{name}' not found in any accessible feature store"
+    lines = result.stderr.strip().splitlines()
+    assert lines and lines[-1] == missing, result.stdout + result.stderr
+    return False
 
 
 @pytest.fixture
@@ -68,6 +75,7 @@ def fg_name():
     yield name
     if _exists(name):
         deleted = _hops("fg", "delete", name, "--version", "1", "--yes")
+        assert deleted.returncode == 0, deleted.stdout + deleted.stderr
         deadline = time.monotonic() + DELETE_BUDGET_SECONDS
         while _exists(name):
             assert time.monotonic() < deadline, (
