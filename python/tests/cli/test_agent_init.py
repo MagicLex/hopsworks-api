@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -143,3 +144,16 @@ def test_init_rejects_bad_input(contacts, tmp_path, args, message):
     assert result.exit_code == 2
     assert message in result.output
     assert code is None
+
+
+def test_lookup_filters_through_get_feature():
+    # Attribute access on a group returns its own `id`, `name` or `version` for such key columns.
+    template = (
+        Path(__file__).parents[2]
+        / "hopsworks"
+        / "cli"
+        / "templates"
+        / "agent_init.py.tmpl"
+    ).read_text()
+    assert "getattr(fg, column)" not in template
+    assert "fg.get_feature(column) == cast(keys[column])" in template

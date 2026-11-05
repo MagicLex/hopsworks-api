@@ -76,7 +76,8 @@ def lookup(fg, keys, casts):
     """The rows of `fg` whose primary key equals `keys`, from the online store."""
     query = fg.select_all()
     for column, cast in casts.items():
-        query = query.filter(getattr(fg, column) == cast(keys[column]))
+        # get_feature: attribute access would return the group's own `id`, `name` or `version`.
+        query = query.filter(fg.get_feature(column) == cast(keys[column]))
     return query.read(online=True).head(MAX_ROWS).to_dict(orient="records")
 @@TOOL_CODE@@
 
