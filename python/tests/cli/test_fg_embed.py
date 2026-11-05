@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shlex
 from types import SimpleNamespace
 from unittest import mock
 
@@ -592,6 +593,281 @@ def test_embed_without_an_endpoint_names_the_settings(mock_project, monkeypatch)
     result = CliRunner().invoke(cli, ["fg", "embed", "notes", "--text", "body"])
     assert result.exit_code == 2
     assert "HOPSABLE_EMBEDDING_PROJECT" in result.output
+
+
+# --- the job: every build runs as GROUP_embed ----------------------------------
+
+
+@pytest.fixture
+def launch(mock_project, monkeypatch):
+    """`hops fg embed notes --text body` against a project with no job yet."""
+    monkeypatch.setenv("HOPSABLE_EMBEDDING_PROJECT", "serving")
+    monkeypatch.setenv("HOPSABLE_EMBEDDING_MODEL", "bge_small_en_v1_5")
+    monkeypatch.delenv("HOPSABLE_EMBEDDING_BUILD_DEPLOYMENT", raising=False)
+    src = mock.MagicMock()
+    src.name, src.version = "notes", 3
+    src.features = [SimpleNamespace(name="id"), SimpleNamespace(name="body")]
+    api = mock_project.get_job_api.return_value
+    api.get_job.return_value = None
+    api.get_configuration.side_effect = lambda kind: {"type": "pythonJobConfiguration"}
+    created = mock.MagicMock()
+    created.name = "notes_body_emb_embed"
+    created.run.return_value = SimpleNamespace(id=41)
+    api.create_job.return_value = created
+    files = Files()
+    mock_project.get_dataset_api.return_value = files
+    ctx = SimpleNamespace(
+        project=mock_project, api=api, job=created, files=files, source=src
+    )
+
+    def invoke(*args, variables=None):
+        with (
+            mock.patch("hopsworks.cli.commands.fg._get_fg", return_value=src),
+            mock.patch.object(
+                embed_run, "run", side_effect=AssertionError("built in the caller")
+            ) as run,
+            _variables(variables or {}),
+        ):
+            result = CliRunner().invoke(
+                cli, ["fg", "embed", "notes", "--text", "body", *args]
+            )
+        ctx.run = run
+        return result
+
+    ctx.invoke = invoke
+    return ctx
+
+
+def test_embed_creates_the_group_job_and_starts_one_execution(launch):
+    result = launch.invoke()
+    assert result.exit_code == 0, result.output
+    assert "execution 41 of job notes_body_emb_embed" in result.output
+    kwargs = launch.api.create_job.call_args.kwargs
+    config = kwargs["config"]
+    assert kwargs["name"] == "notes_body_emb_embed"
+    assert config["maxConcurrentExecutions"] == 1
+    assert config["platformClass"] == "embed"
+    assert config["appPath"] == f"{embed_run.STATE_DIR}/notes_body_emb_embed_job.py"
+    assert config["description"].endswith("hopsable.embed.owner=notes_body_emb")
+    args = shlex.split(config["defaultArgs"])
+    assert args[:6] == ["fg", "embed", "notes", "--version", "3", "--text"]
+    assert args[-1] == "--build-here" and "--schedule" not in args
+    assert "--embedding-model" in args and "--embedding-project" in args
+    launch.job.run.assert_called_once_with(await_termination=False)
+    assert launch.files.exists(f"{embed_run.STATE_DIR}/notes_body_emb_embed_job.py")
+    launch.job.schedule.assert_not_called()
+    launch.run.assert_not_called()
+
+
+def test_embed_prints_the_execution_id_as_json(launch):
+    result = launch.invoke("--json")
+    assert json.loads(result.output) == {
+        "group": "notes_body_emb",
+        "job": "notes_body_emb_embed",
+        "execution": 41,
+        "schedule": None,
+    }
+
+
+def test_embed_has_no_wait_option_and_never_awaits_the_execution(launch):
+    result = launch.invoke("--wait")
+    assert result.exit_code == 2 and "No such option" in result.output
+    assert launch.invoke().exit_code == 0
+    launch.job.run.assert_called_once_with(await_termination=False)
+    launch.job.get_state.assert_not_called()
+    launch.job.get_executions.assert_not_called()
+
+
+def test_embed_updates_its_own_job_and_keeps_its_name(launch):
+    old = mock.MagicMock()
+    old.name = "notes_body_emb_embed"
+    old.description = "Embeds notes. hopsable.embed.owner=notes_body_emb"
+    old.config = {"appPath": "old.py", "defaultArgs": "old"}
+    old.save.return_value = launch.job
+    launch.api.get_job.return_value = old
+    result = launch.invoke("--env", "py311")
+    assert result.exit_code == 0, result.output
+    launch.api.create_job.assert_not_called()
+    old.save.assert_called_once()
+    assert old.config["maxConcurrentExecutions"] == 1
+    assert old.config["platformClass"] == "embed"
+    assert old.config["environmentName"] == "py311"
+    assert "--build-here" in old.config["defaultArgs"]
+
+
+def test_embed_leaves_a_job_it_did_not_make_and_starts_nothing(launch):
+    other = mock.MagicMock()
+    other.description = "mine"
+    launch.api.get_job.return_value = other
+    result = launch.invoke()
+    assert result.exit_code == 1 and "was not made by hops fg embed" in result.output
+    other.run.assert_not_called()
+    launch.api.create_job.assert_not_called()
+
+
+def _refused(status, retry_after=None):
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = mock.MagicMock(status_code=status)
+    response.headers = {"Retry-After": retry_after} if retry_after else {}
+    response.json.return_value = {"errorCode": 130095}
+    return RestAPIError("http://x/executions", response)
+
+
+def test_a_429_exits_non_zero_names_the_retry_time_and_does_not_retry(launch):
+    launch.job.run.side_effect = _refused(429, "37")
+    result = launch.invoke("--schedule")
+    assert result.exit_code == 1
+    assert (
+        "embed jobs are at capacity; nothing was started; retry after 37 s"
+        in result.output
+    )
+    launch.job.run.assert_called_once()
+    launch.job.schedule.assert_not_called()
+
+
+def test_a_429_without_a_retry_after_header_says_so(launch):
+    launch.job.run.side_effect = _refused(429)
+    result = launch.invoke()
+    assert result.exit_code == 1
+    assert "nothing was started; retry after a while" in result.output
+
+
+def test_a_409_says_the_build_is_already_running(launch):
+    launch.job.run.side_effect = _refused(409)
+    result = launch.invoke()
+    assert result.exit_code == 1
+    assert "a build of notes_body_emb is already running" in result.output
+    launch.job.run.assert_called_once()
+
+
+def test_another_failed_start_is_not_called_a_capacity_refusal(launch):
+    launch.job.run.side_effect = _refused(500)
+    result = launch.invoke()
+    assert result.exit_code == 1
+    assert "Could not start job" in result.output and "capacity" not in result.output
+
+
+def _expected(project_id, group):
+    import hashlib
+
+    d = hashlib.sha256(f"{project_id}/{group}".encode()).digest()
+    return d[0] % 60, d[1] % 24
+
+
+def test_the_schedule_is_daily_at_a_hashed_minute_and_hour_by_default(launch):
+    result = launch.invoke("--schedule")
+    assert result.exit_code == 0, result.output
+    minute, hour = _expected(119, "notes_body_emb")
+    launch.job.schedule.assert_called_once_with(
+        cron_expression=f"0 {minute} {hour} * * ?", max_active_runs=1
+    )
+    assert f"0 {minute} {hour} * * ?" in result.output
+    launch.job.run.assert_called_once()
+
+
+def test_daily_is_the_same_as_the_bare_flag(launch):
+    launch.invoke("--schedule")
+    launch.invoke("--schedule", "daily")
+    launch.invoke("--schedule", "@daily")
+    crons = {c.kwargs["cron_expression"] for c in launch.job.schedule.call_args_list}
+    assert len(launch.job.schedule.call_args_list) == 3 and len(crons) == 1
+
+
+def test_groups_and_projects_spread_over_the_day():
+    from hopsworks.cli.commands.embed import schedule_cron
+
+    slots = {
+        schedule_cron("daily", pid, f"g{i}_emb")
+        for pid in range(100, 110)
+        for i in range(20)
+    }
+    assert len(slots) > 150
+    assert schedule_cron("daily", 1, "a") == schedule_cron("daily", 1, "a")
+    assert schedule_cron("daily", 1, "a") != schedule_cron("daily", 2, "a")
+
+
+def test_faster_than_daily_is_refused_without_an_admin_floor(launch):
+    result = launch.invoke("--schedule", "hourly")
+    assert result.exit_code == 1
+    assert "faster than this cluster grants (1440 min)" in result.output
+    launch.api.create_job.assert_not_called()
+    launch.job.run.assert_not_called()
+
+
+def test_an_admin_floor_allows_what_it_covers_and_no_faster(launch):
+    floor = {embed_run.VAR_MIN_INTERVAL: "60"}
+    ok = launch.invoke("--schedule", "hourly", variables=floor)
+    assert ok.exit_code == 0, ok.output
+    minute, _ = _expected(119, "notes_body_emb")
+    launch.job.schedule.assert_called_with(
+        cron_expression=f"0 {minute} * * * ?", max_active_runs=1
+    )
+    fast = launch.invoke("--schedule", "30", variables=floor)
+    assert fast.exit_code == 1
+    assert "faster than this cluster grants (60 min)" in fast.output
+    quarter = launch.invoke(
+        "--schedule", "15", variables={embed_run.VAR_MIN_INTERVAL: "15"}
+    )
+    assert quarter.exit_code == 0, quarter.output
+    cron = launch.job.schedule.call_args.kwargs["cron_expression"]
+    assert cron.endswith("/15 * * * ?")
+
+
+@pytest.mark.parametrize("bad", ["weekly", "7", "0", "90", "*/5 * * * * ?"])
+def test_a_schedule_that_is_not_daily_hourly_or_an_even_interval_is_a_usage_error(
+    launch, bad
+):
+    result = launch.invoke(
+        "--schedule", bad, variables={embed_run.VAR_MIN_INTERVAL: "1"}
+    )
+    assert result.exit_code == 2 and "--schedule" in result.output
+    launch.api.create_job.assert_not_called()
+
+
+def test_the_job_script_runs_the_cli_with_the_job_arguments():
+    from hopsworks.cli.commands import embed
+
+    assert "cli.main(args=sys.argv[1:]" in embed._RUNNER_CODE
+
+
+def _build_here(mock_project, monkeypatch, run, values):
+    monkeypatch.setenv("HOPSABLE_EMBEDDING_PROJECT", "serving")
+    monkeypatch.setenv("HOPSABLE_EMBEDDING_MODEL", "m")
+    src = mock.MagicMock()
+    src.name, src.version = "notes", 3
+    src.features = [SimpleNamespace(name="body")]
+    mock_project.get_dataset_api.return_value = Files()
+    with (
+        mock.patch("hopsworks.cli.commands.fg._get_fg", return_value=src),
+        mock.patch.object(embed_run, "run", **run) as called,
+        _variables(values),
+    ):
+        result = CliRunner().invoke(
+            cli, ["fg", "embed", "notes", "--text", "body", "--build-here"]
+        )
+    return result, called
+
+
+def test_build_here_builds_in_process_with_the_limits_from_the_variables(
+    mock_project, monkeypatch
+):
+    plan = embed_run.Plan(group="notes_body_emb", version=1, desired=2)
+    values = {embed_run.VAR_MAX_CHUNKS: "70", embed_run.VAR_MAX_BYTES: "9000"}
+    result, run = _build_here(mock_project, monkeypatch, {"return_value": plan}, values)
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["max_chunks"] == 70
+    assert run.call_args.kwargs["max_bytes"] == 9000
+    mock_project.get_job_api.return_value.create_job.assert_not_called()
+
+
+def test_an_oversized_input_exits_non_zero_from_the_job(mock_project, monkeypatch):
+    refusal = embed_run.EmbedError(
+        "over the supported input. Nothing was written or deleted."
+    )
+    result, _ = _build_here(mock_project, monkeypatch, {"side_effect": refusal}, {})
+    assert result.exit_code == 1
+    assert "Nothing was written or deleted" in result.output
 
 
 def _owned_fg(version, owner="notes_body_emb"):
