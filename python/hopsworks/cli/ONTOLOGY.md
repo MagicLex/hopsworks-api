@@ -14,7 +14,7 @@ hops <noun> [<owned noun>] <verb> [ARGS] [OPTIONS]
 - A leaf is a verb, or a read-only view of its parent named by a noun (`hops fg lineage`, `hops job logs`).
 - A view that gains a write action becomes a group with verbs: `hops fg stats info` and `hops fg stats compute`.
 - `hops datasource create <type>` takes the data source type as its leaf.
-- `hops fg embed SOURCE` runs an embedding and `hops fg embed delete GROUP` removes what it made: `embed` is the one group that runs when its first word is not a subcommand.
+- `hops fg embed SOURCE` makes the group's Python job `GROUP_embed`, starts one execution and returns its id (the build runs in the job, one at a time per group); `hops fg embed delete GROUP` removes what it made: `embed` is the one group that runs when its first word is not a subcommand.
 - The first argument is the entity name; versions of other entities are options (`--fv-version`).
 
 ## Vocabulary
