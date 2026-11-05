@@ -72,3 +72,19 @@ def test_a_missing_key_splits_the_same_from_a_nullable_int_or_a_float_read(split
     b = split["split_by_key"](as_float, y, key="order_id")
     for part_a, part_b in zip(a[:3], b[:3]):
         assert list(part_a.index) == list(part_b.index)
+
+
+def test_split_by_key_takes_the_plain_key_when_a_join_repeats_it(split):
+    ids = np.repeat(np.arange(300), 2)
+    X = pd.DataFrame({"customer_id": ids, "fw1_features_1_customer_id": ids.astype(float), "logins": np.arange(600.0)})
+    y = pd.Series(np.arange(600) % 2)
+    X_train, X_val, X_test, *_ = split["split_by_key"](X, y, "customer_id")
+    assert list(X_train.columns) == ["logins"]
+    parts = [set(ids[f.index]) for f in (X_train, X_val, X_test)]
+    assert not (parts[0] & parts[1]) and not (parts[0] & parts[2]) and not (parts[1] & parts[2])
+
+
+def test_split_by_key_still_refuses_a_prefixed_key_of_another_entity(split):
+    X = pd.DataFrame({"id": [1, 2, 3], "fw1_orders_1_id": [10, 20, 30], "amount": [1.0, 2.0, 3.0]})
+    with pytest.raises(ValueError, match="fw1_orders_1_id"):
+        split["split_by_key"](X, pd.Series([0, 1, 0]), "id")
