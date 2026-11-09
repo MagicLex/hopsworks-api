@@ -3603,6 +3603,7 @@ class FeatureGroup(FeatureGroupBase):
         bucket_index: dict[str, Any] | None = None,
         sort_order: list[str] | None = None,
         offline_table_initialized: bool | None = None,
+        writer_job_id: int | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -3673,6 +3674,8 @@ class FeatureGroup(FeatureGroupBase):
         # True when the backend wrote the first Delta commit at create.
         # Old backends do not return the field, so it stays None.
         self._offline_table_initialized: bool | None = offline_table_initialized
+        # The job whose executions may claim a fenced group for writing; set with a fenced embedding index.
+        self._writer_job_id: int | None = writer_job_id
         # Create-request options, set by the engine before the POST only.
         self._initialize_offline_table: bool | None = None
         self._enable_change_data_feed: bool | None = None
@@ -5990,6 +5993,8 @@ class FeatureGroup(FeatureGroupBase):
             fg_meta_dict["onlineConfig"] = self._online_config.to_dict()
         if self.embedding_index:
             fg_meta_dict["embeddingIndex"] = self.embedding_index.to_dict()
+        if self._writer_job_id is not None:
+            fg_meta_dict["writerJobId"] = self._writer_job_id
         if self._stream:
             fg_meta_dict["deltaStreamerJobConf"] = self._deltastreamer_jobconf
         tags_dict = tag.Tag._tags_to_dict(self._tags)
@@ -6184,6 +6189,16 @@ class FeatureGroup(FeatureGroupBase):
         storage and the online ingestion path filters them out.
         """
         return self._online_partition_columns
+
+    @public
+    @property
+    def writer_job_id(self) -> int | None:
+        """The job whose executions may claim this feature group for writing; set on a fenced feature group only."""
+        return self._writer_job_id
+
+    @writer_job_id.setter
+    def writer_job_id(self, writer_job_id: int | None) -> None:
+        self._writer_job_id = writer_job_id
 
     @public
     @property
