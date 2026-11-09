@@ -1,10 +1,12 @@
 """``hops fg embed``: a searchable embedding group over a feature group's text column.
 
 ``hops fg embed SOURCE --text COL`` makes or updates the group's Python job
-``GROUP_embed`` and starts one execution of it; the build runs in that job
-(``embed_run``), never in the caller. ``hops fg embed delete GROUP`` removes
-what it made. ``delete`` is the only subcommand, so any other first word is the
-source feature group.
+``GROUP_embed``, then the group itself when it needs a new version: fenced,
+with that job as its only writer. It starts one execution of the job; the build
+runs there (``embed_run``), never in the caller. ``hops fg embed delete GROUP``
+runs the job's deletion execution, which fences and deletes the groups, then
+deletes the job. ``delete`` is the only subcommand, so any other first word is
+the source feature group.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import os
 import re
 import shlex
 import tempfile
-import uuid
+import time
 from typing import Any
 
 import click
@@ -32,6 +34,12 @@ MAX_CONCURRENT = "maxConcurrentExecutions"
 PLATFORM_CLASS_KEY = "platformClass"
 PLATFORM_CLASS = "embed"
 SCHEDULES = ("daily", "hourly")
+#: The backend's answer to a start of a job being deleted (RESTCodes.JobErrorCode.JOB_DELETING).
+JOB_DELETING = "130104"
+#: Marks the deletion execution's arguments: `hops fg embed delete GROUP --in-job`.
+IN_JOB = "--in-job"
+#: Seconds between two reads of the deletion execution's state.
+DELETION_POLL_S = 5
 #: Interval of the daily default, and the floor when no admin has granted a faster one.
 DAY_MINUTES = 1440
 
@@ -112,18 +120,17 @@ def fg_embed_group() -> None:
     help="Run the build in this process: what the job does.",
 )
 @click.option(
+    "--to-version",
+    type=int,
+    hidden=True,
+    help="The version of the group the job builds.",
+)
+@click.option(
     "--readback-timeout",
     type=click.IntRange(min=0),
     default=embed_run.READBACK_S,
     show_default=True,
-    help="Seconds to wait for writes and deletes to read back from both stores.",
-)
-@click.option(
-    "--lease-timeout",
-    type=click.IntRange(min=0),
-    default=embed_run.LEASE_S,
-    show_default=True,
-    help="Seconds after which another run's lease on the group is taken over.",
+    help="Seconds a build waits for OnlineFS to pass its fence and for its writes to read back.",
 )
 @click.pass_context
 def fg_embed(
@@ -140,17 +147,16 @@ def fg_embed(
     every: str | None,
     environment: str | None,
     build_here: bool,
+    to_version: int | None,
     readback_timeout: int,
-    lease_timeout: int,
 ) -> None:
     """Embed a text column of SOURCE into a searchable feature group.
 
-    The build runs as the Python job GROUP_embed, one execution at a time per
-    group. This command creates or updates the job, starts one execution,
-    prints its id and returns; it does not wait. Read the job's state with
-    `hops job info GROUP_embed` and its log with `hops job logs`. A start the
-    platform refuses for capacity exits non-zero and starts nothing: run it
-    again after the time it names.
+    This command makes the embedding group and its Python job GROUP_embed,
+    starts one execution, prints its id and returns; it does not wait. Read
+    the job's state with `hops job info GROUP_embed` and its log with
+    `hops job logs`. A start the platform refuses for capacity exits non-zero
+    and starts nothing: run it again after the time it names.
 
     Each row's text is cut into chunks of --chunk-chars characters that
     overlap by --chunk-overlap; each chunk is a row keyed by (doc_id,
@@ -161,6 +167,10 @@ def fg_embed(
     shortened or deleted rows, from both stores. A failed source read changes
     nothing. A source over the supported input (50,000 chunks and 100 MB of
     text unless an admin granted more) is refused with nothing written.
+
+    Only the group's job writes the group, one execution at a time: each run
+    takes the group over from every older run, so a stopped or stuck run never
+    writes over a newer one.
 
     The embedding deployment is called with your own credentials. Search it
     from an agent with `hops agent init NAME --reads ... --search GROUP`.
@@ -181,8 +191,8 @@ def fg_embed(
         every: Schedule of the job.
         environment: Python environment of the job.
         build_here: Run the build in this process.
-        readback_timeout: Seconds a read-back waits.
-        lease_timeout: Seconds before a lease is taken over.
+        to_version: Version of the group the job builds.
+        readback_timeout: Seconds a build waits for the fence and the read-back.
     """
     from hopsworks.cli.commands import fg as fg_commands  # noqa: PLC0415
     from hopsworks_agents import embed as embed_client  # noqa: PLC0415
@@ -205,15 +215,36 @@ def fg_embed(
             f"Feature group '{src.name}' has no column '{text}'.", param_hint="--text"
         )
     group = (to or f"{src.name}_{text}_emb").lower()
-    project = session.get_project(ctx)
     if build_here:
+        if to_version is None:
+            raise click.ClickException(
+                f"This job names no version of {group}: run hops fg embed again to update it. Nothing was written."
+            )
         _build(
-            ctx, src, text, group, endpoint, chunk_chars, chunk_overlap,
-            readback_timeout, lease_timeout,
+            ctx, src, text, group, to_version, endpoint, chunk_chars, chunk_overlap,
+            readback_timeout,
         )  # fmt: skip
         return
 
+    project = session.get_project(ctx)
+    fs = session.get_feature_store(ctx)
     cron = schedule_cron(every, project.id, group) if every else None
+    api = project.get_job_api()
+    existing = _find_job(api, group)
+    try:
+        latest = _latest_owned(fs, group)
+    except embed_run.EmbedError as exc:
+        raise click.ClickException(str(exc)) from exc
+    dimension = _probe(endpoint)
+    reused = (
+        latest
+        if latest is not None
+        and existing is not None
+        and _holds(latest, endpoint[2], dimension)
+        and embed_run.fenced_by(latest, existing.id)
+        else None
+    )
+    target = reused.version if reused else (latest.version + 1 if latest else 1)
     args = [
         "fg", "embed", src.name, "--version", str(src.version), "--text", text,
         "--to", group,
@@ -222,16 +253,22 @@ def fg_embed(
         "--embedding-model", endpoint[2],
         "--chunk-chars", str(chunk_chars), "--chunk-overlap", str(chunk_overlap),
         "--readback-timeout", str(readback_timeout),
-        "--lease-timeout", str(lease_timeout),
+        "--to-version", str(target),
         "--build-here",
     ]  # fmt: skip
-    job = _ensure_job(project, group, src, text, args, environment)
+    job = _save_job(project, api, existing, group, src, text, args, environment)
+    created = False
+    if reused is None:
+        _create_group(fs, group, target, src, text, endpoint[2], dimension, job)
+        created = True
     execution = _start(job, group)
     if cron:
         _schedule(job, group, cron, execution)
 
     summary = {
         "group": group,
+        "version": target,
+        "created": created,
         "job": job.name,
         "execution": getattr(execution, "id", None),
         "schedule": cron,
@@ -240,25 +277,101 @@ def fg_embed(
         output.print_json(summary)
         return
     output.success(
-        "✓ Started execution %s of job %s: it builds %s and is not waited for",
+        "✓ Started execution %s of job %s: it builds %s v%s and is not waited for",
         summary["execution"],
         job.name,
         group,
+        target,
     )
     if cron:
         click.echo(f"Scheduled job {job.name} ({cron})")
 
 
+def _probe(endpoint: tuple[str, str, str]) -> int:
+    """The model's dimension, from one embedding call: the group is made with it."""
+    from hopsworks_agents import embed as embed_client  # noqa: PLC0415
+
+    try:
+        vectors = embed_client.embed_texts(
+            ["dimension"],
+            project=endpoint[0],
+            deployment=endpoint[1],
+            model=endpoint[2],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not call the embedding deployment {endpoint[1]} in {endpoint[0]}: {exc}. Nothing was made."
+        ) from exc
+    return len(vectors[0])
+
+
+def _latest_owned(fs: Any, group: str) -> Any:
+    """The latest version of `group`, which hops fg embed must have made; None when the group does not exist."""
+    found = embed_run.versions_of(fs, group)
+    if not found:
+        return None
+    latest = found[-1]
+    info = embed_run.described(latest)
+    if info is None or info["owner"] != group:
+        raise embed_run.EmbedError(
+            f"Feature group '{group}' exists and was not made by hops fg embed. Pass --to with another name."
+        )
+    return latest
+
+
+def _holds(fg: Any, model: str, dimension: int) -> bool:
+    info = embed_run.described(fg) or {}
+    return (info.get("model"), info.get("dimension")) == (model, dimension)
+
+
+def _create_group(fs, group, version, src, text, model, dimension, job) -> Any:
+    """A new fenced version of the group, whose only writer is `job`.
+
+    Its Delta table is made with its properties here, before any claim: a
+    fenced write never sets them.
+    """
+    from hsfs.embedding import EmbeddingIndex  # noqa: PLC0415
+    from hsfs.feature import Feature  # noqa: PLC0415
+
+    index = EmbeddingIndex(fenced=True)
+    index.add_embedding("embedding", dimension, similarity_function_type="cosine")
+    try:
+        fg = fs.create_feature_group(
+            name=group,
+            version=version,
+            description=embed_run.description(
+                src.name, src.version, text, model, dimension, group
+            ),
+            online_enabled=True,
+            primary_key=embed_run.KEYS,
+            features=[
+                Feature("doc_id", "string"),
+                Feature("chunk_ix", "bigint"),
+                Feature("text", "string"),
+                Feature("embedding", "array<float>"),
+                Feature("content_sha", "string"),
+                Feature("embedded_at", "timestamp"),
+            ],
+            embedding_index=index,
+            statistics_config=False,
+        )
+        fg.writer_job_id = job.id
+        fg.save()
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not create {group} v{version}: {exc}. Job {job.name} was updated and nothing was started; "
+            "run hops fg embed again."
+        ) from exc
+    return fg
+
+
 def _build(
-    ctx, src, text, group, endpoint, chunk_chars, chunk_overlap, readback_s, lease_s
+    ctx, src, text, group, version, endpoint, chunk_chars, chunk_overlap, readback_s
 ) -> None:
     """The build itself: what the job's execution runs."""
     from hopsworks_agents import embed as embed_client  # noqa: PLC0415
 
     fs = session.get_feature_store(ctx)
-    state = embed_run.State(
-        session.get_project(ctx).get_dataset_api(), group, uuid.uuid4().hex
-    )
 
     def embed(texts: list[str]) -> list[list[float]]:
         return embed_client.embed_texts(
@@ -269,19 +382,19 @@ def _build(
         )
 
     try:
+        execution = embed_run.execution_id()
         max_chunks, max_bytes = embed_run.embed_limits()
         plan = embed_run.run(
             fs=fs,
             source=src,
             text=text,
             group=group,
-            model=endpoint[2],
+            version=version,
             embed=embed,
-            state=state,
+            execution=execution,
             size=chunk_chars,
             overlap=chunk_overlap,
             readback_s=readback_s,
-            lease_s=lease_s,
             max_chunks=max_chunks,
             max_bytes=max_bytes,
             log=output.info,
@@ -291,22 +404,23 @@ def _build(
     summary = {
         "group": group,
         "version": plan.version,
-        "created": plan.created,
+        "epoch": plan.epoch,
+        "unsettled": plan.unsettled,
         "chunks": plan.desired,
         "embedded": plan.embedded,
-        "upserted": plan.upserted,
+        "rewritten": plan.rewritten,
         "deleted": plan.removed,
-        "settled": plan.settled,
     }
     if output.JSON_MODE:
         output.print_json(summary)
         return
     output.success(
-        "✓ %s v%s: %d chunks, %d embedded, %d deleted",
+        "✓ %s v%s: %d chunks, %d embedded, %d rewritten, %d deleted",
         group,
         plan.version,
         plan.desired,
         plan.embedded,
+        plan.rewritten,
         plan.removed,
     )
 
@@ -376,23 +490,29 @@ def schedule_cron(every: str, project_id: Any, group: str) -> str:
     return f"0 {minute} {hour % step}/{step} * * ?"
 
 
-def _ensure_job(project, group, src, text, args, environment) -> Any:
-    """The group's job, made or updated to run `args`, one execution at a time, in the embed class."""
+def _find_job(api: Any, group: str) -> Any:
+    """The group's job when hops fg embed made it; None when there is none; refused when someone else's job has its name."""
     from hopsworks.cli import versions  # noqa: PLC0415
-    from hopsworks.cli.commands.files import makedirs  # noqa: PLC0415
 
-    api = project.get_job_api()
     name = _job_name(group)
     try:
         existing = api.get_job(name)
     except Exception as exc:  # noqa: BLE001
         if not versions.not_found(exc):
             raise click.ClickException(f"Could not find job '{name}': {exc}") from exc
-        existing = None
+        return None
     if existing is not None and not _owned(existing, group):
         raise click.ClickException(
             f"Job '{name}' exists and was not made by hops fg embed: it is left alone and nothing was started."
         )
+    return existing
+
+
+def _save_job(project, api, existing, group, src, text, args, environment) -> Any:
+    """The group's job, made or updated to run `args`, one execution at a time, in the embed class."""
+    from hopsworks.cli.commands.files import makedirs  # noqa: PLC0415
+
+    name = _job_name(group)
     dataset = project.get_dataset_api()
     try:
         makedirs(dataset, embed_run.STATE_DIR)
@@ -425,8 +545,9 @@ def _ensure_job(project, group, src, text, args, environment) -> Any:
 def start_refusal(exc: BaseException, group: str) -> str | None:
     """The refusal of an execution start, from the server's answer; None for any other failure.
 
-    429: the platform's embed capacity (start rate or inventory) is full. 409: the job
-    already has an execution (maxConcurrentExecutions is 1).
+    429: the platform's embed capacity (start rate or inventory) is full. 409:
+    the job is being deleted (130104), or already has an execution
+    (maxConcurrentExecutions is 1).
     """
     from hopsworks_common.client.exceptions import (  # noqa: PLC0415 - SDK loaded on use
         RestAPIError,
@@ -439,6 +560,11 @@ def start_refusal(exc: BaseException, group: str) -> str | None:
         return None
     status = cause.response.status_code
     if status == RestAPIError.STATUS_CODE_CONFLICT:
+        if str(cause.error_code) == JOB_DELETING:
+            return (
+                f"{group} is being deleted; nothing was started; "
+                f"run hops fg embed delete {group} again to finish it"
+            )
         return f"a build of {group} is already running"
     if status == 429:
         after = (cause.response.headers.get("Retry-After") or "").strip()
@@ -475,22 +601,40 @@ def _schedule(job: Any, group: str, cron: str, execution: Any) -> None:
     "--dry-run", is_flag=True, help="List what would be deleted and delete nothing."
 )
 @click.option(
-    "--lease-timeout",
+    "--timeout",
     type=click.IntRange(min=0),
-    default=embed_run.LEASE_S,
+    default=1800,
     show_default=True,
-    help="Seconds after which a run's lease no longer blocks the delete.",
+    help="Seconds to wait for the deletion run; run the delete again to keep waiting.",
+)
+@click.option(
+    IN_JOB,
+    "in_job",
+    is_flag=True,
+    hidden=True,
+    help="Run the deletion in this process: what the deletion execution does.",
 )
 @click.pass_context
 def fg_embed_delete(
-    ctx: click.Context, group: str, yes: bool, dry_run: bool, lease_timeout: int
+    ctx: click.Context,
+    group: str,
+    yes: bool,
+    dry_run: bool,
+    timeout: int,
+    in_job: bool,
 ) -> None:
     """Delete an embedding group, its job and its schedule.
 
     Only what `hops fg embed` made is deleted: the group's versions and the job
     whose descriptions name the group as their owner, the job's schedule, and
-    the run state under Resources/hopsable-embed. The source feature group is
-    untouched. Refused while an agent names the group or a run holds its lease.
+    the job's script under Resources/hopsable-embed. The source feature group
+    is untouched. Refused while an agent names the group.
+
+    The deletion runs as an execution of the group's job: from its start the
+    job runs no other build, and it takes the group over from every earlier
+    run before it deletes the group. The command waits for it, then deletes
+    the job. Interrupted or timed out, run the delete again: it picks up where
+    it stopped.
 
     \f
     Args:
@@ -498,33 +642,23 @@ def fg_embed_delete(
         group: Embedding group name.
         yes: Skip confirmation.
         dry_run: List only.
-        lease_timeout: Seconds before a lease stops blocking.
+        timeout: Seconds to wait for the deletion execution.
+        in_job: Run the deletion in this process.
     """
-    import time  # noqa: PLC0415
-
-    from hopsworks.cli import versions  # noqa: PLC0415
-
     project = session.get_project(ctx)
     fs = session.get_feature_store(ctx)
+    api = project.get_job_api()
+    if in_job:
+        _delete_here(fs, api, group)
+        return
     dataset = project.get_dataset_api()
     try:
-        found = embed_run._versions(fs, group)
+        found = embed_run.versions_of(fs, group)
     except embed_run.EmbedError as exc:
         raise click.ClickException(str(exc)) from exc
     groups = [fg for fg in found if _owned(fg, group)]
     kept = [fg.version for fg in found if not _owned(fg, group)]
-
-    api = project.get_job_api()
-    try:
-        job = api.get_job(_job_name(group))
-    except Exception as exc:  # noqa: BLE001
-        if not versions.not_found(exc):
-            raise click.ClickException(
-                f"Could not find job '{_job_name(group)}': {exc}"
-            ) from exc
-        job = None
-    if job is not None and not _owned(job, group):
-        job = None
+    job = _owned_job(api, group)
 
     users = _agents_naming(ctx, project, group)
     if users:
@@ -532,22 +666,16 @@ def fg_embed_delete(
             f"Agents {', '.join(users)} search '{group}': delete them first "
             "(hops agent delete NAME), then this group."
         )
-    state = embed_run.State(dataset, group, "delete")
-    held = state._read(state.lease)
-    if held and time.time() - held.get("started_at", 0) <= lease_timeout:
-        raise click.ClickException(
-            f"A run of the embedding of '{group}' holds its lease (run {held.get('run_id')}): "
-            "wait for it to end, then delete."
-        )
-    paths = [state.lease] if held else []
-    if dataset.exists(_runner(group)):
-        paths.append(_runner(group))
-    paths += [
-        f"{embed_run.STATE_DIR}/{group}_v{fg.version}"
-        for fg in found
-        if dataset.exists(f"{embed_run.STATE_DIR}/{group}_v{fg.version}")
+    # The job's script, and the lease and pending-delete files that runs before the writer fence left.
+    paths = [
+        path
+        for path in [
+            _runner(group),
+            f"{embed_run.STATE_DIR}/{group}.lease.json",
+            *(f"{embed_run.STATE_DIR}/{group}_v{fg.version}" for fg in found),
+        ]
+        if dataset.exists(path)
     ]
-
     plan = {
         "group": group,
         "versions": [fg.version for fg in groups],
@@ -578,14 +706,17 @@ def fg_embed_delete(
             f"Deleting the embedding group '{group}'",
         )
     try:
-        if job is not None:
-            if getattr(job, "job_schedule", None):
-                job.unschedule()
+        if job is None:
+            # No job, so no run can claim the groups: they are deleted from here.
+            for fg in groups:
+                fg.delete()
+        else:
+            plan["deletion_execution"] = _run_deletion(job, group, timeout)
             job.delete()
-        for fg in groups:
-            fg.delete()
         for path in paths:
             dataset.remove(path)
+    except click.ClickException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not delete embedding group '{group}': {exc}. Run the delete again for what is left."
@@ -594,6 +725,99 @@ def fg_embed_delete(
         output.print_json(plan)
         return
     output.success("✓ Deleted embedding group %s", group)
+
+
+def _owned_job(api: Any, group: str) -> Any:
+    """The group's job when hops fg embed made it, else None."""
+    from hopsworks.cli import versions  # noqa: PLC0415
+
+    try:
+        job = api.get_job(_job_name(group))
+    except Exception as exc:  # noqa: BLE001
+        if not versions.not_found(exc):
+            raise click.ClickException(
+                f"Could not find job '{_job_name(group)}': {exc}"
+            ) from exc
+        return None
+    return job if job is not None and _owned(job, group) else None
+
+
+def _final(execution: Any) -> bool:
+    return str(getattr(execution, "final_status", "") or "UNDEFINED") != "UNDEFINED"
+
+
+def _run_deletion(job: Any, group: str, timeout_s: int) -> int:
+    """The id of the deletion execution D once it succeeded: the latest one, else a new one.
+
+    D is started with deletion=true: the backend sets the job's deleting flag
+    and admits no other start of the job from then on. A D that already
+    succeeded is not run again, one still running is waited for, and a failed
+    one is replaced.
+    """
+    from hopsworks_common.core.execution_api import ExecutionApi  # noqa: PLC0415
+
+    executions_api = ExecutionApi()
+    deletions = [
+        e for e in executions_api._get_all(job) or [] if IN_JOB in (e.args or "")
+    ]
+    latest = max(deletions, key=lambda e: e.id) if deletions else None
+    if latest is None or (_final(latest) and latest.final_status != "SUCCEEDED"):
+        try:
+            latest = executions_api._start(
+                job,
+                args=shlex.join(["fg", "embed", "delete", group, IN_JOB]),
+                deletion=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            refusal = start_refusal(exc, group)
+            if refusal is not None and "already running" in refusal:
+                refusal = (
+                    f"a build of {group} is running and the job now starts no other; "
+                    "run the delete again once it has ended"
+                )
+            raise click.ClickException(
+                refusal or f"Could not start the deletion of '{group}': {exc}"
+            ) from exc
+        output.info(f"Started deletion execution {latest.id} of job {job.name}")
+    deadline = time.monotonic() + timeout_s
+    while not _final(latest):
+        if time.monotonic() >= deadline:
+            raise click.ClickException(
+                f"The deletion execution {latest.id} of job {job.name} is still running after {timeout_s} s; "
+                "run the delete again to keep waiting."
+            )
+        time.sleep(DELETION_POLL_S)
+        latest = executions_api._get(job, latest.id)
+    if latest.final_status != "SUCCEEDED":
+        raise click.ClickException(
+            f"The deletion execution {latest.id} of job {job.name} ended {latest.final_status}: "
+            f"read hops job logs {job.name}, then run the delete again."
+        )
+    return latest.id
+
+
+def _delete_here(fs: Any, api: Any, group: str) -> None:
+    """The deletion execution itself: fence and delete the groups, unschedule the job."""
+    job = _owned_job(api, group)
+    if job is None:
+        raise click.ClickException(
+            f"Job '{_job_name(group)}' made by hops fg embed is not found; nothing was deleted."
+        )
+    try:
+        deleted = embed_run.delete_run(
+            fs=fs,
+            job=job,
+            group=group,
+            execution=embed_run.execution_id(),
+            log=output.info,
+        )
+    except embed_run.EmbedError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"The deletion of '{group}' stopped: {exc}. Run hops fg embed delete {group} again."
+        ) from exc
+    output.success("✓ Deleted %s versions %s", group, deleted or "none")
 
 
 def _agents_naming(ctx: click.Context, project: Any, group: str) -> list[str]:
