@@ -51,8 +51,11 @@ the sandbox may run a newer one, and an argument that works here can fail there.
 
    A run you start waits with `--wait`, or `hops job wait <name>-features` for one already
    started; never poll `hops job history`. Arguments carry no spaces.
-5. **Check.** `hops fg preview <name> --limit 5` and `hops sql "SELECT count(*), count(DISTINCT
-   <key>) FROM <name>_1"`: rows, unique keys, no nulls where a feature may not be null.
+5. **Check.** Only after the backfill succeeded (chain it with `&&`, never `;`): `hops fg preview
+   <name> --limit 5` and `hops sql "SELECT count(*), count(DISTINCT <key>), count(*) - count(<f>)
+   FROM <name>_1"`, with one `count(*) - count(<f>)` per feature that may not be null. The check
+   fails on 0 rows, on fewer distinct keys than rows for a one-row-per-key group, and on any null
+   count above 0.
 
 A failed run: read its traceback (`hops job wait` prints a job's log tail), name the cause in one
 line, fix and run again, at most three attempts. A program writes and checks nothing itself: the check is the commands above, run after it
