@@ -335,6 +335,7 @@ def test_status_reports_freshness_rejects_and_layout(tmp_path, monkeypatch):
     conn = SimpleNamespace(cursor=Cursor, close=lambda: None)
     project = SimpleNamespace(
         name="Demo",
+        backing_name="Demo",
         get_trino_api=lambda: SimpleNamespace(connect=lambda **kw: conn),
         get_job_api=lambda: SimpleNamespace(get_job=lambda name: None),
     )
@@ -689,6 +690,7 @@ def test_status_reads_every_job_and_each_tables_cadence_target(tmp_path, monkeyp
     monkeypatch.setenv("HOPSFS_MOUNT", str(tmp_path))
     project = SimpleNamespace(
         name="Demo",
+        backing_name="Demo",
         get_trino_api=lambda: (_ for _ in ()).throw(RuntimeError("no trino")),
         get_job_api=lambda: SimpleNamespace(get_job=lambda name: None),
     )
@@ -796,7 +798,15 @@ def test_delete_assets_deletes_jobs_then_tables_and_keeps_the_system(
         monkeypatch,
         target,
         {},
-        ["delete-assets", "L", "--job", "g-churn-weekly", "--table", "fct_churn:1"],
+        [
+            "delete-assets",
+            "L",
+            "--yes",
+            "--job",
+            "g-churn-weekly",
+            "--table",
+            "fct_churn:1",
+        ],
     )
     assert done.exit_code == 0, done.output
     assert events == ["job g-churn-weekly", "fg fct_churn"]
@@ -818,7 +828,7 @@ def test_delete_assets_never_deletes_what_the_system_reads(
         monkeypatch,
         target,
         tags,
-        ["delete-assets", "L", "--job", "g-sales-daily", "--table", table],
+        ["delete-assets", "L", "--yes", "--job", "g-sales-daily", "--table", table],
     )
     assert done.exit_code != 0 and why in done.output
     # Refused before the job went too.
@@ -831,7 +841,7 @@ def test_an_ml_system_never_deletes_a_analytics_table(tmp_path, monkeypatch):
         monkeypatch,
         target,
         {"orders": {"analytics_table": '{"layer": "gold"}'}},
-        ["delete-assets", "L", "--table", "orders"],
+        ["delete-assets", "L", "--yes", "--table", "orders"],
     )
     assert done.exit_code != 0 and "gold" in done.output
     assert events == []
@@ -852,12 +862,15 @@ def test_an_ingestion_system_deletes_only_the_bronze_tables_it_loads(
     }
     target = _layer_dir(tmp_path, doc)
     done, events = _run(
-        monkeypatch, target, tags, ["delete-assets", "L", "--table", "orders"]
+        monkeypatch, target, tags, ["delete-assets", "L", "--yes", "--table", "orders"]
     )
     assert done.exit_code != 0 and "bronze" in done.output
     assert events == []
     done, events = _run(
-        monkeypatch, target, tags, ["delete-assets", "L", "--table", "shop_customers"]
+        monkeypatch,
+        target,
+        tags,
+        ["delete-assets", "L", "--yes", "--table", "shop_customers"],
     )
     assert done.exit_code == 0, done.output
     assert events == ["fg shop_customers"]
@@ -873,6 +886,7 @@ def test_the_system_commands_are_the_same_for_every_factory():
         "dir",
         "lease",
         "list",
+        "plan",
         "register",
         "remove",
         "status",
@@ -1011,7 +1025,10 @@ def test_gold_names_its_first_mart_after_the_layer_when_the_form_does_not(
 def test_delete_assets_refuses_a_job_that_is_not_this_systems(tmp_path, monkeypatch):
     target = _layer_dir(tmp_path, GOLD)
     done, events = _run(
-        monkeypatch, target, {}, ["delete-assets", "L", "--job", "nightly-export"]
+        monkeypatch,
+        target,
+        {},
+        ["delete-assets", "L", "--yes", "--job", "nightly-export"],
     )
     assert (
         done.exit_code != 0 and "not in customers-silver's system.yaml" in done.output
@@ -1027,7 +1044,10 @@ def test_delete_assets_refuses_what_another_system_names(tmp_path, monkeypatch):
         lambda entry: {"fraud": {"features": {"job": "g-churn-weekly"}}},
     )
     done, events = _run(
-        monkeypatch, target, {}, ["delete-assets", "L", "--job", "g-churn-weekly"]
+        monkeypatch,
+        target,
+        {},
+        ["delete-assets", "L", "--yes", "--job", "g-churn-weekly"],
     )
     assert done.exit_code != 0 and "named by the system fraud" in done.output
     assert events == []
@@ -1039,7 +1059,7 @@ def test_delete_assets_takes_a_job_carrying_the_slug(tmp_path, monkeypatch):
         monkeypatch,
         target,
         {},
-        ["delete-assets", "L", "--job", "customers-silver-backfill"],
+        ["delete-assets", "L", "--yes", "--job", "customers-silver-backfill"],
     )
     assert done.exit_code == 0, done.output
     assert events == ["job customers-silver-backfill"]
@@ -1047,7 +1067,7 @@ def test_delete_assets_takes_a_job_carrying_the_slug(tmp_path, monkeypatch):
 
 def test_delete_assets_needs_a_table_version_when_several_exist(tmp_path, monkeypatch):
     target = _layer_dir(tmp_path, GOLD)
-    argv = ["delete-assets", "L", "--table", "fct_churn"]
+    argv = ["delete-assets", "L", "--yes", "--table", "fct_churn"]
     one, events = _run(monkeypatch, target, {}, argv)
     assert one.exit_code == 0, one.output
     assert events == ["fg fct_churn"]
@@ -1077,3 +1097,32 @@ def test_a_layer_takes_the_repository_of_the_layer_sharing_its_work_tree(tmp_pat
     assert analytics._layer_repo(
         repo, {"slug": "sales-gold", "repo": {"create": True}}
     ) == {"name": "hops-sales"}
+
+
+def test_delete_assets_asks_after_its_checks_and_names_what_it_deletes(
+    tmp_path, monkeypatch
+):
+    target = _layer_dir(tmp_path, GOLD)
+    argv = ["delete-assets", "L", "--job", "g-churn-weekly", "--table", "fct_churn:1"]
+    done, events = _run(monkeypatch, target, {}, argv)
+    assert done.exit_code == 1
+    assert "Deleting assets of L needs confirmation: pass --yes." in done.output
+    assert events == []
+
+    # A refusal comes before the confirmation.
+    done, events = _run(
+        monkeypatch, target, {}, ["delete-assets", "L", "--job", "nightly-export"]
+    )
+    assert "not in customers-silver's system.yaml" in done.output
+    assert "needs confirmation" not in done.output
+
+
+def test_delete_assets_with_nothing_left_does_not_ask(tmp_path, monkeypatch):
+    target = _layer_dir(tmp_path, GOLD)
+    done, events = _run(
+        monkeypatch, target, {}, ["delete-assets", "L", "--table", "fct_churn"], ()
+    )
+    assert done.exit_code == 0, done.output
+    assert "feature group fct_churn: gone" in done.output
+    assert "needs confirmation" not in done.output
+    assert events == []

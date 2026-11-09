@@ -17,6 +17,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Any
 
+from hopsworks_common import events
 from hopsworks_common.client import exceptions
 from hopsworks_common.core.constants import HAS_PYICEBERG
 from hopsworks_common.core.sink_job_configuration import (
@@ -230,6 +231,15 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
             ) from e
         return df
 
+    @events.tracking(
+        "fg",
+        "update",
+        long=True,
+        key=lambda self, feature_group, *a, **k: {
+            "name": feature_group.name,
+            "version": feature_group.version,
+        },
+    )
     def _insert(
         self,
         feature_group: fg.FeatureGroup | fg.ExternalFeatureGroup,
@@ -243,6 +253,11 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
         transform: bool = True,
         n_processes: int | None = None,
     ):
+        # A Spark frame has no cheap length; its count is not computed for this.
+        rows = len(feature_dataframe) if hasattr(feature_dataframe, "__len__") else None
+        if rows is not None:
+            events.progress(0, rows, "rows")
+            events.note(rows=rows)
         dataframe_features = engine._get_instance()._parse_schema_feature_group(
             feature_dataframe,
             feature_group.time_travel_format,
@@ -290,6 +305,7 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
                 feature_group, feature_dataframe, dataframe_features
             )
 
+        decimals_cast = self._delta_rs_casts_decimals(feature_group)
         if not feature_group._id:
             # only save metadata if feature group does not exist
             self._save_feature_group_metadata(
@@ -300,7 +316,10 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
         else:
             # else, just verify that feature group schema matches user-provided dataframe
             self._verify_schema_compatibility(
-                self._columns_for_user_schema(feature_group), dataframe_features
+                self._columns_for_user_schema(feature_group),
+                dataframe_features,
+                decimals_cast=decimals_cast,
+                timestamp_ntz_converts=feature_group.time_travel_format == "DELTA",
             )
 
         # ge validation on python and non stream feature groups on spark
@@ -332,6 +351,9 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
             )
 
         if overwrite:
+            if decimals_cast:
+                # The delta-rs cast raises only after the clear, which would lose the old rows.
+                self._check_declared_decimals(feature_group, feature_dataframe)
             self._feature_group_api._delete_content(feature_group)
 
         return (
@@ -375,8 +397,39 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
         return commit_details
 
     @staticmethod
+    def _delta_rs_casts_decimals(feature_group) -> bool:
+        """Whether the only write is the Python engine's delta-rs write, which casts decimals to the table's type."""
+        return (
+            engine._get_type() == "python"
+            and not isinstance(feature_group, fg.ExternalFeatureGroup)
+            and feature_group.time_travel_format == "DELTA"
+            and not feature_group.stream
+            and not feature_group.online_enabled
+        )
+
+    @staticmethod
+    def _check_declared_decimals(feature_group, feature_dataframe) -> None:
+        """Raise `ArrowInvalid` if a decimal value does not fit the feature group's declared type."""
+        import pandas as pd
+        import pyarrow as pa
+
+        names = [
+            f.name
+            for f in feature_group.columns
+            if (f.type or "").lower().startswith("decimal")
+            and f.name in feature_dataframe.columns
+        ]
+        if not names:
+            return
+        if isinstance(feature_dataframe, pd.DataFrame):
+            batch = pa.Table.from_pandas(feature_dataframe[names], preserve_index=False)
+        else:
+            batch = feature_dataframe.select(names).to_arrow()
+        delta_engine.DeltaEngine._cast_to_declared_types(batch, feature_group)
+
+    @staticmethod
     def _get_spark_session_and_context():
-        if isinstance(engine._get_instance(), engine.spark.Engine):
+        if engine._is_spark(engine._get_instance()):
             return (
                 engine._get_instance()._spark_session,
                 engine._get_instance()._spark_context,
@@ -389,7 +442,7 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
         # applies a RonDB delete by primary key. The offline delete is handled
         # separately by `_commit_delete`.
         online_engine = engine._get_instance()
-        if isinstance(online_engine, engine.spark.Engine):
+        if engine._is_spark(online_engine):
             online_engine._delete_online_dataframe(
                 feature_group, delete_df, write_options
             )
@@ -813,6 +866,14 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
             feature_group, self._new_feature_list(feature_group, updated_features)
         )
 
+    @events.tracking(
+        "fg",
+        "update",
+        key=lambda self, feature_group, *a, **k: {
+            "name": feature_group.name,
+            "version": feature_group.version,
+        },
+    )
     def _append_features(
         self, feature_group: fg.FeatureGroup, new_features: list[Feature]
     ) -> None:
@@ -984,6 +1045,14 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
             write_options,
         )
 
+    @events.tracking(
+        "fg",
+        "create",
+        key=lambda self, feature_group, *a, **k: {
+            "name": feature_group.name,
+            "version": feature_group.version,
+        },
+    )
     def _save_feature_group_metadata(
         self,
         feature_group,
@@ -1001,7 +1070,10 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
         elif dataframe_features:
             # User provided a schema; check if it is compatible with dataframe.
             self._verify_schema_compatibility(
-                self._columns_for_user_schema(feature_group), dataframe_features
+                self._columns_for_user_schema(feature_group),
+                dataframe_features,
+                decimals_cast=self._delta_rs_casts_decimals(feature_group),
+                timestamp_ntz_converts=feature_group.time_travel_format == "DELTA",
             )
 
         # set primary, foreign and partition key columns
@@ -1063,6 +1135,24 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
             if feature_group.data_source
             else None
         )
+        if (
+            is_new_feature_group
+            and feature_schema_available
+            and (feature_group.time_travel_format or "").upper() == "DELTA"
+            and not feature_group.clustered_by
+            and FeatureGroupEngine._get_spark_session_and_context()[0] is None
+        ):
+            # Ask the backend to write the first Delta commit at create, so
+            # the client skips the empty-table write. Old backends ignore it.
+            feature_group._initialize_offline_table = True
+            feature_group._enable_change_data_feed = (
+                delta_engine.DeltaEngine.change_data_feed_value(
+                    (write_options or {}).get(
+                        delta_engine.DeltaEngine.DELTA_ENABLE_CHANGE_DATA_FEED, "true"
+                    )
+                )
+                == "true"
+            )
         new_fg = self._feature_group_api._save(feature_group)
         if (
             pre_save_rest_endpoint
@@ -1089,7 +1179,7 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
                 source_features=pre_save_features,
             )
 
-        if feature_schema_available:
+        if feature_schema_available and not feature_group._offline_table_initialized:
             # create empty table to write feature schema to table path. The
             # engines apply the feature group's partitioned_by at creation
             # (Iceberg partition spec, Delta liquid clustering, Hudi grain

@@ -26,7 +26,7 @@ import time
 import uuid
 import warnings
 
-from hopsworks_common import client
+from hopsworks_common import client, events
 from hopsworks_common.client.exceptions import ModelServingException, RestAPIError
 from hopsworks_common.client.istio.utils.infer_type import InferInput
 from hopsworks_common.constants import (
@@ -101,6 +101,51 @@ def _render_chunk(chunk) -> str:
 
 # RESTCodes.ServingErrorCode.SCHEMA_NOT_FOUND: the id is not a published schema
 _SCHEMA_NOT_FOUND = 240037
+
+
+def _no_reason(reason: str | None) -> bool:
+    """True for a failure reason that names no cause: none, empty, or ending in "null"."""
+    # The runtime may put blank lines before the null ("terminated unsuccessfully. \n\nnull").
+    reason = " ".join((reason or "").split())
+    return reason in ("", "null") or reason.endswith(". null")
+
+
+# The failed-start log reads share this budget, so a stalled log endpoint cannot hold back the deployment's own error.
+_FAILED_START_LOG_SECONDS = 30
+
+
+def _predictor_log_tail(serving, deployment_instance) -> str:
+    """The last predictor log lines of the running and of the previous container, or "" when none can be read.
+
+    A predictor that fails while starting is restarted, so the running container can hold nothing or only
+    startup lines when the failure is seen, and the traceback is then in the previous one. Both are shown.
+    Once the budget is spent nothing is shown, so the deployment's error goes out whole and on time.
+    """
+    deadline = time.monotonic() + _FAILED_START_LOG_SECONDS
+    parts = []
+    for previous, label in ((False, "running"), (True, "previous")):
+        try:
+            chunks = serving._serving_api._get_logs(
+                deployment_instance,
+                "predictor",
+                30,
+                source="kubernetes",
+                previous=previous,
+                deadline=deadline,
+            )
+        except Exception:  # noqa: BLE001
+            if time.monotonic() >= deadline:
+                return ""
+            continue
+        if not any((c.content or "").strip() for c in chunks or []):
+            continue
+        lines = serving._format_log_chunks(chunks).strip().splitlines()[-30:]
+        parts.append(
+            f"\nLast predictor log lines ({label} container):\n" + "\n".join(lines)
+        )
+    if time.monotonic() >= deadline:
+        return ""
+    return "".join(parts)
 
 
 # The scaling fields a backend older than 5.2 does not know and silently drops (HWORKS-3106, HWORKS-3113).
@@ -211,7 +256,13 @@ class ServingEngine:
                     status == PREDICTOR_STATE.STATUS_RUNNING
                     and state.status == PREDICTOR_STATE.STATUS_FAILED
                 ):
-                    error_msg = state.condition.reason
+                    reason = (state.condition.reason or "").strip()
+                    if _no_reason(reason):
+                        error_msg = (
+                            f"deployment failed (condition {state.condition.type})"
+                        )
+                    else:
+                        error_msg = reason
                     if (
                         state.condition.type
                         == PREDICTOR_STATE.CONDITION_TYPE_INITIALIZED
@@ -219,16 +270,16 @@ class ServingEngine:
                         == PREDICTOR_STATE.CONDITION_TYPE_STARTED
                     ):
                         component = (
-                            "transformer"
-                            if "transformer" in state.condition.reason
-                            else "predictor"
+                            "transformer" if "transformer" in reason else "predictor"
                         )
                         error_msg += (
                             ". Please, check the server logs using `.get_logs(component='"
                             + component
                             + "')`"
                         )
-                    raise ModelServingException(error_msg)
+                    raise ModelServingException(
+                        error_msg + _predictor_log_tail(self, deployment_instance)
+                    )
             raise ModelServingException(
                 "Deployment has not reached the desired status within the expected awaiting time. Check the current status by using `.get_state()`, "
                 "explore the server logs using `.get_logs()` or set a higher value for await_"
@@ -236,6 +287,14 @@ class ServingEngine:
             )
         return None
 
+    @events.tracking(
+        "deployment",
+        "update",
+        long=True,
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _start(self, deployment_instance, await_status: int) -> bool:
         started = time.monotonic()
         (done, state) = self._check_status(
@@ -259,6 +318,7 @@ class ServingEngine:
                 if desc is not None:
                     pbar.set_description(desc)
 
+            started = False
             try:
                 update_progress(state, num_instances=0)
 
@@ -273,6 +333,7 @@ class ServingEngine:
                 self._serving_api._post(
                     deployment_instance, DEPLOYMENT.ACTION_START
                 )  # start deployment
+                started = True
 
                 state = self._poll_deployment_status(  # wait for status
                     deployment_instance,
@@ -281,7 +342,9 @@ class ServingEngine:
                     update_progress,
                 )
             except RestAPIError as re:
-                self._stop(deployment_instance, await_status=0)
+                # A refused start left nothing to roll back.
+                if started:
+                    self._stop(deployment_instance, await_status=0)
                 raise re
 
         # await_running=0 returns before the state is polled again
@@ -297,6 +360,14 @@ class ServingEngine:
             else:
                 print("Start making predictions by using `.predict()`")
 
+    @events.tracking(
+        "deployment",
+        "update",
+        long=True,
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _stop(self, deployment_instance, await_status: int) -> bool:
         (done, state) = self._check_status(
             deployment_instance, PREDICTOR_STATE.STATUS_STOPPED
@@ -398,7 +469,7 @@ class ServingEngine:
                 print("Deployments is already running and updating")
                 return (True, state)
             if state.status == PREDICTOR_STATE.STATUS_FAILED:
-                print("Deployment is in failed state. " + state.condition.reason)
+                print(f"Deployment is in failed state. {state.condition.reason}")
                 return (True, state)
             if state.status == PREDICTOR_STATE.STATUS_STOPPING:
                 raise ModelServingException(
@@ -590,7 +661,7 @@ class ServingEngine:
                 # legacy artifact version path under Models dataset
                 legacy_from_hdfs_path = "{}/{}/{}/{}/{}/{}/{}".format(
                     "/Projects",
-                    deployment_instance.project_name,
+                    client._get_instance()._project_backing_name,
                     MODEL_REGISTRY.MODELS_DATASET,
                     deployment_instance.model_name,
                     str(deployment_instance.model_version),
@@ -681,6 +752,13 @@ class ServingEngine:
             for p in archive_paths
         ]
 
+    @events.tracking(
+        "deployment",
+        "create",
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _create(self, deployment_instance):
         try:
             self._put_and_check(deployment_instance)
@@ -818,6 +896,13 @@ class ServingEngine:
 
         raise ValueError("Unknown deployment status: " + state.status)
 
+    @events.tracking(
+        "deployment",
+        "update",
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _save(self, deployment_instance, await_update: int, new_version: bool = False):
         # Local paths on script_file / config_file are auto-uploaded under
         # /Projects/<p>/Deployments/<name>/resources/ and rewritten to
@@ -967,7 +1052,7 @@ class ServingEngine:
                     return None
                 if error_code:
                     raise
-        project_name = client._get_instance()._project_name
+        project_name = client._get_instance()._project_backing_name
         path = f"/Projects/{project_name}/{self._schema_dir(predictor.name)}/{schema_id}.json"
         response = self._dataset_api.read_content(path)
         if response is None:
@@ -983,7 +1068,7 @@ class ServingEngine:
         schema_dir = self._schema_dir(deployment_name)
         if self._engine._dataset_api.exists(schema_dir):
             self._engine._dataset_api.remove(
-                f"/Projects/{client._get_instance()._project_name}/{schema_dir}"
+                f"/Projects/{client._get_instance()._project_backing_name}/{schema_dir}"
             )
 
     def _upload_local_serving_files(self, deployment_instance):
@@ -1000,9 +1085,15 @@ class ServingEngine:
         is_update = deployment_instance.id is not None
 
         targets = [
-            (predictor, "script_file", "predictor", "script_file"),
             (predictor, "config_file", "config", "config_file"),
         ]
+        # A git-backed agent's script is a path inside the repository the pod
+        # clones, not a local file: resolving it here either fails (the cwd
+        # does not hold the repository) or uploads a copy and rewrites the
+        # field to an absolute HopsFS path, which the backend then refuses as
+        # not being a safe relative path. Left exactly as given.
+        if getattr(predictor, "git_url", None) is None:
+            targets.insert(0, (predictor, "script_file", "predictor", "script_file"))
         if predictor.transformer is not None:
             targets.append(
                 (
@@ -1024,18 +1115,36 @@ class ServingEngine:
             )
             setattr(obj, field, resolved)
 
+    @events.tracking(
+        "deployment",
+        "delete",
+        key=lambda self, deployment_instance, *a, **k: {
+            "name": deployment_instance.name
+        },
+    )
     def _delete(self, deployment_instance, force=False):
+        name = deployment_instance.name
         state = deployment_instance.get_state()
         if state is None:
-            return
-
-        if (
-            not force
-            and state.status != PREDICTOR_STATE.STATUS_STOPPED
-            and state.status != PREDICTOR_STATE.STATUS_CREATED
-        ):
             raise ModelServingException(
-                "Deployment not stopped, please stop it first by using `.stop()` or check its status with .get_state()"
+                f"Deployment '{name}' was not found or its state is unknown: nothing deleted."
+            )
+
+        # With force the backend decides, and its refusal is shown as it comes.
+        if not force and state.status not in (
+            PREDICTOR_STATE.STATUS_STOPPED,
+            PREDICTOR_STATE.STATUS_CREATED,
+        ):
+            if state.status in (
+                PREDICTOR_STATE.STATUS_STARTING,
+                PREDICTOR_STATE.STATUS_UPDATING,
+            ):
+                raise ModelServingException(
+                    f"Deployment '{name}' is {state.status}: wait until it is running, "
+                    "then stop it or force the delete."
+                )
+            raise ModelServingException(
+                f"Deployment '{name}' is {state.status}: stop it first, or force the delete."
             )
 
         self._serving_api._delete(deployment_instance)
@@ -1098,6 +1207,7 @@ class ServingEngine:
         since: str | None = None,
         until: str | None = None,
         pod: str | None = None,
+        previous: bool = False,
     ) -> str:
         """Return deployment logs as a single plain-text string.
 
@@ -1112,6 +1222,7 @@ class ServingEngine:
             since: ISO-8601 lower bound for log timestamps, if any.
             until: ISO-8601 upper bound for log timestamps, if any.
             pod: Specific pod name to read logs for, if any.
+            previous: Read the previous, terminated container instead of the running one, for a crashed or restarted predictor.
 
         Returns:
             All matching log chunks concatenated into a single string.
@@ -1124,6 +1235,7 @@ class ServingEngine:
             since=since,
             until=until,
             pod=pod,
+            previous=previous,
         )
         return self._format_log_chunks(chunks or [])
 
