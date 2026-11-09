@@ -662,8 +662,6 @@ def run(
     version: int,
     embed: Callable[[list[str]], list[list[float]]],
     execution: int,
-    writer_for: Callable[[Any, int], Writer] = Writer,
-    stores_for: Callable[[Any, int], Stores] = Stores,
     size: int = CHUNK_CHARS,
     overlap: int = CHUNK_OVERLAP,
     readback_s: int = READBACK_S,
@@ -714,14 +712,14 @@ def run(
         )
 
     # 2. Claim, 3. fence, 4. barrier.
-    writer = writer_for(fg, execution)
+    writer = Writer(fg, execution)
     epoch, unsettled = writer.claim()
     plan.epoch, plan.unsettled = epoch, unsettled
     log(
         f"Claimed {group} v{version} at epoch {epoch}"
         + (f"; unsettled epochs below it: {unsettled}" if unsettled else "")
     )
-    stores = stores_for(fg, epoch)
+    stores = Stores(fg, epoch)
     partitions = stores.fence()
     wait_fenced(writer, partitions, epoch, readback_s, clock, sleep)
 
@@ -814,8 +812,6 @@ def delete_run(
     job: Any,
     group: str,
     execution: int,
-    writer_for: Callable[[Any, int], Writer] = Writer,
-    stores_for: Callable[[Any, int], Stores] = Stores,
     log: Callable[[str], None] = lambda _: None,
 ) -> list[int]:
     """The deletion execution D: claim and fence each group, unschedule the job, delete the groups; the versions deleted.
@@ -831,8 +827,8 @@ def delete_run(
     ]
     for fg in owned:
         if fenced_by(fg, job.id):
-            epoch, _ = writer_for(fg, execution).claim()
-            stores_for(fg, epoch).fence()
+            epoch, _ = Writer(fg, execution).claim()
+            Stores(fg, epoch).fence()
             log(f"Fenced {group} v{fg.version} at epoch {epoch}")
     if getattr(job, "job_schedule", None):
         job.unschedule()
