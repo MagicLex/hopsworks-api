@@ -25,6 +25,8 @@ Runs only with HOPS_LIVE=1, a cluster login of a test user in HOPSWORKS_HOST,
 HOPSWORKS_API_KEY and HOPSWORKS_PROJECT, the embedding settings
 (HOPSABLE_EMBEDDING_PROJECT, HOPSABLE_EMBEDDING_MODEL) and a backend, OnlineFS
 and SDK with the HABLE-239 fence. Each run calls the build embedding deployment.
+HOPS_EMBED_ENV names the Python environment the build job runs in; it must
+carry the fenced client while the cluster default does not.
 
 Not automated here, run by hand on the dev cluster under its claim: OnlineFS
 restart between a fence and a stale record (r5 a, r10), two OnlineFS replicas
@@ -48,6 +50,10 @@ import pytest
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("HOPS_LIVE") != "1", reason="needs HOPS_LIVE=1 and a cluster login"
+)
+
+ENV_ARGS = (
+    ("--env", os.environ["HOPS_EMBED_ENV"]) if os.environ.get("HOPS_EMBED_ENV") else ()
 )
 
 #: A build pod takes minutes to start; a run of a few rows ends well inside this.
@@ -131,7 +137,9 @@ def _wait(project, job_name: str, execution_id: int) -> object:
 
 
 def _build(project, source_name: str, name: str) -> dict:
-    started = _hops_json("fg", "embed", source_name, "--text", "body", "--to", name)
+    started = _hops_json(
+        "fg", "embed", source_name, "--text", "body", "--to", name, *ENV_ARGS
+    )
     execution = _wait(project, started["job"], started["execution"])
     assert execution.final_status == "SUCCEEDED", execution
     return started
@@ -436,7 +444,9 @@ def test_a_start_while_the_job_is_being_deleted_is_refused(project, source, grou
         args=f"fg embed delete {group['name']} --in-job",
         deletion=True,
     )
-    started = _hops("fg", "embed", source.name, "--text", "body", "--to", group["name"])
+    started = _hops(
+        "fg", "embed", source.name, "--text", "body", "--to", group["name"], *ENV_ARGS
+    )
     assert started.returncode == 1
     assert "is being deleted; nothing was started" in started.stdout + started.stderr
     _wait(project, job.name, deletion.id)
