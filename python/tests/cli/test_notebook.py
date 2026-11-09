@@ -579,3 +579,34 @@ def test_the_proxy_token_is_minted_for_the_project(monkeypatch):
 def test_a_cluster_without_the_proxy_token_endpoint_needs_no_cookie(monkeypatch):
     monkeypatch.setattr(client, "_get_instance", lambda: _Hopsworks(404))
     assert notebook_api.proxy_token(7) is None
+
+
+def test_a_progress_line_redrawn_with_carriage_returns_is_saved_as_its_last_frame():
+    from hopsworks.cli.notebook_api import _append
+
+    outputs = []
+    for chunk in [
+        "Reading data.\r",
+        "Reading data..\r",
+        "Reading data...\r",
+        "Finished: Reading data (1.79s)\n",
+        "rows 20\n",
+    ]:
+        _append(outputs, {"output_type": "stream", "name": "stdout", "text": chunk})
+
+    assert outputs == [
+        {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": "Finished: Reading data (1.79s)\nrows 20\n",
+        }
+    ]
+
+
+def test_carriage_returns_keep_windows_line_ends_and_a_pending_redraw():
+    from hopsworks.cli.notebook_api import _carriage_returns
+
+    assert _carriage_returns("a\r\nb\n") == "a\r\nb\n"
+    assert _carriage_returns("50%\r") == "50%\r"
+    assert _carriage_returns("50%\r100%") == "100%"
+    assert _carriage_returns("long line\rshort") == "shortline"
