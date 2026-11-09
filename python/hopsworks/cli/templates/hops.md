@@ -253,7 +253,8 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    `split_by_key` of **hops-train** section 1 in a cell) and registers
    with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
    notebook made itself registers without, unless the request deploys the model: then that data
-   goes into a feature group and a view of it first. "Register the model" afterwards is the best run,
+   goes into a feature group and a view of it first (in a cell:
+   `fs.get_or_create_feature_group("<name>", version=1, primary_key=["<key>"]).insert(df)`). "Register the model" afterwards is the best run,
    already registered: say its version. Then offer once per notebook, no option marked
    "(Recommended)", to make it a training pipeline: the model piece (Pieces above), on a feature
    group of the notebook's data.
