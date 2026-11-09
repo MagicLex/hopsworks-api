@@ -28,8 +28,8 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    build as the job `<group>_embed` and returns the execution id; the build is not done when the
    command returns, and a search over a group still building has no results. Read the job with
    `hops job info <group>_embed` once, on a later step, and never poll or loop. When the command
-   exits non-zero it started nothing: tell the user its message (capacity, or a build already
-   running) and do not retry in a loop. A source that changes gets `--schedule` (daily).
+   exits non-zero it started nothing: tell the user its message (capacity, a build already
+   running, or the group being deleted) and do not retry in a loop. A source that changes gets `--schedule` (daily).
 2. **Write the entry script with `hops agent init`, then edit its output.** Never write the script
    from scratch:
 
