@@ -159,3 +159,11 @@ def test_playbook_asks_one_question_after_a_connect():
         assert "never a second one for the tables" in text, p
         for option in ("**Preview all tables**", "**Preview one: `<table>`**", "**Tell me what this data is about**"):
             assert option in text, (p, option)
+
+
+@pytest.mark.parametrize("name", ["hops", "hops-build", "hops-gold", "hops-silver", "hops-bronze"])
+def test_playbook_asks_a_follow_up_only_after_the_answer_it_depends_on(name):
+    root = SKILLS_ROOT.parents[2]
+    for p in [root / ".claude" / "commands" / f"{name}.md", SKILLS_ROOT.parent / "cli" / "templates" / f"{name}.md"]:
+        text = " ".join(p.read_text("utf-8").split())
+        assert "applies only after some answers of another waits for that answer" in text, p

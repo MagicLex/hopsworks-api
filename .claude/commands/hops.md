@@ -17,7 +17,7 @@ Already known, no need to look again:
 ## Rules
 
 - Ask with `AskUserQuestion`, at once and before any lookup the question does not need: one call,
-  up to four questions, two to four options each, the recommended one first and marked
+  up to four questions (a question that applies only after some answers of another waits for that answer, in a call of its own), two to four options each, the recommended one first and marked
   "(Recommended)". Never end a turn with a question in prose.
 - Read only the tables the request names. A named table of a source read in place (SQL,
   warehouse, object store) is mounted as an external feature group (**hops-data-sources**, Mount
