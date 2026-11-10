@@ -38,6 +38,7 @@ auto-create denial as the real OnlineFS identity (H5).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -45,6 +46,7 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import urlparse
 
 import pytest
 
@@ -190,14 +192,29 @@ def _epoch(fg):
     return versions.pop()
 
 
-def _inject(fg, epoch: int, rows: list[dict], delete: bool = False) -> None:
+def _writer(fg, epoch: int, entries: int) -> tuple:
+    """A writer's Kafka options and resources for `entries` records of the group at `epoch`."""
+    from hsfs.core import kafka_engine
+
+    options = {kafka_engine.WRITER_EPOCH_OPTION: epoch}
+    return options, kafka_engine._get_kafka_resources(
+        fg, options, num_entries=entries, storage="online"
+    )
+
+
+def _inject(
+    fg,
+    epoch: int,
+    rows: list[dict],
+    delete: bool = False,
+    resources: tuple | None = None,
+) -> None:
     """Records of the group at `epoch` on its topic, as a stale writer's delayed append would arrive."""
     from hsfs.core import kafka_engine
     from hsfs.engine import python
 
-    options = {kafka_engine.WRITER_EPOCH_OPTION: epoch}
-    producer, headers, writers, writer = kafka_engine._get_kafka_resources(
-        fg, options, num_entries=len(rows), storage="online"
+    options, (producer, headers, writers, writer) = resources or _writer(
+        fg, epoch, len(rows)
     )
     if delete:
         headers = {**headers, "operation": b"delete"}
@@ -445,12 +462,14 @@ def test_delete_runs_the_deletion_execution_and_removes_group_job_and_index(
     fg = _fg(project, group["name"])
     dimension = fg.embedding_index.get_embedding("embedding").dimension
     epoch = _epoch(fg)
+    # A stale writer set up its Kafka resources before the delete.
+    stale = _writer(fg, epoch, 1)
     deleted = _hops_json("fg", "embed", "delete", group["name"], "--yes")
     assert deleted["deletion_execution"]
     assert _job(project, group["name"]) is None
     assert _versions(project, group["name"]) == []
     # A stale record for the deleted group targets a deleted group and index: nothing comes back.
-    _inject(fg, epoch, [_row("late", 0, "after delete", dimension)])
+    _inject(fg, epoch, [_row("late", 0, "after delete", dimension)], resources=stale)
     _settle_wait()
     assert _versions(project, group["name"]) == []
 
@@ -499,6 +518,7 @@ def test_a_delete_interrupted_after_its_deletion_execution_finishes_on_a_rerun(
 def test_a_stale_delta_append_after_delete_does_not_recreate_the_table(project, group):
     import pyarrow as pa
     from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
+    from hopsworks_common.client.exceptions import RestAPIError
     from hsfs.core import delta_engine
 
     fg = _fg(project, group["name"])
@@ -508,7 +528,8 @@ def test_a_stale_delta_append_after_delete_does_not_recreate_the_table(project, 
     stale = DeltaTable(location)
     empty = pa.schema(stale.schema().to_arrow()).empty_table()
     _hops_json("fg", "embed", "delete", group["name"], "--yes")
-    with pytest.raises(Exception):  # noqa: B017 - any failure is the refusal
+    # A refused append passes too: the directory decides.
+    with contextlib.suppress(Exception):
         write_deltalake(
             stale,
             empty,
@@ -517,3 +538,6 @@ def test_a_stale_delta_append_after_delete_does_not_recreate_the_table(project, 
                 app_transactions=[Transaction(app_id="hops-writer", version=1)]
             ),
         )
+    with pytest.raises(RestAPIError) as gone:
+        project.get_dataset_api()._get(urlparse(fg.location).path)
+    assert gone.value.response.status_code == 404
