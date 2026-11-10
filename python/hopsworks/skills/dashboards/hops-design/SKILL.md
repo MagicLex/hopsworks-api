@@ -34,6 +34,7 @@ and the actions on it; it does not explain itself.
   `prefers-color-scheme` switch.
 - Accent sparingly: one primary button per view, the current selection, a positive
   status. Everything else is neutral grey.
+- A `select` drops the native arrow (`appearance: none`) and draws its own muted chevron with extra right padding; copy the `select` rule from the skeleton's `app.css` so the arrow never sits against the border.
 - No gradients, no banners, no emoji in titles or labels, no logo badge.
 
 ### Surfaces and nesting

@@ -85,6 +85,11 @@ input, select {
   border: 1px solid var(--line); background: var(--bg); color: var(--text); min-width: 10rem;
 }
 input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+select {
+  appearance: none; -webkit-appearance: none; padding-right: var(--s6);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23737373' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4.5l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right var(--s3) center; background-size: 12px;
+}
 button {
   border: none; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer;
 }
