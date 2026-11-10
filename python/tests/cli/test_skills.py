@@ -150,3 +150,12 @@ def test_playbook_mounts_named_tables_read_in_place_and_previews_crm_tables():
     skill = " ".join((SKILLS_ROOT / "data" / "hops-data-sources" / "SKILL.md").read_text("utf-8").split())
     assert "These sources cannot be mounted" in skill
     assert "`hops datasource preview` reads a named table's rows here" in skill
+
+
+def test_playbook_asks_one_question_after_a_connect():
+    root = SKILLS_ROOT.parents[2]
+    for p in [root / ".claude" / "commands" / "hops.md", SKILLS_ROOT.parent / "cli" / "templates" / "hops.md"]:
+        text = " ".join(p.read_text("utf-8").split())
+        assert "never a second one for the tables" in text, p
+        for option in ("**Preview all tables**", "**Preview one: `<table>`**", "**Tell me what this data is about**"):
+            assert option in text, (p, option)
