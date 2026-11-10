@@ -284,7 +284,7 @@ def fg_embed(
         target,
     )
     if cron:
-        click.echo(f"Scheduled job {job.name} ({cron})")
+        output.info(f"Scheduled job {job.name} ({cron})")
 
 
 def _probe(endpoint: tuple[str, str, str]) -> int:
@@ -695,7 +695,7 @@ def fg_embed_delete(
     if output.JSON_MODE and dry_run:
         output.print_json(plan)
         return
-    click.echo(
+    output.info(
         f"Group {group} versions {plan['versions'] or 'none'}; "
         f"job {plan['job'] or 'none'}"
         f"{' and its schedule' if plan['schedule'] else ''}; files {paths or 'none'}"

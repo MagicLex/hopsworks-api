@@ -293,14 +293,16 @@ def test_a_stale_record_after_a_run_is_dropped_for_a_key_present_or_absent(
 
 
 def test_a_record_without_an_epoch_is_dropped_on_a_fenced_group(project, group):
+    import numpy as np
     import pandas as pd
 
     fg = _fg(project, group["name"])
     epoch = _epoch(fg)
     dimension = fg.embedding_index.get_embedding("embedding").dimension
-    fg.insert(
-        pd.DataFrame([_row("noepoch", 0, "unfenced", dimension)]), storage="online"
-    )
+    row = _row("noepoch", 0, "unfenced", dimension)
+    # The schema's array<float>: a list of Python floats derives array<double>, which the insert refuses.
+    row["embedding"] = np.full(dimension, 0.5, dtype=np.float32)
+    fg.insert(pd.DataFrame([row]), storage="online")
     _settle_wait()
     assert ("noepoch", 0) not in _docs(fg, {("noepoch", 0)})
     assert _epoch(fg) == epoch
