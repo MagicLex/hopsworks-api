@@ -558,9 +558,11 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
     slug = target.name
     request = request or f"/hops-silver {slug}"
     if not launch or not shutil.which("claude"):
-        output.info(
-            f"\nBuild it with:  cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
-        )
+        build = f"cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
+        if output.JSON_MODE:
+            output.print_json({"path": str(target), "build": build})
+        else:
+            click.echo(f"\nBuild it with:  {build}")
         return
     token = system_doc.acquire(target)["token"]
     if os.environ.get("TMUX") and shutil.which("tmux"):
