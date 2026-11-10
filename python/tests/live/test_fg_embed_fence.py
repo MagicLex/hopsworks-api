@@ -244,6 +244,91 @@ def _settle_wait():
     time.sleep(30)
 
 
+def _inject_per_partition(fg, epoch: int, prefix: str, dimension: int) -> list[int]:
+    """One record of key `<prefix><p>` at `epoch` on each partition p of the group's topic; the partitions.
+
+    Each record names its partition, as the fence records do, so every partition gets one whatever the keys.
+    """
+    from hsfs.core import kafka_engine
+
+    topic = fg._online_topic_name
+    partitions = sorted(
+        kafka_engine._init_kafka_producer(fg.feature_store_id, {})
+        .list_topics(topic, timeout=30)
+        .topics[topic]
+        .partitions
+    )
+    _, (producer, headers, writers, writer) = _writer(fg, epoch, len(partitions))
+    failed = []
+
+    def acked(err, msg):
+        if err is not None:
+            failed.append(f"partition {msg.partition()}: {err}")
+
+    for p in partitions:
+        row = _row(f"{prefix}{p}", 0, f"{prefix} on partition {p}", dimension)
+        producer.produce(
+            topic=topic,
+            partition=p,
+            key="".join(str(row[k]) for k in sorted(fg.primary_key)),
+            value=kafka_engine._encode_row(writers, writer, row),
+            headers=headers,
+            on_delivery=acked,
+        )
+    assert producer.flush(30) == 0 and not failed, failed
+    return partitions
+
+
+#: Execution states before RUNNING (JobState.getQueuedStates in the backend). A state never moves back
+#: to one of these, so one read after a claim's answer shows the state the claim was taken in.
+BEFORE_RUNNING = {
+    "INITIALIZING",
+    "NEW",
+    "NEW_SAVING",
+    "GENERATING_SECURITY_MATERIAL",
+    "SUBMITTED",
+    "ACCEPTED",
+    "STARTING_APP_MASTER",
+    "CONVERTING_NOTEBOOK",
+    "QUEUED",
+    "PENDING",
+    "PENDING_RERUN",
+}
+
+
+def _start(job):
+    """A new execution of the job; a start refused for the start rate (429) is retried after its Retry-After."""
+    from hopsworks_common.client.exceptions import RestAPIError
+    from hopsworks_common.core.execution_api import ExecutionApi
+
+    for _ in range(RATE_RETRIES - 1):
+        try:
+            return ExecutionApi()._start(job)
+        except RestAPIError as exc:
+            after = (exc.response.headers.get("Retry-After") or "").strip()
+            if exc.response.status_code != 429 or not after.isdigit():
+                raise
+            time.sleep(int(after) + 1)
+    return ExecutionApi()._start(job)
+
+
+def _claim_before_running(project, fg, job) -> tuple[int, dict, str]:
+    """Claim the group from a new execution of its job, read its state, then stop it.
+
+    (execution id, the claim's answer, the execution's state read right after the answer). The build pod
+    takes minutes to start, so the execution's own code never runs: the claim stays unsettled.
+    """
+    from hopsworks.cli import embed_run
+    from hopsworks_common.core.execution_api import ExecutionApi
+
+    execution = _start(job)
+    answer = embed_run.Writer(fg, execution.id)._send("POST", "writer")
+    state = ExecutionApi()._get(job, execution.id).state
+    ExecutionApi()._stop(job.name, execution.id)
+    _wait(project, job.name, execution.id)
+    return execution.id, answer, state
+
+
 # --- runs ------------------------------------------------------------------------
 
 
@@ -354,6 +439,23 @@ def test_two_fenced_groups_on_one_topic_fence_only_themselves(project, source, g
         _hops("fg", "embed", "delete", other, "--yes")
 
 
+def test_stale_records_on_every_partition_are_dropped(project, group):
+    fg = _fg(project, group["name"])
+    epoch = _epoch(fg)
+    dimension = fg.embedding_index.get_embedding("embedding").dimension
+    # Keys the source lacks: a stale record of an existing key is refused by the version check alone.
+    partitions = _inject_per_partition(fg, epoch - 1, "stale", dimension)
+    assert len(partitions) >= 2, partitions
+    # The same records at the fence epoch: every partition is consumed, so the stale ones were read and dropped.
+    _inject_per_partition(fg, epoch, "fresh", dimension)
+    _settle_wait()
+    stale = {(f"stale{p}", 0) for p in partitions}
+    fresh = {(f"fresh{p}", 0) for p in partitions}
+    docs = _docs(fg, stale | fresh)
+    assert not stale & set(docs), sorted(stale & set(docs))
+    assert fresh <= set(docs), sorted(fresh - set(docs))
+
+
 # --- the delete leg order (r6, r7) -----------------------------------------------------
 
 
@@ -375,6 +477,50 @@ def test_a_crash_between_the_delete_legs_is_finished_by_the_next_run(
     docs = _docs(fg, keys)
     assert all(docs[k].deleted and docs[k].version > epoch for k in keys)
     assert "2" not in set(fg.read()["doc_id"].astype(str))
+
+
+# --- recovery of unsettled epochs (r9) ----------------------------------------------------
+
+
+def test_a_crash_during_recovery_before_settlement_is_finished_by_the_next_run(
+    project, source, group
+):
+    """Run A claimed and fenced, one held write landed, never settled; recovery R rewrote one key and stopped."""
+    from hopsworks.cli import embed_run
+    from hopsworks.cli.embed_run import Stores
+
+    fg = _fg(project, group["name"])
+    job = _job(project, group["name"])
+    dimension = fg.embedding_index.get_embedding("embedding").dimension
+    _, a, state = _claim_before_running(project, fg, job)
+    assert state in BEFORE_RUNNING, state
+    a_epoch = int(a["epoch"])
+    Stores(fg, a_epoch).fence()
+    _inject(fg, a_epoch, [_row("1", 0, "held write of A", dimension)])
+    _, r, state = _claim_before_running(project, fg, job)
+    assert state in BEFORE_RUNNING, state
+    r_epoch = int(r["epoch"])
+    assert r_epoch > a_epoch and a_epoch in r["unsettledEpochs"], r
+    Stores(fg, r_epoch).fence()
+    _inject(fg, r_epoch, [_row("2", 0, ROWS[2], dimension)])
+    _settle_wait()
+    crashed = _docs(fg, _all_keys())
+    assert crashed[("1", 0)].version == a_epoch
+    assert crashed[("2", 0)].version == r_epoch
+
+    _build(project, source.name, group["name"])
+    docs = _docs(fg, _all_keys())
+    want = {
+        (str(doc), ix): embed_run.sha(chunk)
+        for doc, text in ROWS.items()
+        for ix, chunk in enumerate(embed_run.chunks(text))
+    }
+    assert all(not docs[k].deleted and docs[k].sha == want[k] for k in want)
+    assert all(docs[k].version >= r_epoch for k in want)
+    # A's held value sat below R's epoch: rewritten at the next run's epoch.
+    assert docs[("1", 0)].version > r_epoch
+    _, later, _ = _claim_before_running(project, fg, job)
+    assert not later.get("unsettledEpochs"), later
 
 
 # --- stale Delta commits (r5 b, r6) -------------------------------------------------------
@@ -431,6 +577,26 @@ def test_a_claim_from_an_ended_execution_is_refused(project, group):
     assert "ended" in refused.value.user_message
 
 
+def test_a_claim_from_an_execution_before_running_is_accepted_and_refused_once_it_ended(
+    project, group
+):
+    """r10: a claim accepts any non-final execution of the writer job, RUNNING or not yet."""
+    from hopsworks.cli import embed_run
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    fg = _fg(project, group["name"])
+    epoch = _epoch(fg)
+    execution, answer, state = _claim_before_running(
+        project, fg, _job(project, group["name"])
+    )
+    assert state in BEFORE_RUNNING, state
+    assert int(answer["epoch"]) > epoch, answer
+    with pytest.raises(RestAPIError) as refused:
+        embed_run.Writer(fg, execution)._send("POST", "writer")
+    assert refused.value.response.status_code == 409
+    assert "ended" in refused.value.user_message
+
+
 def test_a_rerun_of_a_stopped_build_gets_an_epoch_above_the_last(
     project, source, group
 ):
@@ -472,6 +638,53 @@ def test_delete_runs_the_deletion_execution_and_removes_group_job_and_index(
     _inject(fg, epoch, [_row("late", 0, "after delete", dimension)], resources=stale)
     _settle_wait()
     assert _versions(project, group["name"]) == []
+
+
+def test_a_held_record_of_a_deleted_group_does_not_reach_its_recreated_group(
+    project, source, group
+):
+    from hopsworks_common.core.opensearch import OpenSearchClientSingleton
+    from opensearchpy.exceptions import AuthorizationException
+
+    old = _fg(project, group["name"])
+    dimension = old.embedding_index.get_embedding("embedding").dimension
+    old_index = old.embedding_index.index_name
+    # Far above any epoch the new incarnation takes here, so only the group the record names keeps it out.
+    held_epoch = _epoch(old) + 1_000_000
+    held = _writer(old, held_epoch, 2)
+    _hops_json("fg", "embed", "delete", group["name"], "--yes")
+    _build(project, source.name, group["name"])
+    new = _fg(project, group["name"])
+    assert new.id != old.id
+    assert new.embedding_index.index_name != old_index
+    before = _docs(new, _all_keys())
+    epoch = _epoch(new)
+    _inject(
+        old,
+        held_epoch,
+        [
+            _row("1", 0, "held value of incarnation 1", dimension),
+            _row("held", 0, "held key of incarnation 1", dimension),
+        ],
+        resources=held,
+    )
+    _settle_wait()
+    after = _docs(new, _all_keys() | {("held", 0)})
+    assert ("held", 0) not in after
+    assert {k: after[k] for k in _all_keys()} == before
+    assert _epoch(new) == epoch
+    try:
+        exists = (
+            OpenSearchClientSingleton(feature_store_id=new.feature_store_id)
+            ._get_opensearch_client()
+            .indices.exists(index=old_index)
+        )
+    except AuthorizationException:
+        print(
+            f"HEAD {old_index} refused to the test user: the operator step reads it as admin"
+        )
+    else:
+        assert exists is False, old_index
 
 
 def test_a_start_while_the_job_is_being_deleted_is_refused(project, source, group):
