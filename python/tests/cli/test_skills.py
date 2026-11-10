@@ -138,3 +138,15 @@ def test_info_puts_its_path_header_on_stdout_for_a_pipe(tmp_path, monkeypatch):
     lines = done.stdout.splitlines()
     assert lines[0].startswith("# hops-demo")
     assert lines[1] == f"# {path}"
+
+
+def test_playbook_mounts_named_tables_read_in_place_and_previews_crm_tables():
+    root = SKILLS_ROOT.parents[2]
+    playbooks = [root / ".claude" / "commands" / "hops.md", SKILLS_ROOT.parent / "cli" / "templates" / "hops.md"]
+    for p in playbooks:
+        text = " ".join(p.read_text("utf-8").split())
+        assert "is mounted as an external feature group" in text, p
+        assert "A CRM, Google Sheets or REST table cannot be mounted: preview it with `hops datasource preview <source> --table <t>`" in text, p
+    skill = " ".join((SKILLS_ROOT / "data" / "hops-data-sources" / "SKILL.md").read_text("utf-8").split())
+    assert "These sources cannot be mounted" in skill
+    assert "`hops datasource preview` reads a named table's rows here" in skill

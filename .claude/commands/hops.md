@@ -19,10 +19,14 @@ Already known, no need to look again:
 - Ask with `AskUserQuestion`, at once and before any lookup the question does not need: one call,
   up to four questions, two to four options each, the recommended one first and marked
   "(Recommended)". Never end a turn with a question in prose.
-- Read only the tables the request names. A source lists its tables in one `hops datasource
-  tables <source>` call; preview a table only when the request names it or its name is the only
-  match for what the request asks. Never loop a preview over every table of a source: each one
-  is a read, and a source holds tables the user did not ask about.
+- Read only the tables the request names. A named table of a source read in place (SQL,
+  warehouse, object store) is mounted as an external feature group (**hops-data-sources**, Mount
+  a table) and its rows shown with `hops fg preview <fg> --limit 20`: the Preview pane shows that
+  feature group. A CRM, Google Sheets or REST table cannot be mounted: preview it with `hops
+  datasource preview <source> --table <t>`. A source lists its tables in one `hops datasource
+  tables <source>` call; on a source read in place, `hops datasource preview` is only for finding
+  the table a request asks for without naming it. Never loop a preview over every table of a
+  source: each one is a read, and a source holds tables the user did not ask about.
 - A next-step offer (Explore, Pieces step 6) always has these two options: **Build a data
   pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
   **Explore it in a notebook** (a notebook over the table). The other one or two options are what
