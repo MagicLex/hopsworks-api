@@ -150,10 +150,10 @@ RATE_RETRIES = 3
 
 def _build(project, source_name: str, name: str) -> dict:
     args = ("fg", "embed", source_name, "--text", "body", "--to", name, *ENV_ARGS)
-    for _ in range(RATE_RETRIES):
+    for attempt in range(RATE_RETRIES):
         result = _hops("--json", *args)
         wait = re.search(r"retry after (\d+) s", result.stderr)
-        if result.returncode == 0 or wait is None:
+        if result.returncode == 0 or wait is None or attempt == RATE_RETRIES - 1:
             break
         time.sleep(int(wait.group(1)) + 1)
     assert result.returncode == 0, result.stdout + result.stderr
