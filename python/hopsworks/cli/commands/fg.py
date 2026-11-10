@@ -11,7 +11,6 @@ no subprocess hop.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import random
 import sys
@@ -128,7 +127,11 @@ def fg_info(
     if output.JSON_MODE:
         error = {"offline_size_error": size_error} if size_error else {}
         output.print_json(
-            {**_fg_to_dict(fg), "offline_size_bytes": size[0] if size else None, **error}
+            {
+                **_fg_to_dict(fg),
+                "offline_size_bytes": size[0] if size else None,
+                **error,
+            }
         )
         if size_error:
             # The rest was printed; the exit code says a read failed.
@@ -635,19 +638,20 @@ def fg_create(
         online = True
 
     try:
-        fg = fs.create_feature_group(
-            name=name,
-            version=version,
-            description=description,
-            online_enabled=online,
-            primary_key=pk_list or None,
-            partition_key=partition_list or None,
-            event_time=event_time,
-            features=features or None,
-            embedding_index=embedding_index,
-            **({"statistics_config": False} if no_statistics else {}),
-        )
-        fg.save()
+        with output.sdk_quiet():
+            fg = fs.create_feature_group(
+                name=name,
+                version=version,
+                description=description,
+                online_enabled=online,
+                primary_key=pk_list or None,
+                partition_key=partition_list or None,
+                event_time=event_time,
+                features=features or None,
+                embedding_index=embedding_index,
+                **({"statistics_config": False} if no_statistics else {}),
+            )
+            fg.save()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not create feature group: {exc}") from exc
 
@@ -844,19 +848,20 @@ def fg_create_external(
 
     fg = None
     try:
-        fg = fs.create_external_feature_group(
-            name=name,
-            data_source=data_source,
-            data_format=data_format.lower() if data_format else None,
-            version=version,
-            description=description,
-            primary_key=_split_csv(primary_key) or None,
-            event_time=event_time,
-            online_enabled=online,
-            features=_build_features(features_spec) or None,
-            statistics_config=False if statistics is False else None,
-        )
-        fg.save()
+        with output.sdk_quiet():
+            fg = fs.create_external_feature_group(
+                name=name,
+                data_source=data_source,
+                data_format=data_format.lower() if data_format else None,
+                version=version,
+                description=description,
+                primary_key=_split_csv(primary_key) or None,
+                event_time=event_time,
+                online_enabled=online,
+                features=_build_features(features_spec) or None,
+                statistics_config=False if statistics is False else None,
+            )
+            fg.save()
     except Exception as exc:  # noqa: BLE001
         # save() registers the metadata first and computes statistics after, so
         # a failure in the second step leaves a usable feature group behind.
@@ -982,7 +987,6 @@ def fg_ingest(
         description: Free-form description.
         wait: Whether to wait for the copy to end.
     """
-    from hopsworks.cli import auth  # noqa: PLC0415 - SDK loaded on use
     from hopsworks.cli.commands import (
         datasource as ds_cmd,  # noqa: PLC0415 - it imports fg
     )
@@ -1000,7 +1004,7 @@ def fg_ingest(
     # The listed table carries its schema (sales.orders); a bare name in several schemas is refused.
     data_source = ds_cmd._resolve_table(data_source, table, database)
     # The SDK prints banners on save and run; --json keeps stdout for the payload.
-    with auth.quiet() if output.JSON_MODE else contextlib.nullcontext():
+    with output.sdk_quiet():
         fg = _ingest(
             fs,
             name,
@@ -1062,19 +1066,20 @@ def _ingest(
 ):
     """The sink feature group on ``data_source``, saved: its schema read from the source."""
     try:
-        fg = fs.create_feature_group(
-            name=name,
-            version=version,
-            description=description,
-            online_enabled=online,
-            primary_key=_split_csv(primary_key) or None,
-            event_time=event_time,
-            data_source=data_source,
-            sink_enabled=True,
-            sink_job_conf=sink_job_conf,
-            statistics_config=False if statistics is False else None,
-        )
-        fg.save()
+        with output.sdk_quiet():
+            fg = fs.create_feature_group(
+                name=name,
+                version=version,
+                description=description,
+                online_enabled=online,
+                primary_key=_split_csv(primary_key) or None,
+                event_time=event_time,
+                data_source=data_source,
+                sink_enabled=True,
+                sink_job_conf=sink_job_conf,
+                statistics_config=False if statistics is False else None,
+            )
+            fg.save()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not create feature group: {exc}") from exc
     output.success(
@@ -1164,7 +1169,8 @@ def fg_insert(
     write_options = {"start_offline_materialization": False} if online else None
 
     try:
-        job, _ = fg.insert(df, write_options=write_options)
+        with output.sdk_quiet():
+            job, _ = fg.insert(df, write_options=write_options)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not insert into feature group '{name}': {exc}"
@@ -1251,15 +1257,16 @@ def fg_derive(
         )
 
     try:
-        fg = fs.create_feature_group(
-            name=name,
-            description=description or f"Derived from {base_fg}",
-            primary_key=_split_csv(primary_key) or None,
-            event_time=event_time,
-            online_enabled=online,
-            parents=parents,
-        )
-        fg.insert(query.read())
+        with output.sdk_quiet():
+            fg = fs.create_feature_group(
+                name=name,
+                description=description or f"Derived from {base_fg}",
+                primary_key=_split_csv(primary_key) or None,
+                event_time=event_time,
+                online_enabled=online,
+                parents=parents,
+            )
+            fg.insert(query.read())
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not derive feature group: {exc}") from exc
 
@@ -1382,9 +1389,12 @@ def fg_update(
         output.info("No offline rows to copy.")
         return
     try:
-        fg.insert(
-            rows, storage="online", write_options={"wait_for_online_ingestion": True}
-        )
+        with output.sdk_quiet():
+            fg.insert(
+                rows,
+                storage="online",
+                write_options={"wait_for_online_ingestion": True},
+            )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not copy the offline rows of feature group {label} online: {exc}"

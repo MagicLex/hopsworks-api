@@ -8,6 +8,7 @@ so that stdout contains only the machine-readable payload.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -167,6 +168,13 @@ def set_json_mode(enabled: bool) -> None:
     """
     global JSON_MODE
     JSON_MODE = enabled
+
+
+def sdk_quiet() -> contextlib.AbstractContextManager[None]:
+    """Discard the SDK's own prints while ``--json`` keeps stdout for the payload."""
+    from hopsworks.cli import auth  # noqa: PLC0415 - auth imports the SDK client
+
+    return auth.quiet() if JSON_MODE else contextlib.nullcontext()
 
 
 def print_json(obj: Any) -> None:

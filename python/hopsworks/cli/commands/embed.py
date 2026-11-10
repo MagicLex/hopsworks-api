@@ -336,27 +336,28 @@ def _create_group(fs, group, version, src, text, model, dimension, job) -> Any:
     index = EmbeddingIndex(fenced=True)
     index.add_embedding("embedding", dimension, similarity_function_type="cosine")
     try:
-        fg = fs.create_feature_group(
-            name=group,
-            version=version,
-            description=embed_run.description(
-                src.name, src.version, text, model, dimension, group
-            ),
-            online_enabled=True,
-            primary_key=embed_run.KEYS,
-            features=[
-                Feature("doc_id", "string"),
-                Feature("chunk_ix", "bigint"),
-                Feature("text", "string"),
-                Feature("embedding", "array<float>"),
-                Feature("content_sha", "string"),
-                Feature("embedded_at", "timestamp"),
-            ],
-            embedding_index=index,
-            statistics_config=False,
-        )
-        fg.writer_job_id = job.id
-        fg.save()
+        with output.sdk_quiet():
+            fg = fs.create_feature_group(
+                name=group,
+                version=version,
+                description=embed_run.description(
+                    src.name, src.version, text, model, dimension, group
+                ),
+                online_enabled=True,
+                primary_key=embed_run.KEYS,
+                features=[
+                    Feature("doc_id", "string"),
+                    Feature("chunk_ix", "bigint"),
+                    Feature("text", "string"),
+                    Feature("embedding", "array<float>"),
+                    Feature("content_sha", "string"),
+                    Feature("embedded_at", "timestamp"),
+                ],
+                embedding_index=index,
+                statistics_config=False,
+            )
+            fg.writer_job_id = job.id
+            fg.save()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not create {group} v{version}: {exc}. Job {job.name} was updated and nothing was started; "
@@ -533,9 +534,10 @@ def _save_job(project, api, existing, group, src, text, args, environment) -> An
         config["description"] = (
             f"Embeds {src.name} v{src.version} {text} into {group}. {embed_run.OWNER}{group}"
         )
-        if existing is None:
-            return api.create_job(name=name, config=config)
-        return existing.save()
+        with output.sdk_quiet():
+            if existing is None:
+                return api.create_job(name=name, config=config)
+            return existing.save()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not prepare job '{name}': {exc}. Nothing was started."
@@ -576,7 +578,8 @@ def start_refusal(exc: BaseException, group: str) -> str | None:
 def _start(job: Any, group: str) -> Any:
     """One execution of the job; a refusal exits non-zero, with no retry."""
     try:
-        return job.run(await_termination=False)
+        with output.sdk_quiet():
+            return job.run(await_termination=False)
     except Exception as exc:  # noqa: BLE001
         refusal = start_refusal(exc, group)
         if refusal is not None:
