@@ -309,7 +309,12 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    runtime: <node when the request says Node or an npm framework, else python>
    source: <hopsfs | git>
    where: <Hopsworks terminal | external client>
+   deploy: no
    ```
+6. **Deploy.** Ask with `AskUserQuestion` whether to deploy it to Hopsworks, never marked
+   "(Recommended)": the local run is where the app is iterated, and a redeploy in Hopsworks is
+   slower. On yes, spawn **hops-app-builder** with `action: deploy`, `name: <name>`, `deploy: yes`.
+   An edit is asked again before its deploy.
 
 ## Agent
 

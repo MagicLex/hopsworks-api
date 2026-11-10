@@ -167,3 +167,15 @@ def test_playbook_asks_a_follow_up_only_after_the_answer_it_depends_on(name):
     for p in [root / ".claude" / "commands" / f"{name}.md", SKILLS_ROOT.parent / "cli" / "templates" / f"{name}.md"]:
         text = " ".join(p.read_text("utf-8").split())
         assert "applies only after some answers of another waits for that answer" in text, p
+
+
+def test_app_deploy_waits_for_the_users_yes():
+    root = SKILLS_ROOT.parents[2]
+    for d in [root / ".claude" / "agents", SKILLS_ROOT.parent / "cli" / "templates"]:
+        text = " ".join((d / "hops-app-builder.md").read_text("utf-8").split())
+        assert "`deploy: no` (the default) stops before the deploy step" in text, d
+        assert "only with `deploy: yes`, deploy" in text and "with `deploy: yes` only, `hops app deploy" in text, d
+    for d in [root / ".claude" / "commands", SKILLS_ROOT.parent / "cli" / "templates"]:
+        text = " ".join((d / "hops.md").read_text("utf-8").split())
+        assert "whether to deploy it to Hopsworks, never marked \"(Recommended)\"" in text, d
+        assert "spawn **hops-app-builder** with `action: deploy`" in text, d
