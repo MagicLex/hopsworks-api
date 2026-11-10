@@ -29,7 +29,6 @@ from typing import (
     Literal,
 )
 
-import pandas as pd
 from hopsworks_common import client
 from hopsworks_common.core.constants import (
     HAS_AVRO,
@@ -56,9 +55,6 @@ from hsfs.core.feature_logging import LoggingMetaData
 from hsfs.hopsworks_udf import UDFExecutionMode
 
 
-if HAS_NUMPY:
-    import numpy as np
-
 if HAS_FAST_AVRO:
     from fastavro import schemaless_reader
 if HAS_AVRO:
@@ -66,12 +62,12 @@ if HAS_AVRO:
     import avro.schema
     from avro.io import BinaryDecoder
 
-if HAS_POLARS:
-    import polars as pl
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import numpy as np
+    import pandas as pd
+    import polars as pl
     from hsfs import (
         feature_view,
         training_dataset,
@@ -1297,6 +1293,11 @@ class VectorServer:
             feature_vectors: The feature vectors to be converted.
             on_demand_features: Specify if on-demand features provided in the input feature vector.
         """
+        import pandas as pd
+
+        if HAS_POLARS:
+            import polars as pl
+
         required_features = (
             set(self._untransformed_feature_vector_col_name)
             if not on_demand_features
@@ -1345,6 +1346,11 @@ class VectorServer:
             A tuple that contains the feature vector as a dictionary and a string denoting the data type of the input feature vector.
 
         """
+        import pandas as pd
+
+        if HAS_POLARS:
+            import polars as pl
+
         if isinstance(feature_vectors, pd.DataFrame):
             return_type = "pandas"
             feature_vectors = feature_vectors.to_dict(orient="records")
@@ -1580,6 +1586,14 @@ class VectorServer:
         | dict[str, Any]
         | list[dict[str, Any]]
     ):
+        import pandas as pd
+
+        if HAS_NUMPY:
+            import numpy as np
+
+        if HAS_POLARS:
+            import polars as pl
+
         if transform:
             column_names = self.transformed_feature_vector_col_name
         else:
@@ -1815,6 +1829,8 @@ class VectorServer:
             self._init_sql_client = True
 
     def _parse_transformed_result(self, transformed_results, transformation_function):
+        import pandas as pd
+
         rows = {}
         if (
             transformation_function.hopsworks_udf.execution_mode._get_current_execution_mode(

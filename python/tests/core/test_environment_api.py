@@ -14,6 +14,13 @@
 #   limitations under the License.
 #
 
+import json
+from types import SimpleNamespace
+
+import pytest
+from hopsworks_common import client
+from hopsworks_common.client.exceptions import EnvironmentException
+from hopsworks_common.command import Command
 from hopsworks_common.core import environment_api
 
 
@@ -66,3 +73,69 @@ class TestEnvironmentApi:
 
         # Assert
         mock_await.assert_not_called()
+
+    def test_create_environment_clones_a_project_environment(self, mocker):
+        """A clone names its source and no base image: Hopsworks 300029 points a Data scientist here."""
+        # Arrange
+        api = self._api(mocker)
+        mocker.patch.object(api._environment_engine, "_await_environment_command")
+        sent = client._get_instance()._send_request
+
+        # Act
+        api.create_environment(
+            "shop-app-env-scott", source_environment_name="shop-app-env"
+        )
+
+        # Assert
+        assert json.loads(sent.call_args.kwargs["data"]) == {
+            "name": "shop-app-env-scott",
+            "sourceEnvironment": "shop-app-env",
+        }
+
+    def test_create_environment_from_a_base_image_is_unchanged(self, mocker):
+        # Arrange
+        api = self._api(mocker)
+        mocker.patch.object(api._environment_engine, "_await_environment_command")
+        sent = client._get_instance()._send_request
+
+        # Act
+        api.create_environment("myenv", base_environment_name="python-agent-pipeline")
+
+        # Assert
+        assert json.loads(sent.call_args.kwargs["data"]) == {
+            "name": "myenv",
+            "baseImage": {"name": "python-agent-pipeline", "description": None},
+        }
+
+    def _build(self, mocker, api, *statuses):
+        """The environment's CREATE command as each poll sees it."""
+        mocker.patch.object(api._environment_engine, "POLL_INTERVAL", 0)
+        return mocker.patch.object(
+            api._environment_engine,
+            "_poll_commands_environment",
+            side_effect=[
+                SimpleNamespace(_commands=[Command(status=s, op="CREATE")])
+                for s in statuses
+            ],
+        )
+
+    def test_await_creation_returns_once_the_build_succeeded(self, mocker):
+        # Arrange
+        api = self._api(mocker)
+        poll = self._build(mocker, api, "ONGOING", "SUCCESS")
+
+        # Act
+        api.await_creation("shop-app-env-meb10000")
+
+        # Assert
+        assert poll.call_count == 2
+        assert poll.call_args.args[0] == "shop-app-env-meb10000"
+
+    def test_await_creation_raises_when_the_build_failed(self, mocker):
+        # Arrange
+        api = self._api(mocker)
+        self._build(mocker, api, "FAILED")
+
+        # Act, Assert
+        with pytest.raises(EnvironmentException, match="Command failed"):
+            api.await_creation("shop-app-env-meb10000")

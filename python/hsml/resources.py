@@ -17,11 +17,15 @@ from __future__ import annotations
 import json
 import warnings
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import humps
 from hopsworks_apigen import public
 from hopsworks_common import util
-from hopsworks_common.constants import RESOURCES, Default
+
+
+if TYPE_CHECKING:
+    from hopsworks_common.constants import Default
 
 
 @public(order=1)
@@ -36,9 +40,9 @@ class Resources:
 
     def __init__(
         self,
-        cores: int,
-        memory: int,
-        gpus: int,
+        cores: float | None = None,
+        memory: int | None = None,
+        gpus: int | None = None,
         **kwargs,
     ):
         self._cores = cores
@@ -71,7 +75,8 @@ class Resources:
         return json.dumps(self, cls=util.Encoder)
 
     def to_dict(self):
-        return {"cores": self._cores, "memory": self._memory, "gpus": self._gpus}
+        fields = {"cores": self._cores, "memory": self._memory, "gpus": self._gpus}
+        return {k: v for k, v in fields.items() if v is not None}
 
     @public
     @property
@@ -113,8 +118,8 @@ class ComponentResources(ABC):
 
     Parameters:
         num_instances: Deprecated. Use scaling configuration instead.
-        requests: Minimum resources to allocate for a deployment
-        limits: Maximum resources to allocate for a deployment
+        requests: Minimum resources to allocate for a deployment. Unset means the backend default.
+        limits: Maximum resources to allocate for a deployment. Unset means the backend default.
     """
 
     def __init__(
@@ -124,38 +129,13 @@ class ComponentResources(ABC):
         limits: Resources | dict | Default | None = None,
     ):
         self._num_instances = num_instances
-        self._requests = util._get_obj_from_json(requests, Resources) or Resources(
-            RESOURCES.MIN_CORES, RESOURCES.MIN_MEMORY, RESOURCES.GPUS
-        )
-        self._fill_missing_resources(
-            self._requests,
-            RESOURCES.MIN_CORES,
-            RESOURCES.MIN_MEMORY,
-            RESOURCES.GPUS,
-        )
-        self._limits = util._get_obj_from_json(limits, Resources) or Resources(
-            RESOURCES.MAX_CORES, RESOURCES.MAX_MEMORY, RESOURCES.GPUS
-        )
-        self._fill_missing_resources(
-            self._limits,
-            max(self._requests.cores, RESOURCES.MAX_CORES),
-            max(self._requests.memory, RESOURCES.MAX_MEMORY),
-            self._requests.gpus,
-        )
+        self._requests = util._get_obj_from_json(requests, Resources)
+        self._limits = util._get_obj_from_json(limits, Resources)
 
     @public
     def describe(self):
         """Print a JSON description of the resource configuration."""
         util._pretty_print(self)
-
-    @classmethod
-    def _fill_missing_resources(cls, resources, cores, memory, gpus):
-        if resources.cores is None:
-            resources.cores = cores
-        if resources.memory is None:
-            resources.memory = memory
-        if resources.gpus is None:
-            resources.gpus = gpus
 
     @classmethod
     def from_response_json(cls, json_dict):
@@ -206,6 +186,18 @@ class ComponentResources(ABC):
     def to_dict(self):
         pass
 
+    def _to_dict(self):
+        # A half the user left unset is omitted so the backend fills it.
+        resources = {}
+        if self._requests is not None:
+            resources["requests"] = self._requests.to_dict()
+        if self._limits is not None:
+            resources["limits"] = self._limits.to_dict()
+        return {
+            humps.camelize(self.NUM_INSTANCES_KEY): self._num_instances,
+            humps.camelize(self.RESOURCES_CONFIG_KEY): resources,
+        }
+
     @public
     @property
     def num_instances(self):
@@ -234,7 +226,7 @@ class ComponentResources(ABC):
 
     @requests.setter
     def requests(self, requests: Resources):
-        self._resources = requests
+        self._requests = requests
 
     @public
     @property
@@ -268,15 +260,7 @@ class PredictorResources(ComponentResources):
         return PredictorResources(**cls.extract_fields_from_json(json_decamelized))
 
     def to_dict(self):
-        return {
-            humps.camelize(self.NUM_INSTANCES_KEY): self._num_instances,
-            humps.camelize(self.RESOURCES_CONFIG_KEY): {
-                "requests": (
-                    self._requests.to_dict() if self._requests is not None else None
-                ),
-                "limits": self._limits.to_dict() if self._limits is not None else None,
-            },
-        }
+        return self._to_dict()
 
 
 @public
@@ -297,12 +281,4 @@ class TransformerResources(ComponentResources):
         return TransformerResources(**cls.extract_fields_from_json(json_decamelized))
 
     def to_dict(self):
-        return {
-            humps.camelize(self.NUM_INSTANCES_KEY): self._num_instances,
-            humps.camelize(self.RESOURCES_CONFIG_KEY): {
-                "requests": (
-                    self._requests.to_dict() if self._requests is not None else None
-                ),
-                "limits": self._limits.to_dict() if self._limits is not None else None,
-            },
-        }
+        return self._to_dict()

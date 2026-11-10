@@ -29,5 +29,235 @@
       "count": 0,
       "items": []
     }
+  },
+  "get_python_failed": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/umami-sync/executions/20074",
+      "id": 20074,
+      "submissionTime": "2026-10-19T02:00:01.000Z",
+      "state": "FAILED",
+      "stdoutPath": "/Projects/blah/Logs/Python/umami-sync/20074/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/Python/umami-sync/20074/stderr.log",
+      "hdfsUser": "blah__meb10000",
+      "args": "-start_time 2026-10-19T02:00:00Z",
+      "finalStatus": "FAILED",
+      "progress": 1.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 44006376,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {
+        "job": {}
+      },
+      "rerunCount": 0,
+      "logicalDate": "2026-10-18T02:00:00.000Z",
+      "dataIntervalEnd": "2026-10-19T02:00:00.000Z"
+    }
+  },
+  "get_python_finished": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/deal-win-scoring-data/executions/22652",
+      "id": 22652,
+      "submissionTime": "2026-10-20T01:00:02.000Z",
+      "state": "FINISHED",
+      "stdoutPath": "/Projects/blah/Logs/Python/deal-win-scoring-data/22652/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/Python/deal-win-scoring-data/22652/stderr.log",
+      "hdfsUser": "blah__meb10000",
+      "args": "--bundle Resources/deal-win-scoring/runs/data-backfill-1/bundle.tar.gz --mode backfill --from 2023-01-01T00:00:00Z --to 2026-10-08T13:34:00Z -start_time 2026-10-20T01:00:00Z",
+      "finalStatus": "SUCCEEDED",
+      "progress": 1.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 94329,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {},
+      "rerunCount": 0,
+      "logicalDate": "2026-10-19T01:00:00.000Z",
+      "dataIntervalEnd": "2026-10-20T01:00:00.000Z"
+    }
+  },
+  "get_app_running": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/hopsable-test-echo/executions/26723",
+      "id": 26723,
+      "submissionTime": "2026-10-20T12:20:31.000Z",
+      "state": "RUNNING",
+      "stdoutPath": "/Projects/blah/Logs/PythonApp/hopsable-test-echo/26723/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/PythonApp/hopsable-test-echo/26723/stderr.log",
+      "hdfsUser": "blah__hopsabl2",
+      "args": "",
+      "finalStatus": "UNDEFINED",
+      "progress": 0.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/15300"
+      },
+      "filesToRemove": [],
+      "duration": 1465883,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {
+        "appUrl": "/hopsworks-api/pythonapp/blah/hopsable-test-echo/"
+      },
+      "queued": 0,
+      "kubeMonitor": {},
+      "rerunCount": 0
+    }
+  },
+  "get_app_killed": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/deal_stage_history_w4app/executions/21640",
+      "id": 21640,
+      "submissionTime": "2026-10-19T19:52:05.000Z",
+      "state": "KILLED",
+      "stdoutPath": "/Projects/blah/Logs/PythonApp/deal_stage_history_w4app/21640/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/PythonApp/deal_stage_history_w4app/21640/stderr.log",
+      "hdfsUser": "blah__meb10000",
+      "args": "",
+      "finalStatus": "KILLED",
+      "progress": 0.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 43794816,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {},
+      "rerunCount": 0
+    }
+  },
+  "get_python_queued": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/umami-sync/executions/20074",
+      "id": 20074,
+      "submissionTime": "2026-10-19T02:00:01.000Z",
+      "state": "QUEUED",
+      "stdoutPath": "/Projects/blah/Logs/Python/umami-sync/20074/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/Python/umami-sync/20074/stderr.log",
+      "hdfsUser": "blah__meb10000",
+      "args": "-start_time 2026-10-19T02:00:00Z",
+      "finalStatus": "UNDEFINED",
+      "progress": 0.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 44006376,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {
+        "job": {
+          "name": "umami-sync-20074",
+          "namespace": "blah",
+          "activePods": 1,
+          "succeededPods": 0,
+          "failedPods": 0,
+          "events": {
+            "items": [
+              {
+                "type": "Normal",
+                "reason": "SuccessfulCreate",
+                "age": "40s",
+                "from": "job-controller",
+                "message": "Created pod: umami-sync-20074-x7k2p"
+              }
+            ]
+          },
+          "pods": {
+            "items": [
+              {
+                "name": "umami-sync-20074-x7k2p",
+                "status": "Pending",
+                "ready": false,
+                "lastCondition": {
+                  "type": "PodScheduled",
+                  "reason": "Unschedulable",
+                  "lastTransitionTime": "2026-10-20T12:39:09Z",
+                  "message": "0/6 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 5 Insufficient memory. preemption: 0/6 nodes are available: 1 Preemption is not helpful for scheduling, 5 No preemption victims found for incoming pod.",
+                  "age": "40s"
+                },
+                "events": {
+                  "items": [
+                    {
+                      "type": "Warning",
+                      "reason": "FailedScheduling",
+                      "age": "38s",
+                      "from": "default-scheduler",
+                      "message": "0/6 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 5 Insufficient memory. preemption: 0/6 nodes are available: 1 Preemption is not helpful for scheduling, 5 No preemption victims found for incoming pod."
+                    }
+                  ]
+                }
+              }
+            ],
+            "count": 1
+          }
+        }
+      },
+      "rerunCount": 0,
+      "logicalDate": "2026-10-18T02:00:00.000Z",
+      "dataIntervalEnd": "2026-10-19T02:00:00.000Z"
+    }
+  },
+  "get_python_running": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/acc-fuse-io/executions/26793",
+      "id": 26793,
+      "submissionTime": "2026-10-20T13:22:50.000Z",
+      "state": "RUNNING",
+      "stdoutPath": "/Projects/blah/Logs/Python/acc-fuse-io/26793/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/Python/acc-fuse-io/26793/stderr.log",
+      "hdfsUser": "blah__hopsabl2",
+      "args": "io",
+      "finalStatus": "UNDEFINED",
+      "progress": 0.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/15300"
+      },
+      "filesToRemove": [],
+      "duration": 466946,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {},
+      "rerunCount": 0
+    }
+  },
+  "get_spark_finished": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/umami_session_1_compute_stats/executions/16481",
+      "id": 16481,
+      "submissionTime": "2026-10-16T02:00:51.000Z",
+      "state": "FINISHED",
+      "stdoutPath": "/Projects/blah/Logs/PySpark/meb10000-2c573ab4-2eec-4f3e-a784-e66ec2f35770/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/PySpark/meb10000-2c573ab4-2eec-4f3e-a784-e66ec2f35770/stderr.log",
+      "appId": "meb10000-2c573ab4-2eec-4f3e-a784-e66ec2f35770",
+      "hdfsUser": "blah__meb10000",
+      "args": "-op run_fm -path hdfs:///Projects/blah/Resources/jobs/umami_session_1_compute_stats/config.json -end_commit_time 1792116049677",
+      "finalStatus": "SUCCEEDED",
+      "progress": 0.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 142593,
+      "resourceManager": "KUBERNETES",
+      "historyServerApplicationId": "spark-1bd25189758c4999b67574cb59755dbe",
+      "monitoring": {
+        "grafanaUrl": "grafana/d/spark/spark?var-applicationId=spark-1bd25189758c4999b67574cb59755dbe",
+        "sparkUrl": "sparkhistoryserver/https://sparkhistoryserver.service.consul:18080/history/spark-1bd25189758c4999b67574cb59755dbe"
+      },
+      "queued": 0,
+      "kubeMonitor": {},
+      "rerunCount": 0
+    }
   }
 }
