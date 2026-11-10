@@ -1609,7 +1609,11 @@ def _launch(a: Any, action: Any, verb: str, done: str, await_serving: bool) -> N
         state,
         "yes" if serving else "no",
     )
-    if url:
+    if output.JSON_MODE:
+        output.print_json(
+            {"name": name, "state": state, "serving": bool(serving), "url": url}
+        )
+    elif url:
         click.echo(url)
 
 

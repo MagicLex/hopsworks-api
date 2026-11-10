@@ -558,7 +558,7 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
     slug = target.name
     request = request or f"/hops-silver {slug}"
     if not launch or not shutil.which("claude"):
-        click.echo(
+        output.info(
             f"\nBuild it with:  cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
         )
         return
@@ -570,7 +570,7 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
             ["tmux", "new-window", "-n", slug, "-c", str(target), shlex.join(command)],
             check=True,
         )
-        click.echo(
+        output.info(
             f"\nBuilding in the tmux window '{slug}'; the Hopsworks UI shows its progress."
         )
         return
