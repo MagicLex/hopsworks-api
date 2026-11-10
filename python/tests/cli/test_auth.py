@@ -56,3 +56,13 @@ def test_sdk_prints_stay_off_stdout_only_in_json_mode(capsys):
         assert capsys.readouterr().out == "Launching job: x\n"
     finally:
         output.set_json_mode(False)
+
+
+def test_a_nested_quiet_keeps_the_outer_silence(capsys):
+    """An inner SDK call's quiet must not end the silence of the block around it."""
+    with auth.quiet():
+        with auth.quiet():
+            print("inner banner")
+        print("outer banner")
+    print("after")
+    assert capsys.readouterr().out == "after\n"
