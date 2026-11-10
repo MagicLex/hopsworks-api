@@ -87,13 +87,13 @@ Already known, no need to look again:
 | First word | Do |
 | --- | --- |
 | none | Ask "What do you want to do?": **Explore data**, **Make a table and look at it**, **Build or resume an ML system**, **A dashboard or an app** (then ask which); with a system listed above, **Resume <slug>** replaces **Explore data**, first and recommended, and runs `/hops-build <slug>`. Then continue with that choice below. |
-| `explore` | Explore (below). |
-| an instruction to make something outside an ML system (a table, features, a model or candidates, scoring, a real-time endpoint for a model, a dashboard, an app, an agent, a notebook, an analytics layer), alone or several together | Pieces (below), whatever its first word. |
+| `explore`, or a look or a question ("show", "list", "what is in", "how many") | Explore (below). |
+| an instruction to make or change something outside an ML system (a table, features, a model input, a training dataset, a change of a feature group, a model or candidates, scoring, a real-time endpoint for a model, a dashboard, an app, an agent, a notebook, an analytics layer), alone or several together, and not a request for an ML system or an FTI pipeline | Pieces (below), whatever its first word. |
 | `dashboard` | Dashboard (below), with the rest as the instruction. |
 | `app` | App (below), with the rest as the instruction. |
 | `agent` | Agent (below), with the rest as the instruction. |
 | `status` | Status (below). |
-| `ml` | Run the interview: invoke the `hops-ml` command with the Skill tool, passing the rest as its arguments, and follow it. |
+| `ml`, or a request for an ML system or an FTI pipeline | Run the interview: invoke the `hops-ml` command with the Skill tool, passing the rest as its arguments, and follow it. |
 | `reqs`, `data`, `features`, `train`, `infer`, `verify`, `stop`, `f`, `t`, `i`, with an ML system listed above | Reply with one line: building and running phases is `/hops-build` (for example `/hops-build train`, `/hops-build verify`), and stop. Without a system, `features`, `train` and `infer` are Pieces (below). |
 
 Choosing **Build or resume an ML system** from the menu runs the interview the same way. When the
@@ -105,7 +105,7 @@ Read-only. Run what the user's words need: `hops fg list`, `hops fv list`, `hops
 list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>`,
 `hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT` (not for an external feature group: preview it). `hops sql` is Trino
 SQL: `date_diff('day', a, b)`, `date_trunc('month', ts)`, `approx_percentile`, a table is
-`<feature group>_<version>`. Summarise in a few lines and make the next-step offer (Rules) with
+`<feature group>_<version>`. Summarise in a few lines and make the next-step offer (Rules; over a listing, the offer is about the listed tables as a whole) with
 `AskUserQuestion` (a data pipeline over it, a notebook over it, a dashboard or an ML system over
 it), the one the user's words point to marked "(Recommended)".
 
@@ -117,10 +117,13 @@ is the whole dispatch:
 | Piece | Needs | Makes | Exit check | Builder |
 | --- | --- | --- | --- | --- |
 | table | nothing (generated rows), or a table of a data source (mounted, the user keeps it) | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row | **hops-data-builder** |
-| features | feature groups with rows, or a data source | feature group `<f>` with rows, job `<f>-features` | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
+| features | feature groups with rows (a mounted one counts), or a data source | feature group `<f>` with rows, job `<f>-features` only on a schedule | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
 | model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>`; a model the user names is made, whatever its view | **hops-model-builder** |
 | inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
 | deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, `hops deployment predict <d>` for a known entity returns a prediction, and `hops deployment info <d> --stable 60` passes | **hops-deploy-builder** |
+| model input | feature groups with rows and the key that joins them (the label too, when the request names one) | feature view `<v>` | `hops fv info <v>` shows its feature groups | you, no builder: a view of the project that already reads those feature groups is reused: say so in one line and ask only whether to make another one beside it (reusing it marked "(Recommended)"), unless the request names the new view: then make it. Otherwise `hops fv create` as the **hops-fv** skill says |
+| training dataset | feature view `<v>` | a training dataset version of `<v>`, split as the request says | `hops td list <v>` shows the new version | you, no builder: `hops td compute` as the **hops-fv** skill says (it splits by fractions; a split by time goes through the SDK as that skill's time split says) |
+| change of a feature group | feature group `<t>` the user has: a column to add, online on, or a refresh on a schedule | the change on `<t>` itself, never a copy | column: `hops fg feature list <t>` shows it; online: `hops fg preview <t> --online --limit 1` prints a row; refresh: `hops job info <t>-refresh` shows the schedule | you, in this order: `hops fg info <t>`; then ask_user to confirm the change by `<t>`'s name, always and before any other step, a connect included; only on yes: for a refresh from a data source that is not connected yet, connect it (Connecting a source), then: A column: `hops fg feature add`, then fill it as `hops skills info hops-fg references/changes.md` says. Online: `hops fg update <t> --version <n> --online`. A refresh: a mounted (external) group reads its source live, so say that and stop; otherwise **hops-features-builder** with `name: <t>`, `existing: yes`, the schedule, and as source the one the request names, else the one `hops fg info <t>` shows (none shown: ask it as an open question). A backfill is that job's first run. |
 | dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
 | app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (App below) |
 | agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, its chat app `<a>_chat`, and evaluation suite `<a>` with one run | one question the data answers gets an answer whose trace has a tool call, `hops app info <a>_chat` shows `State` `RUNNING`, and the suite's run has a pass rate | **hops-agent-builder** (Agent below) |
@@ -135,14 +138,14 @@ is the whole dispatch:
    per key of the label table: its primary key is that key plus another column (`customer_id,week`),
    or it has its own key and carries that key as a column (`ticket_id` with `customer_id`). The
    features piece turns each such table into one row per key (counts, averages, last values, a
-   trend); the model piece then trains on a view joining the label table to it. "Serve",
-   "real-time", "an endpoint" or "an API for predictions" is the deployment piece; "score daily"
+   trend); the model piece then trains on a view joining the label table to it. A deployment of a model the project lacks runs: the model piece (its builder makes the training dataset), then the deployment piece, whose builder stops on each offline feature group the view reads for the online ask below; `hops model list` shows what models exist. "Serve",
+   "deploy" (a model), "real-time", "an endpoint" or "an API for predictions" is the deployment piece; "score daily"
    or "in batch" is inference. "Score", "rank" or "the chance of" an outcome over connected data
    (a CRM, a database, a feature group), with no model named, is not a piece: run `hops score` as
    the **hops-score** skill says. "An agent", "a chatbot", "an assistant", "a chat over my data" or a
    chat UI to talk to the data is the agent piece, never an app that calls a model itself: the
    agent piece is traced and evaluated.
-2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
+2. **Run what is missing, in needs order.** For each piece, run its exit check (a change of a feature group runs `hops fg info <t>` first, as its row says; a new dashboard has no title to check yet and goes straight to Dashboard below), unless the turn's
    inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
    `not listed`, not a count alone), the piece is not among them, and no earlier step of this
    turn made or touched it. Passing: the piece exists; say so in one line and go on. Failing or
@@ -182,8 +185,8 @@ no copy of the group.
 
 For a model, read the label from the data rather than asking: the column the request names or
 implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the
-choice in one line ("Predicting `status`, the order outcome") and go on. "Train X", "an
-experiment (run)" or "compare models" without names is `candidates: 3`; asked while this system
+choice in one line ("Predicting `status`, the order outcome") and go on. "Train X", "train a model", "an
+experiment (run)" or "compare models" without names, or a model made only to be deployed or scored, is `candidates: 3`; asked while this system
 builds a notebook, it is Notebook step 5, in that notebook. "Show the experiments" or "the runs"
 of a model the project has is a read: `hops model runs <m>`, never a new sweep. "A (training)
 pipeline" is the model piece with `job: yes`; "run it" afterwards is `hops job run <m>-train
@@ -192,9 +195,9 @@ columns fit the request equally.
 
 | Builder | Prompt |
 | --- | --- |
-| hops-data-builder | `name`, `rows` (10000 unless the user said), `columns` (name and type, one per line), `story` (what the question should find), `source` (`synthetic` or a data source) |
-| hops-features-builder | `name`, `sources` (feature groups or a data source), `features` (name, meaning, type), `grain` (the key and the event time), `schedule` (a Quartz cron, or none) |
-| hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, or none), `metric`, `job` (`yes` when the user asks for a pipeline, a job or a schedule, else `no`) |
+| hops-data-builder | `name`, `rows` (10000 unless the user said), `columns` (name and type, one per line), `story` (what the question should find), `source` (`synthetic` or a data source); for a mount of a data source's table, only `name`, `source` and the table |
+| hops-features-builder | `name`, `sources` (feature groups or a data source), `features` (name, meaning, type), `grain` (the key and the event time), `schedule` (a Quartz cron: daily `0 0 0 * * ?`, hourly `0 0 * * * ?`; or none), `existing` (`yes` for a refresh of a group the user confirmed: the job is then `<name>-refresh` and `features` is none; else `no`) |
+| hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, else as the model rules above say), `metric`, `job` (`yes` when the user asks for a pipeline, a job or a schedule, else `no`), `training_dataset` (the version a training dataset piece of this turn made, or none) |
 | hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `population` (the entities to score, such as open deals, and the feature group that lists them), `schedule` |
 | hops-deploy-builder | `name` (the deployment, a letter first, then letters and digits), `model` (name:version, or the best by a metric), `feature_view` (name:version), `passed_features` (sent by the caller instead of looked up, or none), `known_entity` (a key to check with, or none), `cores` and `memory` (1 and 1024 unless the user said) |
 | hops-agent-builder | the prompt in Agent (below) |
