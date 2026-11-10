@@ -777,6 +777,11 @@ def test_silver_and_gold_share_one_analytics_repository(tmp_path, monkeypatch):
     assert (repo / ".git").is_dir() and not (repo / "sales-gold" / ".git").exists()
     found = CliRunner().invoke(cli, ["factory", "system", "dir", "sales-gold"])
     assert found.exit_code == 0 and found.output.strip() == str(repo / "sales-gold")
+    found = CliRunner().invoke(
+        cli, ["--json", "factory", "system", "dir", "sales-gold"]
+    )
+    assert found.exit_code == 0
+    assert json.loads(found.output) == {"path": str(repo / "sales-gold")}
 
 
 def test_a_layer_can_name_its_repository(tmp_path, monkeypatch):
