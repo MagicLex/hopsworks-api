@@ -174,7 +174,7 @@ def test_every_next_step_offer_has_a_data_pipeline_and_a_notebook():
     assert "**Explore it in a notebook**" in rules
     # Explore and Pieces offer through that rule, with no list of their own.
     text = " ".join(text.split())
-    assert text.count("next-step offer (Rules)") == 2
+    assert text.count("next-step offer (Rules") == 2
     assert "offer the next step" not in text
 
 
@@ -2304,3 +2304,14 @@ def test_no_next_step_offer_holds_an_app():
     assert "an app or an ML system over it" not in text
     assert "a dashboard or an app over it, or the whole ML system" not in text
     assert "or an app the request did not name is offered" not in text
+
+
+def test_a_score_request_asks_kumo_first_and_an_app_reads_its_current_run():
+    text = " ".join((TEMPLATES / "hops.md").read_text(encoding="utf-8").split())
+    pieces = text.split("## Pieces", 1)[1].split("## ", 1)[0]
+    kumo = pieces.index("**Kumo-Relational (Recommended)**")
+    assert kumo < pieces.index("**Train models**")
+    assert "an app that shows them included" in pieces
+    app = text.split("## App", 1)[1].split("## ", 1)[0]
+    assert "asks how to score first" in app
+    assert "`<name>_scores` rows of the current run" in app

@@ -141,8 +141,12 @@ is the whole dispatch:
    trend); the model piece then trains on a view joining the label table to it. A deployment of a model the project lacks runs: the model piece (its builder makes the training dataset), then the deployment piece, whose builder stops on each offline feature group the view reads for the online ask below; `hops model list` shows what models exist. "Serve",
    "deploy" (a model), "real-time", "an endpoint" or "an API for predictions" is the deployment piece; "score daily"
    or "in batch" is inference. "Score", "rank" or "the chance of" an outcome over connected data
-   (a CRM, a database, a feature group), with no model named, is not a piece: run `hops score` as
-   the **hops-score** skill says. "An agent", "a chatbot", "an assistant", "a chat over my data" or a
+   (a CRM, a database, a feature group), with no model named, an app that shows them included, is
+   not a piece: ask with `AskUserQuestion` how to score, in this order: **Kumo-Relational
+   (Recommended)**, a pretrained model that scores the rows in minutes with nothing trained (an
+   external group is ingested first); **Train models**, tracked candidates, slower, for a model to
+   deploy or a what-if score on edited values. Kumo runs `hops score` as the **hops-score** skill
+   says; train models is the model piece. "An agent", "a chatbot", "an assistant", "a chat over my data" or a
    chat UI to talk to the data is the agent piece, never an app that calls a model itself: the
    agent piece is traced and evaluated.
 2. **Run what is missing, in needs order.** For each piece, run its exit check (a change of a feature group runs `hops fg info <t>` first, as its row says; a new dashboard has no title to check yet and goes straight to Dashboard below), unless the turn's
@@ -295,6 +299,10 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    otherwise a new app. With several candidates, ask which.
 2. **Create.** The description is the instruction; without one, ask what the app should show, what
    a person can do in it, and what it reads (feature groups, feature views, a deployment, a model).
+   An app that shows scores, ranks or the chance of an outcome, with no model named, asks how to
+   score first (Pieces, step 1). On Kumo, `hops score <name>` runs before the app, which reads
+   `<name>_scores` rows of the current run (the `run_id` of the newest `<name>_score_runs` row, as
+   the **hops-score** skill reads it) and trains nothing.
    Ask the name, proposing a slug from the description. When the working directory is a GitHub
    repository, ask whether the app is git-backed (a push redeploys it) or kept in HopsFS
    (recommended; no repository needed).
