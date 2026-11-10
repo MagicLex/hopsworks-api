@@ -80,6 +80,18 @@ def _silver(tmp_path, monkeypatch, answers, registered):
     return _create(monkeypatch, "silver", path, "--no-launch")
 
 
+def test_silver_json_keeps_stdout_free_of_the_build_hint(tmp_path, monkeypatch):
+    path = tmp_path / "answers.json"
+    path.write_text(json.dumps(ANSWERS), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        mlsystem, "register", lambda ctx, target, name=None, factory=None: {}
+    )
+    done = _create(monkeypatch, "silver", path, "--no-launch", "--json")
+    assert done.exit_code == 0, done.output
+    assert done.stdout.strip() == ""
+
+
 def test_silver_records_the_layer_from_the_answers_and_registers_it(
     tmp_path, monkeypatch
 ):
