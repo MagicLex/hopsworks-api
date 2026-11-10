@@ -787,13 +787,16 @@ def app_deploy(
             )
             apps._set_app_files(name, app_path, files_sha256)
             output.success("✓ Created app %s", name)
-            a.run(await_serving=False)
+            with output.sdk_quiet():
+                a.run(await_serving=False)
         elif _app_is_running(existing):
             previous = getattr(existing, "execution_id", None)
-            existing.redeploy(await_serving=False)
+            with output.sdk_quiet():
+                existing.redeploy(await_serving=False)
         else:
             previous = getattr(existing, "execution_id", None)
-            existing.run(await_serving=False)
+            with output.sdk_quiet():
+                existing.run(await_serving=False)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not start app '{name}': {exc}") from exc
 

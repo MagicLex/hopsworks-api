@@ -245,7 +245,8 @@ def job_create(
     if description:
         config["description"] = description
     try:
-        job = api.create_job(name=name, config=config)
+        with output.sdk_quiet():
+            job = api.create_job(name=name, config=config)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not create job: {exc}") from exc
     output.success("✓ Created job %s", getattr(job, "name", name))
@@ -345,7 +346,9 @@ def job_deploy(
             existing = api.get_job(name)
         except Exception as exc:  # noqa: BLE001
             if not versions.not_found(exc):  # JOB_NOT_FOUND is a 404
-                raise click.ClickException(f"Could not check job '{name}': {exc}") from exc
+                raise click.ClickException(
+                    f"Could not check job '{name}': {exc}"
+                ) from exc
             existing = None
         if existing is not None:
             raise click.ClickException(
@@ -381,7 +384,8 @@ def job_deploy(
 
     # 3. Create or update the job.
     try:
-        job = api.create_job(name=name, config=config)
+        with output.sdk_quiet():
+            job = api.create_job(name=name, config=config)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not deploy job: {exc}") from exc
     output.success("✓ Deployed job %s (env=%s)", name, environment or "default")
@@ -416,7 +420,8 @@ def _run(
 ) -> Any:
     """Run `job` once, report it, and on a failed wait print its log tails and exit non-zero."""
     try:
-        execution = job.run(await_termination=False, **run_args)
+        with output.sdk_quiet():
+            execution = job.run(await_termination=False, **run_args)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not {verb} job '{name}': {exc}") from exc
     if wait and execution is not None:
@@ -1278,8 +1283,9 @@ def job_update(ctx: click.Context, name: str, description: str) -> None:
     """
     job = _get_job(ctx, name)
     try:
-        job.description = description
-        job.save()
+        with output.sdk_quiet():
+            job.description = description
+            job.save()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not update description: {exc}") from exc
     output.success("✓ Updated description of %s", name)
