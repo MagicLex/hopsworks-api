@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -142,10 +143,21 @@ def _wait(project, job_name: str, execution_id: int) -> object:
         time.sleep(5)
 
 
+#: A refused start says "retry after N s" (HTTP 429): the platform class's start rate, and each instance
+#: process's own bucket, which is empty when that process starts.
+RATE_RETRIES = 3
+
+
 def _build(project, source_name: str, name: str) -> dict:
-    started = _hops_json(
-        "fg", "embed", source_name, "--text", "body", "--to", name, *ENV_ARGS
-    )
+    args = ("fg", "embed", source_name, "--text", "body", "--to", name, *ENV_ARGS)
+    for _ in range(RATE_RETRIES):
+        result = _hops("--json", *args)
+        wait = re.search(r"retry after (\d+) s", result.stderr)
+        if result.returncode == 0 or wait is None:
+            break
+        time.sleep(int(wait.group(1)) + 1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    started = json.loads(result.stdout)
     execution = _wait(project, started["job"], started["execution"])
     assert execution.final_status == "SUCCEEDED", execution
     return started
