@@ -65,6 +65,7 @@ class HopsConfig:
     internal: bool = False
     hostname_verification: bool = False
     hostname_verification_explicit: bool = False
+    api_key_source: str | None = None
 
     def mode(self) -> str:
         """Describe which auth mode the CLI is operating in.
@@ -215,7 +216,7 @@ def load(
         project_id = os.environ.get("HOPSWORKS_PROJECT_ID")
         if project_id and project_id.isdigit():
             cfg.project_id = int(project_id)
-        return _apply_overrides(
+        return apply_overrides(
             cfg, flag_host, flag_api_key, flag_project, flag_hostname_verification
         )
 
@@ -224,6 +225,8 @@ def load(
     if isinstance(file_data, dict):
         cfg.host = file_data.get("host") or None
         cfg.api_key = file_data.get("api_key") or None
+        if cfg.api_key:
+            cfg.api_key_source = f"{CONFIG_PATH} (profile {profile})"
         cfg.api_key_name = file_data.get("api_key_name") or None
         cfg.project = file_data.get("project") or None
         cfg.project_id = file_data.get("project_id")
@@ -241,28 +244,36 @@ def load(
         cfg.host = env_host
     if env_api_key:
         cfg.api_key = env_api_key
+        cfg.api_key_source = "HOPSWORKS_API_KEY"
     if env_project:
+        if env_project != cfg.project:
+            cfg.project_id = None
         cfg.project = env_project
     if env_project_id and env_project_id.isdigit():
         cfg.project_id = int(env_project_id)
 
-    return _apply_overrides(
+    return apply_overrides(
         cfg, flag_host, flag_api_key, flag_project, flag_hostname_verification
     )
 
 
-def _apply_overrides(
+def apply_overrides(
     cfg: HopsConfig,
     flag_host: str | None,
     flag_api_key: str | None,
     flag_project: str | None,
     flag_hostname_verification: bool | None = None,
 ) -> HopsConfig:
+    """Apply flag values over ``cfg``, which already holds the file and env values."""
     if flag_host:
         cfg.host = flag_host
     if flag_api_key:
         cfg.api_key = flag_api_key
+        cfg.api_key_source = "--api-key"
     if flag_project:
+        # The stored id belongs to the stored project, not to another name.
+        if flag_project != cfg.project:
+            cfg.project_id = None
         cfg.project = flag_project
     # Hostname verification precedence: CLI flag > HOPSWORKS_HOSTNAME_VERIFICATION
     # env var > saved file value > default (off).

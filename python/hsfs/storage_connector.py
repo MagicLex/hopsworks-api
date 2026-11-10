@@ -83,6 +83,7 @@ class StorageConnector(ABC):
     OPENSEARCH = "OPENSEARCH"
     CRM = "CRM"
     GOOGLE_SHEETS = "GOOGLE_SHEETS"
+    GOOGLE_DRIVE = "GOOGLE_DRIVE"
     REST = "REST"
     ORACLE = "ORACLE"
     CLICKHOUSE = "CLICKHOUSE"
@@ -114,6 +115,7 @@ class StorageConnector(ABC):
         ELASTICSEARCH: "featurestoreElasticsearchConnectorDTO",
         CRM: "featurestoreCRMConnectorDTO",
         GOOGLE_SHEETS: "featurestoreGoogleSheetsConnectorDTO",
+        GOOGLE_DRIVE: "featurestoreGoogleDriveConnectorDTO",
         UNITY_CATALOG: "featurestoreUnityCatalogConnectorDTO",
         REST: "featurestoreRESTConnectorDTO",
     }
@@ -4910,6 +4912,7 @@ class CRMSource(Enum):
     FRESHDESK = "freshdesk"
     GOOGLE_ADS = "google_ads"
     GOOGLE_ANALYTICS = "google_analytics"
+    SHOPIFY = "shopify"
 
 
 class CRMAndAnalyticsConnector(StorageConnector):
@@ -4936,6 +4939,10 @@ class CRMAndAnalyticsConnector(StorageConnector):
         refresh_token: str | None = None,
         headers: dict[str, Any] | None = None,
         parameters: dict[str, Any] | None = None,
+        shop_url: str | None = None,
+        private_app_password: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(id, name, description, featurestore_id)
@@ -4953,6 +4960,10 @@ class CRMAndAnalyticsConnector(StorageConnector):
         self._refresh_token = refresh_token
         self._headers = headers or {}
         self._parameters = parameters or {}
+        self._shop_url = shop_url
+        self._private_app_password = private_app_password
+        self._client_id = client_id
+        self._client_secret = client_secret
 
     @property
     def api_key(self):
@@ -5012,6 +5023,26 @@ class CRMAndAnalyticsConnector(StorageConnector):
         """Additional parameters."""
         return self._parameters
 
+    @property
+    def shop_url(self):
+        """Shop URL, for Shopify."""
+        return self._shop_url
+
+    @property
+    def private_app_password(self):
+        """Private app password, for Shopify."""
+        return self._private_app_password
+
+    @property
+    def client_id(self):
+        """App client ID, for Shopify's client-credentials grant."""
+        return self._client_id
+
+    @property
+    def client_secret(self):
+        """App client secret, for Shopify's client-credentials grant."""
+        return self._client_secret
+
     def to_dict(self) -> dict[str, Any]:
         payload = super().to_dict()
         payload.update(
@@ -5032,6 +5063,10 @@ class CRMAndAnalyticsConnector(StorageConnector):
                 "refreshToken": self._refresh_token,
                 "headers": self._headers,
                 "parameters": self._parameters,
+                "shopUrl": self._shop_url,
+                "privateAppPassword": self._private_app_password,
+                "clientId": self._client_id,
+                "clientSecret": self._client_secret,
             }
         )
         return payload
@@ -6177,6 +6212,28 @@ class GlueConnector(StorageConnector):
 
 
 @public
+class GoogleDriveConnector(StorageConnector):
+    """A Google Drive data source linked to a Google sign-in.
+
+    Hopsworks copies the picked files into a project dataset itself and holds the Google token, so the connector carries no credential.
+    """
+
+    type = StorageConnector.GOOGLE_DRIVE
+
+    def __init__(
+        self,
+        id: int | None,
+        name: str,
+        featurestore_id: int,
+        description: str | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(id, name, description, featurestore_id)
+
+    def spark_options(self) -> dict[str, Any]:
+        return {}
+
+
 class GoogleSheetsConnector(StorageConnector):
     """A Google Sheets storage connector authenticated by a GCP service-account keyfile.
 

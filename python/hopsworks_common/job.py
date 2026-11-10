@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import humps
 from hopsworks_apigen import public
-from hopsworks_common import alert, client, tag, usage, util
+from hopsworks_common import alert, client, events, tag, usage, util
 from hopsworks_common.client.exceptions import JobException
 from hopsworks_common.core import alerts_api, execution_api, job_api
 from hopsworks_common.engine import execution_engine
@@ -177,6 +177,9 @@ class Job:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "execution", "create", key=lambda self, *a, **k: {"name": self.name}
+    )
     def run(
         self,
         args: str | None = None,
@@ -273,6 +276,16 @@ class Job:
             end_time=end_time,
             logical_date=logical_date,
             env_vars=env_vars,
+        )
+        # Started only once Hopsworks took the run: its line names the execution, which the web
+        # follows. A line written before the submission could only guess which run is this one.
+        events.note(execution=execution.id)
+        events.emit(
+            "execution",
+            "create",
+            "started",
+            name=self.name,
+            detail={"execution": execution.id},
         )
         if self._job_type == "PYTHON_APP":
             print("Python App started, waiting for it to become ready...")
