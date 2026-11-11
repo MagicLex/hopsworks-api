@@ -86,7 +86,7 @@ def test_https_remote_non_interactive_without_token_skips(monkeypatch, capsys):
         git_sync, "_repo_state", lambda: _state("https://github.com/org/repo.git")
     )
     monkeypatch.setattr(git_sync, "_prefs", lambda: {"answer": "always"})
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: True)
     monkeypatch.setattr(git_sync.git_cmd, "find_provider", lambda p, h: None)
     assert git_sync.maybe_collect(object(), "Users/lex") is None
     assert "no GitHub token registered for github.com" in capsys.readouterr().err
@@ -138,7 +138,7 @@ def test_token_method_rewrites_remotes_to_https_and_ships_no_key(monkeypatch):
     monkeypatch.setattr(
         git_sync, "_prefs", lambda: {"answer": "always", "method": "token"}
     )
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: True)
     monkeypatch.setattr(
         git_sync.git_cmd,
         "find_provider",
@@ -168,7 +168,7 @@ def test_https_remote_registers_token_interactively(monkeypatch):
         git_sync, "_repo_state", lambda: _state("https://github.com/org/repo.git")
     )
     monkeypatch.setattr(git_sync, "_prefs", lambda: {"answer": "always"})
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: False)
     monkeypatch.setattr(git_sync.git_cmd, "find_provider", lambda p, h: None)
     registered = []
     monkeypatch.setattr(
@@ -191,7 +191,7 @@ def test_https_remote_registers_token_interactively(monkeypatch):
 def test_new_key_method_generates_stages_and_offers_gh(monkeypatch, tmp_path):
     monkeypatch.setattr(git_sync, "_repo_state", lambda: _state())
     monkeypatch.setattr(git_sync, "_prefs", lambda: {"answer": "always"})
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: False)
     monkeypatch.setattr(git_sync.Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(git_sync, "_can_generate_key", lambda: True)
     # menu: choose [2] a new key
@@ -230,7 +230,7 @@ def test_never_preference_skips_without_prompt(monkeypatch):
 def test_non_interactive_without_always_skips(monkeypatch):
     monkeypatch.setattr(git_sync, "_repo_state", lambda: _state())
     monkeypatch.setattr(git_sync, "_prefs", dict)
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: True)
     assert git_sync.maybe_collect(object(), "Users/lex") is None
 
 
@@ -245,7 +245,7 @@ def test_consent_default_is_always(monkeypatch):
 
     monkeypatch.setattr(git_sync, "_repo_state", lambda: _state())
     monkeypatch.setattr(git_sync, "_prefs", dict)
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: False)
     monkeypatch.setattr(git_sync.output, "JSON_MODE", False)
     monkeypatch.setattr(git_sync.click, "prompt", fake_prompt)
     monkeypatch.setattr(git_sync, "_save_prefs", lambda **kw: saved.update(kw))
@@ -316,7 +316,7 @@ def test_missing_key_file_skips(monkeypatch, tmp_path):
         lambda: {"answer": "always", "key_file": str(tmp_path / "absent")},
     )
     monkeypatch.setattr(git_sync, "_default_key", lambda host: tmp_path / "also-absent")
-    monkeypatch.setattr(git_sync.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(git_sync.output, "no_input", lambda: True)
     assert git_sync.maybe_collect(object(), "Users/lex") is None
 
 
@@ -357,6 +357,9 @@ def test_stage_key_uploads_key_and_pub_when_absent(tmp_path, monkeypatch):
 
         def list(self, path):
             return []
+
+        def exists(self, path):
+            return True
 
         def mkdir(self, path):
             pass

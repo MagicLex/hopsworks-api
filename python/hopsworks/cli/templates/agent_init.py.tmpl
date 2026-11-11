@@ -1,0 +1,142 @@
+"""@@NAME_TEXT@@: an agent over @@TABLES@@.
+
+Written by `hops agent init`. Edit SYSTEM_PROMPT, the suggested prompts and the
+tools, then deploy it as the hint `hops agent init` printed shows.
+"""
+
+import asyncio
+import json
+import os
+import re
+
+import hopsworks
+from anthropic import Anthropic
+from hopsworks_agents.protocol import AgentApp, AgentError
+from opentelemetry import trace
+@@IMPORTS@@
+@@PRICE_COMMENT@@
+MODEL = os.environ.get("AGENT_MODEL", @@MODEL@@)
+KEY_SECRET = @@KEY_SECRET@@
+MAX_ROWS = 50
+MAX_STEPS = 8
+
+SYSTEM_PROMPT = @@SYSTEM_PROMPT@@
+
+tracer = trace.get_tracer(@@NAME@@)
+
+agent_app = AgentApp(
+    name=@@NAME@@,
+    description=@@DESCRIPTION@@,
+    framework="custom",
+    tool_events=True,
+    welcome_message="Ask me about the data.",
+    # Placeholders from the first rows: replace them with questions the data answers.
+    suggested_prompts=@@PROMPTS@@,
+)
+
+# One login, one feature store handle, one key read, all at start.
+project = hopsworks.login()
+fs = project.get_feature_store()
+SCHEMA = fs.name.lower()
+client = Anthropic(api_key=hopsworks.get_secrets_api().get(KEY_SECRET))
+
+
+def trace_tool(name, args, fn):
+    with tracer.start_as_current_span(
+        name,
+        attributes={
+            "openinference.span.kind": "TOOL",
+            "tool.name": name,
+            "input.value": json.dumps(args),
+        },
+    ) as span:
+        result = fn(**args)
+        span.set_attribute("output.value", json.dumps(result, default=str))
+        return result
+
+
+def run_sql(sql, table):
+    """One SELECT on `table`, at most MAX_ROWS rows back."""
+    statement = sql.strip().rstrip(";")
+    if not re.match(r"(?is)^select\b", statement) or ";" in statement:
+        raise ValueError("Send one SELECT statement.")
+    if table not in statement:
+        raise ValueError(f"The query must read {table}.")
+    conn = project.get_trino_api().connect(catalog="delta", schema=SCHEMA)
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM ({statement}) LIMIT {MAX_ROWS}")
+        columns = [c[0] for c in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchmany(MAX_ROWS)]
+    finally:
+        conn.close()
+
+
+def lookup(fg, keys, casts):
+    """The rows of `fg` whose primary key equals `keys`, from the online store."""
+    query = fg.select_all()
+    for column, cast in casts.items():
+        # get_feature: attribute access would return the group's own `id`, `name` or `version`.
+        query = query.filter(fg.get_feature(column) == cast(keys[column]))
+    return query.read(online=True).head(MAX_ROWS).to_dict(orient="records")
+@@TOOL_CODE@@
+
+TOOLS = @@TOOL_SCHEMAS@@
+HANDLERS = @@TOOL_HANDLERS@@
+
+
+def call_model(messages):
+    with tracer.start_as_current_span(
+        "llm",
+        attributes={"openinference.span.kind": "LLM", "llm.model_name": MODEL},
+    ) as span:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
+        )
+        span.set_attribute("llm.token_count.prompt", response.usage.input_tokens)
+        span.set_attribute("llm.token_count.completion", response.usage.output_tokens)
+    return response
+
+
+def run_turn(messages):
+    for _ in range(MAX_STEPS):
+        response = call_model(messages)
+        if response.stop_reason != "tool_use":
+            return "".join(b.text for b in response.content if b.type == "text")
+        messages.append({"role": "assistant", "content": response.content})
+        results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            try:
+                out = trace_tool(block.name, block.input, HANDLERS[block.name])
+                is_error = False
+            except Exception as exc:  # the model reads the error and retries
+                out, is_error = {"error": str(exc)}, True
+            results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(out, default=str),
+                    "is_error": is_error,
+                }
+            )
+        messages.append({"role": "user", "content": results})
+    return "I could not finish within the tool limit. Ask a narrower question."
+
+
+@agent_app.chat
+async def chat(request, ctx):
+    if not request.text:
+        raise AgentError("The message cannot be empty.", status_code=400)
+    return await asyncio.to_thread(run_turn, request.to_framework_messages())
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(agent_app, host="0.0.0.0", port=8080)

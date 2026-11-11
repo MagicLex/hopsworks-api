@@ -24,6 +24,10 @@ from typing import TYPE_CHECKING, Any
 import click
 from click.core import ParameterSource
 from hopsworks.cli import output, session
+from hopsworks.cli.commands import fg as fg_cmd
+from hopsworks.cli.commands.files import makedirs
+from hopsworks.cli.redact import redact
+from hopsworks_common import util
 
 
 if TYPE_CHECKING:
@@ -32,7 +36,7 @@ if TYPE_CHECKING:
 
 @click.group("datasource")
 def datasource_group() -> None:
-    """Data source (storage connector) commands."""
+    """Data sources: connections to external storage."""
 
 
 @datasource_group.command("list")
@@ -40,6 +44,7 @@ def datasource_group() -> None:
 def connector_list(ctx: click.Context) -> None:
     """List all storage connectors in the active project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -53,10 +58,74 @@ def connector_list(ctx: click.Context) -> None:
                 c.get("name", "?"),
                 c.get("storageConnectorType", c.get("connectorType", "?")),
                 _credentials_label(c),
+                _state(c)[0],
                 output.first_line(c.get("description"), empty=""),
             ]
         )
-    output.print_table(["ID", "NAME", "TYPE", "CREDENTIALS", "DESCRIPTION"], rows)
+    output.print_table(
+        ["ID", "NAME", "TYPE", "CREDENTIALS", "STATE", "DESCRIPTION"], rows
+    )
+
+
+def _state(connector: dict[str, Any]) -> tuple[str, str]:
+    """The source's state as its owner last told Hopsworks, and Hopsworks' message.
+
+    The trust link of an S3 or Redshift source, the service account impersonation of a
+    BigQuery source, the OAuth grant of a CRM or Google source. "-" for a type Hopsworks
+    keeps no state for.
+    """
+    link = connector.get("trustLink") or {}
+    for state, message in (
+        (link.get("state"), link.get("message")),
+        (connector.get("impersonateState"), connector.get("impersonateMessage")),
+        (connector.get("oauthState"), None),
+    ):
+        if state:
+            return str(state), message or ""
+    return "-", ""
+
+
+def _connector_path(fs: Any, name: str) -> list[Any]:
+    from hopsworks_common.core import rest
+
+    return rest._project_path(
+        "featurestores", getattr(fs, "id", None), "storageconnectors", name
+    )
+
+
+def _get_connector(fs: Any, name: str) -> dict[str, Any]:
+    from hopsworks_common.core import rest
+
+    try:
+        return rest._send_request("GET", _connector_path(fs, name))
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not read data source '{name}': {exc}"
+        ) from exc
+
+
+def _groups_on(fs: Any, connector_id: int) -> list[str]:
+    """The feature groups Hopsworks deletes with the source: every one made from it."""
+    from hopsworks_common.core import rest
+
+    try:
+        payload = rest._send_request(
+            "GET",
+            rest._project_path(
+                "featurestores", getattr(fs, "id", None), "featuregroups"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not list the feature groups made from it: {exc}"
+        ) from exc
+    items = payload if isinstance(payload, list) else (payload or {}).get("items", [])
+    return [
+        f"{g.get('name')} v{g.get('version')}"
+        for g in items
+        if ((g.get("dataSource") or {}).get("storageConnector") or {}).get("id")
+        == connector_id
+    ]
 
 
 def _credentials_label(connector: dict[str, Any]) -> str:
@@ -75,6 +144,7 @@ def _credentials_label(connector: dict[str, Any]) -> str:
 def connector_info(ctx: click.Context, name: str) -> None:
     """Show details for a single storage connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -83,21 +153,37 @@ def connector_info(ctx: click.Context, name: str) -> None:
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Connector '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
 
     sc = getattr(ds, "storage_connector", ds)
     if output.JSON_MODE:
         to_dict = getattr(sc, "to_dict", None)
         payload = to_dict() if callable(to_dict) else _connector_to_dict(sc)
-        output.print_json(payload)
+        output.print_json(redact(payload))
         return
 
+    state, message = _state(_get_connector(fs, name))
     rows = [
         ["ID", getattr(sc, "id", "?")],
         ["Name", getattr(sc, "name", "?")],
         ["Type", type(sc).__name__],
         ["Description", output.first_line(getattr(sc, "description", ""))],
+        ["State", state],
     ]
+    if message:
+        rows.append(["Message", output.first_line(message)])
+    group = _synced_group(sc)
+    if group in _GOOGLE:
+        syncs = (_google_send("GET", _google_syncs_path(fs, group, name)) or {}).get(
+            "items"
+        ) or []
+        rows += [
+            [f"Sync {s.get('id')}", f"{s.get('datasetName')} ({s.get('state')})"]
+            for s in syncs
+        ]
+        rows.append(["Syncs", f"hops datasource {group} sync list {name}"])
     output.print_table(["FIELD", "VALUE"], rows)
 
 
@@ -179,7 +265,7 @@ def _read_secret(
             raise click.BadParameter("stdin was empty", ctx=ctx, param=param)
     # An empty value (``--password ""`` or an empty env var) is missing, not a secret.
     if not value and required:
-        if _interactive():
+        if not output.no_input():
             value = click.prompt(flag.lstrip("-").replace("-", " "), hide_input=True)
         else:
             raise click.MissingParameter(ctx=ctx, param=param)
@@ -197,10 +283,6 @@ def _account_secret(ctx: click.Context, param: click.Parameter, name: str) -> st
             f"your account has no variable {name}", ctx=ctx, param=param
         )
     return var.value
-
-
-def _interactive() -> bool:
-    return sys.stdin.isatty()
 
 
 def _secret_option(
@@ -232,7 +314,7 @@ def _secret_option(
 
 @datasource_group.group("create")
 def connector_create() -> None:
-    """Create a storage connector (subcommand per backend)."""
+    """Create a data source; one command per source type."""
 
 
 @connector_create.command("jdbc", help="Register a JDBC connector.")
@@ -252,6 +334,7 @@ def connector_create_jdbc(
 ) -> None:
     """Register a JDBC connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -295,6 +378,7 @@ def connector_create_s3(
 ) -> None:
     """Register an S3 connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -345,6 +429,7 @@ def connector_create_snowflake(
 ) -> None:
     """Register a Snowflake connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -415,6 +500,8 @@ class _Spec:
     opts: tuple[_Opt, ...]
     check: Callable[[dict[str, Any]], str | None] | None = None
     epilog: str = ""
+    # The backend's connection check refuses some types (ConnectionChecker: HOPSFS).
+    testable: bool = True
 
 
 def _given(values: dict[str, Any], flag: str) -> bool:
@@ -588,18 +675,31 @@ _CRM_NEEDS = {
         "--impersonated-email",
         "--refresh-token",
     ),
-    "SHOPIFY": ("--shop-url", "--private-app-password"),
+    "SHOPIFY": ("--shop-url",),
 }
+# Shopify takes a private app password, or an app's client ID and secret (a token is
+# minted at each run).
+_SHOPIFY_AUTH = ("--private-app-password", "--client-id", "--client-secret")
 
 
-_CRM_FLAGS = frozenset(f for flags in _CRM_NEEDS.values() for f in flags)
+_CRM_FLAGS = frozenset(
+    f for flags in (*_CRM_NEEDS.values(), _SHOPIFY_AUTH) for f in flags
+)
 
 
 def _check_crm(v: dict[str, Any]) -> str | None:
     crm = v["crm_type"]
-    return _needs(v, f"--crm-type {crm}", *_CRM_NEEDS[crm]) or _refuses(
-        v, f"--crm-type {crm}", *sorted(_CRM_FLAGS - set(_CRM_NEEDS[crm]))
+    allowed = set(_CRM_NEEDS[crm]) | (set(_SHOPIFY_AUTH) if crm == "SHOPIFY" else set())
+    problem = _needs(v, f"--crm-type {crm}", *_CRM_NEEDS[crm]) or _refuses(
+        v, f"--crm-type {crm}", *sorted(_CRM_FLAGS - allowed)
     )
+    if problem or crm != "SHOPIFY":
+        return problem
+    if _given(v, "--client-id") or _given(v, "--client-secret"):
+        return _needs(v, "--client-id", "--client-id", "--client-secret") or _refuses(
+            v, "--client-id", "--private-app-password"
+        )
+    return _needs(v, f"--crm-type {crm}", "--private-app-password")
 
 
 def _check_mongodb(v: dict[str, Any]) -> str | None:
@@ -666,10 +766,12 @@ _SPECS: dict[str, _Spec] = {
             _Opt(
                 "--dataset",
                 "datasetName",
-                "Dataset the connector reads and writes.",
+                "Dataset name as `hops files list` shows it (Resources, "
+                "<backing name>_featurestore.db), not a path. Create checks that it exists.",
                 required=True,
             ),
         ),
+        testable=False,
     ),
     "redshift": _Spec(
         "featurestoreRedshiftConnectorDTO",
@@ -1232,7 +1334,19 @@ _SPECS: dict[str, _Spec] = {
             _Opt(
                 "--private-app-password",
                 "privateAppPassword",
-                "Private app password, for SHOPIFY.",
+                "Private app password, for SHOPIFY. Or pass --client-id and --client-secret.",
+                secret=True,
+            ),
+            _Opt(
+                "--client-id",
+                "clientId",
+                "App client ID, for SHOPIFY: each run mints a token valid 24 h from issuance. "
+                "The shop URL must then be https://<shop>.myshopify.com.",
+            ),
+            _Opt(
+                "--client-secret",
+                "clientSecret",
+                "App client secret, for SHOPIFY with --client-id.",
                 secret=True,
             ),
         ),
@@ -1364,7 +1478,7 @@ def _build_create_command(name: str, spec: _Spec) -> click.Command:
         ctx: click.Context,
         connector_name: str,
         description: str,
-        test: bool,
+        test: bool = False,
         **values: Any,
     ) -> None:
         problem = spec.check(values) if spec.check else None
@@ -1406,11 +1520,12 @@ def _build_create_command(name: str, spec: _Spec) -> click.Command:
     run.__doc__ = spec.summary
     cmd = click.pass_context(run)
     cmd = click.option("--description", default="", help="Free-form description.")(cmd)
-    cmd = click.option(
-        "--test",
-        is_flag=True,
-        help="Only test the connection; create nothing. Exits 1 when it fails.",
-    )(cmd)
+    if spec.testable:
+        cmd = click.option(
+            "--test",
+            is_flag=True,
+            help="Only test the connection; create nothing. Exits 1 when it fails.",
+        )(cmd)
     for opt in reversed(spec.opts):
         cmd = _option(opt, name)(cmd)
     cmd = click.argument("connector_name", metavar="NAME")(cmd)
@@ -1432,7 +1547,7 @@ for _name, _spec in _SPECS.items():
 
 @datasource_group.group("credentials")
 def connector_credentials() -> None:
-    """Your own credentials for a data source with provided credentials."""
+    """Your own credentials for a data source."""
 
 
 _CREDENTIAL_PAIRS = (
@@ -1504,7 +1619,7 @@ def _credential_arguments(
             )
     bound = getattr(sc, "user_credentials", None) or {}
     if not _given(values, "--password") and not _given(values, "--password-secret"):
-        if _interactive():
+        if not output.no_input():
             values["password"] = click.prompt("password", hide_input=True)
         elif not bound.get("password_secret_name"):
             raise click.UsageError(
@@ -1541,7 +1656,9 @@ def _provided_connector(ctx: click.Context, name: str) -> Any:
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Data source '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
     sc = getattr(ds, "storage_connector", ds)
     if not hasattr(sc, "set_credentials"):
         raise click.ClickException(
@@ -1572,18 +1689,16 @@ def _upload_wallet(ctx: click.Context, sc: Any, local_zip: str) -> tuple[str, st
     file_name = f"wallet-{uuid.uuid4().hex}.zip"
     dataset_api = project.get_dataset_api()
     try:
-        for directory in (os.path.dirname(target_dir), target_dir):
-            if not dataset_api.exists(directory):
-                dataset_api.mkdir(directory)
+        makedirs(dataset_api, target_dir)
         with tempfile.TemporaryDirectory() as tmp:
             staged = os.path.join(tmp, file_name)
             shutil.copyfile(local_zip, staged)
             dataset_api.upload(staged, target_dir)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Wallet upload failed: {exc}") from exc
+        raise click.ClickException(f"Could not upload the wallet: {exc}") from exc
     relative = f"{target_dir}/{file_name}"
     output.info("Uploaded wallet to %s", relative)
-    return f"/Projects/{project.name}/{relative}", relative
+    return f"/Projects/{project.backing_name}/{relative}", relative
 
 
 def _discard_wallet(ctx: click.Context, relative: str | None) -> None:
@@ -1600,7 +1715,9 @@ def _validate(sc: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         result = sc._validate_credentials(**args)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Validation failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not validate credentials for data source '{name}': {exc}"
+        ) from exc
     if not result.get("valid"):
         code = result.get("errorCode")
         detail = result.get("message") or "the data source rejected the credentials"
@@ -1629,12 +1746,15 @@ def _binding_rows(binding: dict[str, Any]) -> list[list[Any]]:
 @_credential_options
 @click.pass_context
 def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # noqa: D417
-    """Save your credentials for a data source to your account, once the data source accepts them.
+    """Save your credentials for a data source.
+
+    Save your credentials for a data source to your account, once the data source accepts them.
 
     Nothing is saved when the data source rejects them.
     An option not given keeps what is already bound, so `--password` alone rotates the password and keeps the username and wallet.
     Each credential option is given by value or by account entry name.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -1655,7 +1775,7 @@ def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # no
         raise
     output.success("✓ Saved your credentials for %s", name)
     if output.JSON_MODE:
-        output.print_json(binding)
+        output.print_json(redact(binding))
     else:
         output.print_table(["FIELD", "VALUE"], _binding_rows(binding))
 
@@ -1665,12 +1785,13 @@ def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # no
 @_credential_options
 @click.pass_context
 def credentials_validate(ctx: click.Context, name: str, **values: Any) -> None:  # noqa: D417
-    """Test your credentials against a data source without saving them.
+    """Test credentials against a data source without saving.
 
     A wallet is uploaded under a new name for the test, which reads it from HopsFS,
     and removed again afterwards.
     Each credential option is given by value or by account entry name.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -1685,17 +1806,20 @@ def credentials_validate(ctx: click.Context, name: str, **values: Any) -> None: 
     finally:
         _discard_wallet(ctx, staged)
     if output.JSON_MODE:
-        output.print_json(result)
+        output.print_json(redact(result))
         return
     output.success("✓ Data source %s accepted the credentials", name)
 
 
-@connector_credentials.command("show")
+@connector_credentials.command("info")
 @click.argument("name")
 @click.pass_context
 def credentials_show(ctx: click.Context, name: str) -> None:
-    """Show your binding for a data source: status and account entry names, never values.
+    """Show your credential binding, never the values.
 
+    Show your binding for a data source: status and account entry names, never values.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -1706,7 +1830,7 @@ def credentials_show(ctx: click.Context, name: str) -> None:
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not read your credentials: {exc}") from exc
     if output.JSON_MODE:
-        output.print_json(binding)
+        output.print_json(redact(binding))
         return
     output.print_table(["FIELD", "VALUE"], _binding_rows(binding))
 
@@ -1716,18 +1840,21 @@ def credentials_show(ctx: click.Context, name: str) -> None:
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Remove your binding for a data source, its wallet file and its default-named account entries.
+    """Remove your credentials for a data source.
+
+    Remove your binding for a data source, its wallet file and its default-named account entries.
 
     The default env var and secrets (DS_<NAME>_<feature store id>_USER, ds_<name>_<feature store id>_password and ds_<name>_<feature store id>_wallet_password) are deleted from your account; ones you named yourself stay.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
         yes: Skip confirmation when True.
     """
     sc = _provided_connector(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Remove your credentials for '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Remove your credentials for '{name}'?")
     try:
         sc.delete_credentials()
     except Exception as exc:  # noqa: BLE001
@@ -1743,28 +1870,45 @@ def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Delete a storage connector.
+    """Delete a data source and its feature groups.
 
+    The source read here is the one deleted: a same-name source made since is kept.
+
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
         yes: Skip confirmation when True.
     """
     fs = session.get_feature_store(ctx)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete connector '{name}'?", abort=True)
+    connector_id = _get_connector(fs, name)["id"]
+    groups = _groups_on(fs, connector_id)
+    if groups:
+        click.echo(
+            "Deleted with it, with their data and the jobs Hopsworks made for"
+            " them: " + ", ".join(groups),
+            err=True,
+        )
+    if not yes:
+        output.confirm(f"Delete connector '{name}'?")
 
+    from hopsworks_common import events
     from hopsworks_common.core import rest
 
     try:
-        rest._send_request(
-            "DELETE",
-            rest._project_path(
-                "featurestores", getattr(fs, "id", None), "storageconnectors", name
-            ),
-        )
+        with events.tracked("datasource", "delete", name=name):
+            rest._send_request(
+                "DELETE",
+                _connector_path(fs, name),
+                query_params={"expectedId": connector_id},
+            )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Delete failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not delete data source '{name}': {exc}"
+        ) from exc
+    if output.JSON_MODE:
+        output.print_json({"id": connector_id, "name": name, "featureGroups": groups})
+        return
     output.success("✓ Deleted connector %s", name)
 
 
@@ -1774,6 +1918,7 @@ def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
 def connector_databases(ctx: click.Context, name: str) -> None:
     """List databases visible through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1797,6 +1942,7 @@ def connector_databases(ctx: click.Context, name: str) -> None:
 def connector_tables(ctx: click.Context, name: str, database: str | None) -> None:
     """List tables in a database reachable through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1805,6 +1951,12 @@ def connector_tables(ctx: click.Context, name: str, database: str | None) -> Non
     fs = session.get_feature_store(ctx)
     try:
         ds = fs.get_data_source(name)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not list tables: {exc}") from exc
+    group = _synced_group(getattr(ds, "storage_connector", ds))
+    if group:
+        raise click.ClickException(_synced_tables_message(fs, group, name))
+    try:
         tables = ds.get_tables(database=database)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not list tables: {exc}") from exc
@@ -1813,33 +1965,168 @@ def connector_tables(ctx: click.Context, name: str, database: str | None) -> Non
         [
             getattr(t, "table", None) or "?",
             getattr(t, "database", None) or database or "-",
+            getattr(t, "group", None) or "-",
         ]
         for t in tables or []
     ]
-    output.print_table(["TABLE", "DATABASE"], rows)
+    output.print_table(["TABLE", "DATABASE", "SCHEMA"], rows)
+
+
+def _resolve_table(ds, table: str, database: str | None):
+    """Return the data source of ``table`` as the source lists it.
+
+    The listing carries the schema a bare table name lacks, so a read by name
+    alone is looked up there first; ``schema.table`` picks one schema's table.
+    A bare name listed in several schemas is refused rather than guessed. A
+    source that cannot list tables (REST, CRM) or does not list this name is
+    read with the name as given.
+    """
+    try:
+        listed = ds.get_tables(database=database)
+    except Exception:  # noqa: BLE001
+        listed = []
+    schema, _, bare = table.rpartition(".")
+    found = [
+        entry
+        for entry in listed or []
+        if getattr(entry, "table", None) == bare
+        and (not schema or getattr(entry, "group", None) == schema)
+    ]
+    if len(found) > 1:
+        names = ", ".join(sorted(f"{getattr(e, 'group', None)}.{bare}" for e in found))
+        raise click.ClickException(
+            f"Table '{table}' is in several schemas: {names}. Name one as schema.table."
+        )
+    if found:
+        return found[0]
+    ds.table = table
+    return ds
+
+
+def _preview_rows(preview) -> list[dict]:
+    """Flatten the backend's preview into one ``{column: value}`` dict per row.
+
+    The backend nests the rows as ``{"preview": [{"values": [{"value0": column,
+    "value1": value}, ...]}, ...]}``; a null cell has no ``value1``. A column is
+    keyed by its feature name (lower case, spaces as underscores), as the
+    features beside the preview are named: a CRM answers ``Id``, its feature is ``id``.
+    """
+    if isinstance(preview, dict):
+        preview = preview.get("preview")
+    return [
+        {
+            util._autofix_feature_name(cell["value0"]): cell.get("value1")
+            for cell in row.get("values", [])
+        }
+        for row in preview or []
+        if isinstance(row, dict)
+    ]
+
+
+def _read_target(table: str | None, ds: Any, name: str) -> str:
+    """What a preview read, for its hops line: the table, path or query, else the source's name."""
+    return (
+        table
+        or getattr(ds, "table", None)
+        or getattr(ds, "path", None)
+        or getattr(ds, "query", None)
+        or name
+    )
 
 
 @datasource_group.command("preview")
 @click.argument("name")
+@click.option(
+    "--table",
+    help=(
+        "Table, sheet or collection to preview, as schema.table when the name "
+        "is in several schemas. Required for every connector type unless the "
+        "data source already names one; list them with `hops datasource tables`."
+    ),
+)
+@click.option(
+    "--database",
+    help="Database the table lives in (connector-dependent, e.g. SQL, Snowflake).",
+)
+@click.option(
+    "--limit",
+    "-n",
+    "limit",
+    type=click.IntRange(min=1),
+    default=10,
+    show_default=True,
+    help="Number of rows to print.",
+)
 @click.pass_context
-def connector_preview(ctx: click.Context, name: str) -> None:
-    """Fetch a small data preview through a connector.
+def connector_preview(
+    ctx: click.Context,
+    name: str,
+    table: str | None,
+    database: str | None,
+    limit: int,
+) -> None:
+    """Preview a few rows of one table of a data source.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
+        table: Table to read.
+        database: Database that contains the table.
+        limit: Rows to print; the backend sends its own sample (about 50 rows).
     """
     fs = session.get_feature_store(ctx)
     try:
         ds = fs.get_data_source(name)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not preview data source '{name}': {exc}") from exc
+    if database is not None:
+        ds.database = database
+    if table is not None:
+        ds = _resolve_table(ds, table, database)
+    if not (ds.table or ds.query or ds.path):
+        raise click.UsageError(
+            f"Connector '{name}' needs a table to preview: pass --table "
+            f"(and --database where the type needs it). "
+            f"List them with `hops datasource tables {name}`."
+        )
+    try:
         data = ds.get_data()
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Preview failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not preview data source '{name}': {exc}"
+        ) from exc
+    from hopsworks_common import events
+
+    columns = [f.name for f in getattr(data, "features", None) or []]
+    rows = _preview_rows(getattr(data, "preview", None))[:limit]
     if output.JSON_MODE:
-        to_dict = getattr(data, "to_dict", None)
-        output.print_json(to_dict() if callable(to_dict) else str(data))
-        return
-    click.echo(str(data))
+        output.print_json(
+            {
+                "features": [
+                    {"name": f.name, "type": f.type}
+                    for f in getattr(data, "features", None) or []
+                ],
+                "preview": rows,
+            }
+        )
+    columns = columns or (list(rows[0]) if rows else [])
+    printed = [[fg_cmd._truncate_cell(row.get(c)) for c in columns] for row in rows]
+    if not output.JSON_MODE:
+        output.print_table(columns, printed)
+    # The host shows what the agent read without reading the source again (a null stays null).
+    events.source_preview(
+        name,
+        _read_target(table, ds, name),
+        columns,
+        [
+            [
+                None if row.get(c) is None else cell
+                for c, cell in zip(columns, line, strict=True)
+            ]
+            for row, line in zip(rows, printed, strict=True)
+        ],
+    )
 
 
 @datasource_group.command("infer-metadata")
@@ -1850,7 +2137,7 @@ def connector_preview(ctx: click.Context, name: str) -> None:
 def connector_infer_metadata(
     ctx: click.Context, name: str, table: str, database: str | None
 ) -> None:
-    """Use platform intelligence to infer feature metadata for a table.
+    """Infer feature metadata for a table.
 
     Calls the same LLM-backed endpoint as the "Infer metadata" button in the
     UI: suggests a renamed feature name, Hopsworks type, and description per
@@ -1858,6 +2145,7 @@ def connector_infer_metadata(
     external table as an external feature group, or before creating a new
     feature group from it.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1885,7 +2173,9 @@ def connector_infer_metadata(
     except PlatformIntelligenceException as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Infer metadata failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not infer metadata of table '{table}': {exc}"
+        ) from exc
 
     if output.JSON_MODE:
         output.print_json(inferred.to_dict())
@@ -1922,12 +2212,16 @@ def _test_connector(ctx: click.Context, body: dict[str, Any]) -> None:
             json_body=body,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Connection test failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not connect to data source '{body.get('name', '?')}': {exc}"
+        ) from exc
     result = result if isinstance(result, dict) else {}
     message = (result.get("connectionOutput") or "").strip()
     # The checkers report success as exit code 0, or 200 for HTTP sources.
     if result.get("statusCode") not in (0, 200):
-        raise click.ClickException(f"Connection test failed: {message or 'no output'}")
+        raise click.ClickException(
+            f"Could not connect to data source '{body.get('name', '?')}': {message or 'no output'}"
+        )
     output.success(
         "✓ Connection to %s works%s", body["name"], f": {message}" if message else ""
     )
@@ -1935,16 +2229,367 @@ def _test_connector(ctx: click.Context, body: dict[str, Any]) -> None:
 
 def _create_connector(ctx: click.Context, body: dict[str, Any]) -> None:
     fs = session.get_feature_store(ctx)
+    from hopsworks_common import events
     from hopsworks_common.core import rest
 
     try:
-        rest._send_request(
-            "POST",
-            rest._project_path(
-                "featurestores", getattr(fs, "id", None), "storageconnectors"
-            ),
-            json_body=body,
-        )
+        with events.tracked("datasource", "create", name=body.get("name")):
+            rest._send_request(
+                "POST",
+                rest._project_path(
+                    "featurestores", getattr(fs, "id", None), "storageconnectors"
+                ),
+                json_body=body,
+            )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Create failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not create data source '{body.get('name', '?')}': {exc}"
+        ) from exc
     output.success("✓ Created connector %s", body["name"])
+
+
+# region Google Drive and Google Analytics
+#
+# Hopsworks reads these two itself on the account's Google grant and copies them into
+# datasets through its syncs (.../storageconnectors/<name>/<segment>/syncs, the same REST
+# for both). Hopsable's connect card makes the source and its sync: Drive files come only
+# from Google's Picker and a GA sync is made at the link, so there is no create here.
+
+_GOOGLE = {
+    "google-drive": ("google_drive", "Google Drive"),
+    "google-analytics": ("google_analytics", "Google Analytics"),
+}
+
+
+def _synced_group(sc: Any) -> str | None:
+    """The command group of a source read through syncs, or None."""
+    kind = getattr(sc, "type", None)
+    if kind == "SHAREPOINT":
+        return "sharepoint"
+    if kind == "GOOGLE_DRIVE":
+        return "google-drive"
+    crm = getattr(sc, "crm_type", None)
+    if (
+        kind == "CRM"
+        and str(getattr(crm, "value", crm) or "").upper() == "GOOGLE_ANALYTICS"
+    ):
+        return "google-analytics"
+    return None
+
+
+def _synced_tables_message(fs: Any, group: str, name: str) -> str:
+    """What `tables` answers for a source read through syncs: where its files are."""
+    said = f"{name} is not read as tables: its syncs copy it into datasets"
+    if group not in _GOOGLE:
+        return f"{said} (hops datasource {group} sync list {name}). Build from the files there."
+    items = (_google_send("GET", _google_syncs_path(fs, group, name)) or {}).get(
+        "items"
+    ) or []
+    if not items:
+        return (
+            f"{name} has no sync yet, so nothing was copied. "
+            f"The {_GOOGLE[group][1]} files are picked in Hopsable's Connect card."
+        )
+    datasets = ", ".join(sorted({str(i.get("datasetName")) for i in items}))
+    return (
+        f"{said}: {datasets} (hops datasource {group} sync list {name}). "
+        "Build from the files there (skill hops-data-sources)."
+    )
+
+
+def _google_source(ctx: click.Context, group: str, name: str) -> tuple[Any, Any]:
+    fs = session.get_feature_store(ctx)
+    try:
+        sc = fs.get_data_source(name).storage_connector
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"No data source '{name}': {exc}") from exc
+    found = _synced_group(sc)
+    if found != group:
+        hint = f" Use: hops datasource {found} sync list {name}" if found else ""
+        raise click.ClickException(
+            f"Data source '{name}' is not a {_GOOGLE[group][1]} source.{hint}"
+        )
+    return fs, sc
+
+
+def _google_syncs_path(fs: Any, group: str, name: str, *tail: Any) -> list[Any]:
+    from hopsworks_common.core import rest
+
+    return rest._project_path(
+        "featurestores",
+        fs.id,
+        "storageconnectors",
+        name,
+        _GOOGLE[group][0],
+        "syncs",
+        *tail,
+    )
+
+
+def _google_send(
+    method: str,
+    path: list[Any],
+    query: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+) -> Any:
+    from hopsworks_common.core import rest
+
+    return _call(
+        method.upper(), lambda: rest._send_request(method, path, query, body)
+    )
+
+
+_GOOGLE_HEADERS = [
+    "ID",
+    "DATASET",
+    "STATE",
+    "LAST RUN",
+    "LAST SUCCESS",
+    "FILES",
+    "BYTES",
+    "LAST ERROR",
+]
+
+
+def _google_rows(syncs: list[dict[str, Any]]) -> list[list[Any]]:
+    return [
+        [
+            s.get("id"),
+            s.get("datasetName"),
+            s.get("state"),
+            output.format_ts(s.get("lastRunFinished")),
+            output.format_ts(s.get("lastSuccess")),
+            s.get("filesTotal"),
+            s.get("bytesTotal"),
+            output.first_line(s.get("lastError") or "") or "-",
+        ]
+        for s in syncs
+    ]
+
+
+def _google_group(group: str) -> None:
+    label = _GOOGLE[group][1]
+
+    @datasource_group.group(
+        group,
+        short_help=f"The syncs of a {label} data source.",
+        help=f"Check and rerun the syncs Hopsworks runs for a {label} data source.",
+    )
+    def g() -> None:
+        pass
+
+    @g.group("sync", help=f"Syncs that copy a {label} source into a dataset.")
+    def sync() -> None:
+        pass
+
+    @sync.command("list", help=f"List the syncs of a {label} data source.")
+    @click.argument("name")
+    @click.pass_context
+    def sync_list(ctx: click.Context, name: str) -> None:
+        fs, _ = _google_source(ctx, group, name)
+        items = (_google_send("GET", _google_syncs_path(fs, group, name)) or {}).get(
+            "items"
+        ) or []
+        if output.JSON_MODE:
+            output.print_json(items)
+            return
+        output.print_table(_GOOGLE_HEADERS, _google_rows(items))
+
+    @sync.command("status", help="Show a sync's state, counters and last error.")
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.pass_context
+    def sync_status(ctx: click.Context, name: str, sync_id: int) -> None:
+        fs, _ = _google_source(ctx, group, name)
+        s = _google_send("GET", _google_syncs_path(fs, group, name, sync_id)) or {}
+        if output.JSON_MODE:
+            output.print_json(s)
+            return
+        rows = [
+            [k, "-" if s.get(k) is None else s.get(k)]
+            for k in (
+                "id",
+                "datasetName",
+                "state",
+                "cronExpression",
+                "nextRunAt",
+                "lastRunStarted",
+                "lastRunFinished",
+                "lastSuccess",
+                "lastError",
+                "filesTotal",
+                "filesSkipped",
+                "bytesTotal",
+                "folderIds",
+                "fileIds",
+                "includePatterns",
+                "excludePatterns",
+                "maxFileSizeMb",
+                "mirrorDeletions",
+                "paused",
+                "retryable",
+            )
+        ]
+        rows += [
+            [
+                f"report {r.get('name')}",
+                f"loaded up to {r.get('lastLoadedDate') or '-'}",
+            ]
+            for r in s.get("reports") or []
+        ]
+        output.print_table(["FIELD", "VALUE"], rows)
+
+    def action(command: str, help: str, done: str) -> None:
+        @sync.command(command, help=help)
+        @click.argument("name")
+        @click.argument("sync_id", type=int)
+        @click.pass_context
+        def act(ctx: click.Context, name: str, sync_id: int) -> None:
+            fs, _ = _google_source(ctx, group, name)
+            s = _google_send(
+                "POST", _google_syncs_path(fs, group, name, sync_id, command)
+            )
+            if output.JSON_MODE:
+                output.print_json(s)
+                return
+            output.success(done, sync_id, (s or {}).get("state", "unchanged"))
+
+    action("run", "Start a run of the sync now.", "✓ Sync %s: %s")
+    action("retry", "Retry a sync whose create failed half way.", "✓ Sync %s: %s")
+
+    if group == "google-drive":
+        _google_drive_settings(sync, group)
+
+    @sync.command("delete", help="Delete a sync, and its dataset unless --keep-files.")
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.option("--keep-files", is_flag=True, help="Keep the dataset and its files.")
+    @click.option(
+        "--force", is_flag=True, help="Stop a run in progress instead of refusing."
+    )
+    @click.option("--yes", is_flag=True, help="Skip confirmation.")
+    @click.pass_context
+    def sync_delete(
+        ctx: click.Context,
+        name: str,
+        sync_id: int,
+        keep_files: bool,
+        force: bool,
+        yes: bool,
+    ) -> None:
+        fs, _ = _google_source(ctx, group, name)
+        path = _google_syncs_path(fs, group, name, sync_id)
+        if not yes and not output.JSON_MODE:
+            dataset = (_google_send("GET", path) or {}).get("datasetName")
+            what = "keeping" if keep_files else "and DELETE"
+            click.confirm(
+                f"Delete sync {sync_id} {what} dataset '{dataset}'?", abort=True
+            )
+        _google_send(
+            "DELETE",
+            path,
+            {"keepFiles": str(keep_files).lower(), "force": str(force).lower()},
+        )
+        if output.JSON_MODE:
+            output.print_json({"id": sync_id, "deleted": True})
+            return
+        output.success("✓ Deleted sync %s", sync_id)
+
+
+def _google_drive_settings(sync: click.Group, group: str) -> None:
+    # What a Drive sync reads (its files and folders) changes only through a new pick in Hopsable's Connect card, by
+    # the person who connected the source; these change how it runs.
+    def put(ctx: click.Context, name: str, sync_id: int, body: dict[str, Any]) -> None:
+        fs, _ = _google_source(ctx, group, name)
+        s = _google_send("PUT", _google_syncs_path(fs, group, name, sync_id), body=body)
+        if output.JSON_MODE:
+            output.print_json(s)
+            return
+        output.success("✓ Sync %s updated", sync_id)
+
+    @sync.command(
+        "schedule",
+        short_help="Set the sync's Quartz cron in UTC, or none.",
+        help="Set the sync's Quartz cron in UTC, seconds first ('0 0 * ? * *' is hourly), or 'none' to copy only on run.",
+    )
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.argument("cron")
+    @click.pass_context
+    def schedule(ctx: click.Context, name: str, sync_id: int, cron: str) -> None:
+        put(
+            ctx,
+            name,
+            sync_id,
+            {"cronExpression": None if cron.lower() == "none" else cron},
+        )
+
+    @sync.command("pause", help="Stop scheduled runs until resume.")
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.pass_context
+    def pause(ctx: click.Context, name: str, sync_id: int) -> None:
+        put(ctx, name, sync_id, {"paused": True})
+
+    @sync.command("resume", help="Start scheduled runs again.")
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.pass_context
+    def resume(ctx: click.Context, name: str, sync_id: int) -> None:
+        put(ctx, name, sync_id, {"paused": False})
+
+    @sync.command(
+        "filter",
+        short_help="Copy only the files that match --include and not --exclude.",
+        help="Copy only files whose path under the dataset matches --include and not --exclude (globs, e.g. 'Reports/**/*.csv'), up to --max-size-mb.",
+    )
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.option("--include", "include", multiple=True, help="Glob to copy; repeat.")
+    @click.option("--exclude", "exclude", multiple=True, help="Glob to skip; repeat.")
+    @click.option(
+        "--max-size-mb",
+        type=click.IntRange(min=1),
+        help="Skip files larger than this many MB (at least 1).",
+    )
+    @click.pass_context
+    def filter_(
+        ctx: click.Context,
+        name: str,
+        sync_id: int,
+        include: tuple[str, ...],
+        exclude: tuple[str, ...],
+        max_size_mb: int | None,
+    ) -> None:
+        body: dict[str, Any] = {
+            "includePatterns": list(include),
+            "excludePatterns": list(exclude),
+        }
+        if max_size_mb is not None:
+            body["maxFileSizeMb"] = max_size_mb
+        put(ctx, name, sync_id, body)
+
+    @sync.command(
+        "mirror",
+        short_help="Remove from the dataset the files removed in Drive.",
+        help="With --on (the default for a new sync), a file removed in Drive is removed from the dataset at the next run.",
+    )
+    @click.argument("name")
+    @click.argument("sync_id", type=int)
+    @click.option("--on/--off", "on", required=True)
+    @click.pass_context
+    def mirror(ctx: click.Context, name: str, sync_id: int, on: bool) -> None:
+        put(ctx, name, sync_id, {"mirrorDeletions": on})
+
+
+for _group in _GOOGLE:
+    _google_group(_group)
+
+
+def _call(what: str, fn: Callable[[], Any]) -> Any:
+    try:
+        return fn()
+    except click.ClickException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not complete the {what} request: {exc}") from exc
