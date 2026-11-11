@@ -35,7 +35,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
 
    ```bash
    hops agent init <name> --reads <fg[:version]> [--reads <fg[:version]> ...] \
-     --model <model> --key-secret <key_secret>
+     [--search <embedding fg[:version]>] --model <model> --key-secret <key_secret>
    ```
 
    It writes `agents/<name>/agent.py` (it refuses to overwrite one without `--force`): an `AgentApp`
@@ -46,8 +46,8 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    token counts once, `asyncio.to_thread` around the blocking calls, and per feature group a
    Trino aggregate (`LIMIT 50`, schema from the project's feature store name) and, for a group with a
    primary key and an online store, a primary-key lookup. With `--search` it adds a `search`
-   tool (at most 10 neighbours); when init says search needs the embedding endpoint, the tool is
-   not in the script and the agent answers without it. Its last lines print the `deploy_agent` call
+   tool (at most 10 neighbours) over an embedding group `hops fg embed` built; on an install without
+   the embedding client, init refuses `--search` and writes nothing: run it again without `--search`. Its last lines print the `deploy_agent` call
    with the model's prices; with `--search` that call's `description` names the group
    (`hopsable.embed.search=<group>`): keep it, `hops fg embed delete` reads it.
 
