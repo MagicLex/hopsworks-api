@@ -826,11 +826,14 @@ def _delete_here(fs: Any, api: Any, group: str) -> None:
 def _agents_naming(ctx: click.Context, project: Any, group: str) -> list[str]:
     """Agents whose description names the group, or whose script quotes its name."""
     from hopsworks.cli.commands import agent as agent_commands  # noqa: PLC0415
+    from hsml.core import serving_api  # noqa: PLC0415
 
     mark = re.compile(re.escape(embed_run.SEARCH + group) + r"(?![A-Za-z0-9_])")
     quoted = (f'"{group}"', f"'{group}'")
     try:
-        deployments = project.get_model_serving().get_deployments() or []
+        # get_model_serving() refuses a project without a Models dataset; the serving
+        # list itself answers [] there, and a project without Serving has no agents.
+        deployments = serving_api.ServingApi()._get_all() or []
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not list agents to check that none searches '{group}': {exc}"
