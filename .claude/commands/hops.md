@@ -124,7 +124,7 @@ is the whole dispatch:
 | model input | feature groups with rows and the key that joins them (the label too, when the request names one) | feature view `<v>` | `hops fv info <v>` shows its feature groups | you, no builder: a view of the project that already reads those feature groups is reused: say so in one line and ask only whether to make another one beside it (reusing it marked "(Recommended)"), unless the request names the new view: then make it. Otherwise `hops fv create` as the **hops-fv** skill says |
 | training dataset | feature view `<v>` | a training dataset version of `<v>`, split as the request says | `hops td list <v>` shows the new version | you, no builder: `hops td compute` as the **hops-fv** skill says (it splits by fractions; a split by time goes through the SDK as that skill's time split says) |
 | change of a feature group | feature group `<t>` the user has: a column to add, online on, or a refresh on a schedule | the change on `<t>` itself, never a copy | column: `hops fg feature list <t>` shows it; online: `hops fg preview <t> --online --limit 1` prints a row; refresh: `hops job info <t>-refresh` shows the schedule | you, in this order: `hops fg info <t>`; then ask_user to confirm the change by `<t>`'s name, always and before any other step, a connect included; only on yes: for a refresh from a data source that is not connected yet, connect it (Connecting a source), then: A column: `hops fg feature add`, then fill it as `hops skills info hops-fg references/changes.md` says. Online: `hops fg update <t> --version <n> --online`. A refresh: a mounted (external) group reads its source live, so say that and stop; otherwise **hops-features-builder** with `name: <t>`, `existing: yes`, the schedule, and as source the one the request names, else the one `hops fg info <t>` shows (none shown: ask it as an open question). A backfill is that job's first run. |
-| dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
+| dashboard | feature groups with rows | an app `<a>`, or a Superset dashboard `<title>`, as Dashboard below asks | the App or Dashboard row's check | Dashboard below: **hops-app-builder** or **hops-dashboard-builder** |
 | app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (App below) |
 | agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, its chat app `<a>_chat`, and evaluation suite `<a>` with one run | one question the data answers gets an answer whose trace has a tool call, `hops app info <a>_chat` shows `State` `RUNNING`, and the suite's run has a pass rate | **hops-agent-builder** (Agent below) |
 | notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (Notebook below) |
@@ -218,7 +218,14 @@ anywhere).
 `hops superset` and the SDK reach Superset from anywhere, through the Hopsworks proxy, so the
 builder runs its program where it runs.
 
-1. A request for a new dashboard ("a dashboard of my orders") goes to create. Otherwise list the
+1. A request for a new dashboard ("a dashboard of my orders") first asks the kind, in one
+   `AskUserQuestion` question, unless the request names Superset or an app: **An app
+   (Recommended)**, a page of charts served by Hopsworks, lighter and quicker to build and change;
+   **A Superset dashboard**, charts in Superset over the offline store, heavier; **Explain the
+   difference**, which answers in a few lines (an app: any layout, reads feature groups or a
+   deployment, iterated in the sandbox before a deploy; Superset: standard BI charts and filters,
+   built through its API) and asks again without that option. An app goes to App (below), the
+   request as its description. A Superset dashboard goes to create. Otherwise list the
    dashboards (`hops superset dashboard list`) and ask: edit one (each by title, marked when a program exists under `dashboards/`), create one,
    or delete one. With none, go to create.
 2. **Create.** The feature groups are the ones the request names or this conversation just made;
