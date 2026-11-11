@@ -449,6 +449,7 @@ def test_agent_init_search_hint_records_the_group(mock_project, tmp_path, monkey
     monkeypatch.chdir(tmp_path)
     docs = mock.MagicMock()
     docs.name, docs.version, docs.description = "notes_body_emb", 1, ""
+    docs.feature_store_id, docs.feature_store_name = 67, "demo_featurestore"
     docs.features = [SimpleNamespace(name="doc_id", type="string")]
     docs.primary_key, docs.online_enabled = ["doc_id"], True
     docs.embedding_index.get_embeddings.return_value = [
