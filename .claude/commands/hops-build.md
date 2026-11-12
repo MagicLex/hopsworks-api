@@ -66,7 +66,7 @@ a question you are about to ask depends on.
   seconds; on running out of memory, it runs as a job. What recurs or what the system deploys
   (scheduled pipelines, training runs and their bundles, the integration suite, benchmarks,
   deployments, apps) runs as Hopsworks jobs, deployments and apps. A run you start waits with
-  `--wait`, or `hops job wait <job>` for one already started; never poll `hops job history`.
+  `--wait`, or `hops job wait <job> --timeout 840` for one already started; never poll `hops job history`.
 - **Lint before a phase is validated.** Before a phase's tests run, and before it is recorded
   `met`, run in the system directory `ruff format .` then `ruff check --fix .` (with
   `uv tool run ruff@0.15.6` when `ruff` is not installed; the rules are in `pyproject.toml`), fix by hand
