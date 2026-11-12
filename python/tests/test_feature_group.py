@@ -34,6 +34,7 @@ from hsfs import (
 )
 from hsfs.client.exceptions import FeatureStoreException, RestAPIError
 from hsfs.core.constants import GE_MAJOR, HAS_GREAT_EXPECTATIONS
+from hsfs.core.data_source import DataSource
 from hsfs.engine import python, spark
 from hsfs.transformation_function import TransformationType
 
@@ -827,6 +828,105 @@ class TestFeatureGroup:
             fg, None, {"delta.enableChangeDataFeed": "true"}
         )
 
+    @pytest.mark.parametrize(
+        "cdf, expected",
+        [
+            (False, "false"),
+            ("False", "false"),
+            ("false", "false"),
+            (True, "true"),
+            ("TRUE", "true"),
+        ],
+    )
+    def test_save_change_data_feed_option(self, mocker, cdf, expected):
+        mock_save_metadata = mocker.patch(
+            "hsfs.core.feature_group_engine.FeatureGroupEngine._save_feature_group_metadata",
+            return_value=None,
+        )
+        fg = feature_group.FeatureGroup(
+            name="test_fg",
+            version=2,
+            featurestore_id=99,
+            time_travel_format="DELTA",
+            features=[feature.Feature(name="pk", type="int")],
+            primary_key=[],
+            foreign_key=[],
+            partition_key=[],
+        )
+
+        write_options = {"delta.enableChangeDataFeed": cdf}
+        fg.save(write_options=write_options)
+
+        mock_save_metadata.assert_called_once_with(
+            fg, None, {"delta.enableChangeDataFeed": expected}
+        )
+        assert write_options == {"delta.enableChangeDataFeed": cdf}
+
+    @pytest.mark.parametrize("method", ["save", "insert"])
+    def test_write_leaves_caller_write_options_untouched(self, mocker, method):
+        import pandas as pd
+
+        mock_write = mocker.patch(
+            f"hsfs.core.feature_group_engine.FeatureGroupEngine._{method}",
+            return_value=(None, None),
+        )
+        mock_engine = mocker.patch("hsfs.engine._get_instance")
+        mock_engine.return_value._convert_to_default_dataframe.side_effect = lambda df: (
+            df
+        )
+        fg = feature_group.FeatureGroup(
+            name="test_fg",
+            version=2,
+            featurestore_id=99,
+            time_travel_format="DELTA",
+            primary_key=[],
+            foreign_key=[],
+            partition_key=[],
+        )
+        write_options = {"delta.enableChangeDataFeed": "FALSE"}
+
+        getattr(fg, method)(
+            pd.DataFrame({"id": [1]}), write_options=write_options, wait=True
+        )
+
+        assert write_options == {"delta.enableChangeDataFeed": "FALSE"}
+        call = mock_write.call_args
+        sent = call.kwargs.get("write_options") or call.args[2]
+        assert sent["delta.enableChangeDataFeed"] == "false"
+        assert sent["wait_for_job"] is True
+        assert sent["wait_for_online_ingestion"] is True
+
+    def test_save_sink_group_reads_its_schema_from_the_data_source(self, mocker):
+        # A CRM source has no catalog: without features, save() takes the schema get_data infers.
+        mock_save_metadata = mocker.patch(
+            "hsfs.core.feature_group_engine.FeatureGroupEngine._save_feature_group_metadata",
+            return_value=None,
+        )
+        inferred = [feature.Feature(name="Id", type="string")]
+        mock_schema = mocker.patch(
+            "hsfs.core.external_feature_group_engine.schema_from_data_source",
+            return_value=inferred,
+        )
+        connector = mock.MagicMock()
+        connector.type = storage_connector.StorageConnector.CRM
+        fg = feature_group.FeatureGroup(
+            name="sf_accounts",
+            version=1,
+            featurestore_id=99,
+            time_travel_format="DELTA",
+            primary_key=["id"],
+            foreign_key=[],
+            partition_key=[],
+            data_source=DataSource(storage_connector=connector, table="account"),
+            sink_enabled=True,
+        )
+
+        fg.save()
+
+        mock_schema.assert_called_once_with(fg)
+        assert [f.name for f in fg.features] == ["id"]
+        mock_save_metadata.assert_called_once()
+
     def test_save_exception_empty_input(self):
         fg = feature_group.FeatureGroup(
             name="test_fg",
@@ -1515,6 +1615,35 @@ class TestExternalFeatureGroup:
         assert new_fg.columns[0].name == "primarykey"
         assert new_fg.columns[1].name == "event_time"
         assert new_fg.columns[2].name == "feat"
+
+    def test_insert_leaves_caller_write_options_untouched(self, mocker):
+        import pandas as pd
+
+        mock_insert = mocker.patch(
+            "hsfs.core.external_feature_group_engine.ExternalFeatureGroupEngine._insert",
+            return_value=(None, None),
+        )
+        mock_engine = mocker.patch("hsfs.engine._get_instance")
+        mock_engine.return_value._convert_to_default_dataframe.side_effect = lambda df: (
+            df
+        )
+        fg = feature_group.ExternalFeatureGroup(
+            name="test_fg",
+            version=2,
+            featurestore_id=99,
+            primary_key=[],
+            foreign_key=[],
+            online_enabled=True,
+        )
+        write_options = {"some_option": "value"}
+
+        fg.insert(pd.DataFrame({"id": [1]}), write_options=write_options, wait=True)
+
+        assert write_options == {"some_option": "value"}
+        sent = mock_insert.call_args.kwargs["write_options"]
+        assert sent["some_option"] == "value"
+        assert sent["wait_for_job"] is True
+        assert sent["wait_for_online_ingestion"] is True
 
 
 class TestFeatureGroupExecuteOdts:
