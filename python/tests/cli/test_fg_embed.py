@@ -565,3 +565,17 @@ def test_every_shipped_text_awaits_the_embed_build_with_job_wait():
     naming = {name for name, text in texts.items() if "hops fg embed" in text and "_embed" in text}
     assert naming, "no shipped text describes the embed build"
     assert all("hops job wait" in texts[name] for name in naming), sorted(n for n in naming if "hops job wait" not in texts[n])
+
+
+def test_the_deploy_hint_of_a_search_agent_passes_the_embedding_settings(monkeypatch):
+    from pathlib import Path
+
+    from hopsworks.cli.commands import agent
+
+    monkeypatch.setenv("HOPSABLE_EMBEDDING_PROJECT", "emb_project")
+    monkeypatch.setenv("HOPSABLE_EMBEDDING_MODEL", "emb_model")
+
+    hint = agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5", {"name": "notes_body_emb"})
+
+    assert 'env_vars={"HOPSABLE_EMBEDDING_PROJECT": "emb_project", "HOPSABLE_EMBEDDING_MODEL": "emb_model"}' in hint
+    assert "env_vars" not in agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5")

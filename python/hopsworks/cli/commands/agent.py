@@ -846,6 +846,15 @@ def _deploy_hint(
             f'      description="Searches {search_group["name"]}. '
             f'{embed_run.SEARCH}{search_group["name"]}",\n'
         )
+        # The search tool embeds each query; its pod reads the embedding settings from its environment.
+        from hopsworks_agents import embed as embed_client  # noqa: PLC0415
+
+        settings = {
+            k: os.environ[k]
+            for k in (embed_client.PROJECT_ENV, embed_client.MODEL_ENV)
+            if os.environ.get(k)
+        }
+        description += f"      env_vars={json.dumps(settings)},\n"
     price = _PRICES.get(model_name)
     tracing = '{"enabled": True'
     if price:
