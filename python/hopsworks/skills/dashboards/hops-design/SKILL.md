@@ -70,6 +70,11 @@ and the actions on it; it does not explain itself.
 - Show, do not tell: no intro paragraph, no "This dashboard shows...", no
   marketing copy. A heading names the thing; the numbers and charts speak.
 - Labels are short nouns. Units sit with the number (`42 ms`, `1.2k rows`).
+- Text says what is. No filler or consultant words ("overview of", "leverage", "insights",
+  "seamless"), no line that says what the page already shows ("Results appear here"), no label
+  that repeats the heading beside it.
+- A text block takes its container's width: no `max-width` or `ch` cap on a paragraph or
+  heading, no `text-wrap: balance`. Only the page column (`main`) has a max width.
 
 ### Records: lists and tables
 - Records of one kind go in a list or a table, never a grid of cards. Cards are for

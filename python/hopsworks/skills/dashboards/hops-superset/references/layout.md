@@ -27,7 +27,8 @@ Follow [hops-design](../../hops-design/SKILL.md): flat, light, the Hopsworks gre
 for the primary series only.
 
 - One `HEADER` with the dashboard's name. A `MARKDOWN` cell only for a one-line
-  note the charts cannot show (a data caveat, a link); no intro text.
+  note the charts cannot show (a data caveat, a link); no intro text, no filler. A
+  cell's text runs its full width: no `max-width` in the markdown or the dashboard `css`.
 - Key figures first, as one row of `big_number_total` charts with a short
   `subheader`; then the charts that answer the dashboard's questions; tables last.
 - Title each chart with the question it answers. `show_legend` only when a chart has

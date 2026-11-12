@@ -66,6 +66,8 @@ hops notebook start --shutdown-hours 8  # Hopsworks stops it 8 h after its start
   or `pd.qcut` bins takes `observed=True`), never hide it with a filter.
 - Never change a cell you did not write unless the user asks: the user may be editing the notebook
   in JupyterLab, and a save replaces the file.
+- A markdown cell names what the next cells do, in a heading or one line: no intro paragraph, no
+  recap of what the output already shows.
 - Done when every `hops notebook run` exited 0: each prints `ran as In [n]` or the cell's error.
   A notebook from an earlier session: `hops notebook info` shows a `RUN` number on every code cell.
 - Data from a data source is read through Hopsworks, never with a database driver (psycopg2,

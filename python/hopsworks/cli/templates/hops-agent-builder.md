@@ -57,7 +57,8 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    Edit what the description changes: the system prompt (what the agent is for, from
    `description`; it answers with numbers from tool results only and says when the data has none),
    the `suggested_prompts` (two or three questions the data answers, written from the preview rows)
-   and the tools. Keep every tool bounded (at most 50 rows back to the model), reading through
+   and the tools. The description, `welcome_message` and prompts say what is: no greeting filler.
+   Keep every tool bounded (at most 50 rows back to the model), reading through
    Hopsworks only, never a database driver with a copied credential, and never
    `fg.read(online=True)` without a filter. Keep the spans: the exit check reads the trace.
    The key is never printed, logged or put in an error message.

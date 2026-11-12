@@ -103,7 +103,8 @@ its own HTML page, not the app. No CDN and no build step: fonts are the design s
 and every chart is Chart.js with the skeleton's `static/chart-theme.js`, never hand-drawn SVG. Follow **hops-design**: a white page,
 sections grouped by spacing and hairlines with no box per section, stats that fit their cell.
 Colours and fonts come from the tokens in `app.css` (`var(--accent)`, `var(--muted)`, ...), never a
-new value: the look pass flags a colour or a font outside the design system.
+new value: the look pass flags a colour or a font outside the design system. Text says what is:
+no intro, no filler, no "appears here" placeholder, and every paragraph takes its container's width.
 Look at the page at about 600px and 900px wide once it first shows all its sections, and again
 before each deploy (a screenshot tool when one is available); fix what spills, clips or leaves
 a gap. That pass also checks the JavaScript: it loads the page and reports script errors, so
