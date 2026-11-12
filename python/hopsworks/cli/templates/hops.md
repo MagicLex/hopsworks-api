@@ -283,8 +283,9 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    the model registry, the chosen model registered, both checked with `hops model runs <m>` and
    `hops model info <m>` (the check is these commands, not a download). Data in a feature group
    trains on a feature view of it that leaves out the primary key and event time, so the view
-   serves model inputs only (`hops fv create <v> --feature-group <fg>:<n> --except
-   <key>,<event time> --labels <label>`, then
+   serves model inputs only and takes every other column (`hops fv create <v> --feature-group <fg>:<n> --except
+   <key>,<event time> --labels <label>`, never a hand-picked `select`; text columns one-hot, as
+   **hops-train** says), then
    `split_by_key` of **hops-train** section 1 in a cell) and registers
    with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
    notebook made itself registers without, unless the request deploys the model: then that data
