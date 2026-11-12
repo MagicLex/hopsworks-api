@@ -13,6 +13,7 @@ import json
 from types import SimpleNamespace
 from unittest import mock
 
+import click
 import pandas as pd
 import pyarrow as pa
 import pytest
@@ -282,6 +283,76 @@ def test_a_start_refused_for_a_running_build_or_a_deletion_says_which():
         "g is being deleted; nothing was started; run hops fg embed delete g again to finish it"
     )
     assert start_refusal(_refused(500), "g") is None
+
+
+def _job(answers):
+    """A job whose run() gives the next answer: raises an exception, returns anything else."""
+    answers = iter(answers)
+
+    def run(await_termination):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return SimpleNamespace(name="g_embed", run=run)
+
+
+def test_a_start_refused_with_a_short_retry_after_waits_and_starts():
+    from hopsworks.cli.commands.embed import _start
+
+    slept = []
+    job = _job(
+        [
+            _refused(429, 130099, retry_after="2"),
+            _refused(429, retry_after="1"),
+            "execution",
+        ]
+    )
+
+    assert _start(job, "g", sleep=slept.append, jitter=lambda: 0.5) == "execution"
+    assert slept == [2.5, 1.5]
+
+
+@pytest.mark.parametrize("retry_after", ["31", "60", None, "soon"])
+def test_a_start_refused_with_a_long_or_unreadable_retry_after_is_not_resent(
+    retry_after,
+):
+    from hopsworks.cli.commands.embed import _start
+
+    slept = []
+    job = _job([_refused(429, retry_after=retry_after)])
+
+    with pytest.raises(click.ClickException, match="nothing was started; retry after"):
+        _start(job, "g", sleep=slept.append)
+    assert slept == []
+
+
+def test_a_start_stops_resending_at_its_send_and_wait_budgets():
+    from hopsworks.cli.commands import embed
+
+    slept = []
+    refusals = [_refused(429, retry_after="1") for _ in range(embed.START_SENDS)]
+    with pytest.raises(click.ClickException, match="retry after 1 s"):
+        embed._start(_job(refusals), "g", sleep=slept.append, jitter=lambda: 0)
+    assert slept == [1] * (embed.START_SENDS - 1)
+
+    slept.clear()
+    refusals = [_refused(429, retry_after="30") for _ in range(3)]
+    with pytest.raises(click.ClickException, match="retry after 30 s"):
+        embed._start(_job(refusals), "g", sleep=slept.append, jitter=lambda: 0)
+    assert slept == [30, 30]
+
+
+def test_a_conflict_or_another_failure_is_never_resent():
+    from hopsworks.cli.commands.embed import _start
+
+    slept = []
+    with pytest.raises(click.ClickException, match="a build of g is already running"):
+        _start(_job([_refused(409, 130095)]), "g", sleep=slept.append)
+    with pytest.raises(click.ClickException, match="Could not start job 'g_embed'"):
+        _start(_job([_refused(500, retry_after="1")]), "g", sleep=slept.append)
+    assert slept == []
 
 
 def test_a_claim_refused_for_a_newer_run_stops_without_writing():
@@ -556,15 +627,29 @@ def test_every_shipped_text_awaits_the_embed_build_with_job_wait():
         "embed --help": embed.fg_embed.callback.__doc__,
         **{
             str(p.relative_to(root)): p.read_text()
-            for pattern in ("python/hopsworks/skills/**/*.md", "python/hopsworks/cli/templates/*.md", ".claude/**/*.md")
+            for pattern in (
+                "python/hopsworks/skills/**/*.md",
+                "python/hopsworks/cli/templates/*.md",
+                ".claude/**/*.md",
+            )
             for p in root.glob(pattern)
         },
     }
-    stale = {name for name, text in texts.items() if re.search(r"job info[^\n|]{0,40}_embed", text)}
+    stale = {
+        name
+        for name, text in texts.items()
+        if re.search(r"job info[^\n|]{0,40}_embed", text)
+    }
     assert not stale
-    naming = {name for name, text in texts.items() if "hops fg embed" in text and "_embed" in text}
+    naming = {
+        name
+        for name, text in texts.items()
+        if "hops fg embed" in text and "_embed" in text
+    }
     assert naming, "no shipped text describes the embed build"
-    assert all("hops job wait" in texts[name] for name in naming), sorted(n for n in naming if "hops job wait" not in texts[n])
+    assert all("hops job wait" in texts[name] for name in naming), sorted(
+        n for n in naming if "hops job wait" not in texts[n]
+    )
 
 
 def test_the_deploy_hint_of_a_search_agent_passes_the_embedding_settings(monkeypatch):
@@ -575,10 +660,17 @@ def test_the_deploy_hint_of_a_search_agent_passes_the_embedding_settings(monkeyp
     monkeypatch.setenv("HOPSABLE_EMBEDDING_PROJECT", "emb_project")
     monkeypatch.setenv("HOPSABLE_EMBEDDING_MODEL", "emb_model")
 
-    hint = agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5", {"name": "notes_body_emb"})
+    hint = agent._deploy_hint(
+        "a", Path("a.py"), "claude-sonnet-5-5", {"name": "notes_body_emb"}
+    )
 
-    assert 'env_vars={"HOPSABLE_EMBEDDING_PROJECT": "emb_project", "HOPSABLE_EMBEDDING_MODEL": "emb_model"}' in hint
+    assert (
+        'env_vars={"HOPSABLE_EMBEDDING_PROJECT": "emb_project", "HOPSABLE_EMBEDDING_MODEL": "emb_model"}'
+        in hint
+    )
     assert "env_vars" not in agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5")
     monkeypatch.delenv("HOPSABLE_EMBEDDING_PROJECT")
     monkeypatch.delenv("HOPSABLE_EMBEDDING_MODEL")
-    assert "env_vars" not in agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5", {"name": "notes_body_emb"})
+    assert "env_vars" not in agent._deploy_hint(
+        "a", Path("a.py"), "claude-sonnet-5-5", {"name": "notes_body_emb"}
+    )
