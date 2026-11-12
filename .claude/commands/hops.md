@@ -102,7 +102,7 @@ system's `requirements.status` is already `met`, reply with one line that `/hops
 
 ## Explore
 
-Read-only. Run what the user's words need: `hops fg list`, `hops fv list`, `hops datasource
+Read-only. A request to keep a source table ("keep it as a table", "pull it into a table") is the table piece, not Explore. Run what the user's words need: `hops fg list`, `hops fv list`, `hops datasource
 list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>`,
 `hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT` (not for an external feature group: preview it). `hops sql` is Trino
 SQL: `date_diff('day', a, b)`, `date_trunc('month', ts)`, `approx_percentile`, a table is
@@ -117,7 +117,7 @@ is the whole dispatch:
 
 | Piece | Needs | Makes | Exit check | Builder |
 | --- | --- | --- | --- | --- |
-| table | nothing (generated rows), or a table of a data source (mounted, the user keeps it) | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row | **hops-data-builder** |
+| table | nothing (generated rows), or a table of a data source (mounted, the user keeps it) | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row; a source table with no rows (`hops datasource preview` prints headers only) is reported as empty, with no group made | **hops-data-builder** |
 | features | feature groups with rows (a mounted one counts), or a data source | feature group `<f>` with rows, job `<f>-features` only on a schedule | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
 | model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>`; a model the user names is made, whatever its view | **hops-model-builder** |
 | inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
