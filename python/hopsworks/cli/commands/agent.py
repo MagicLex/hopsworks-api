@@ -860,7 +860,8 @@ def _deploy_hint(
             for k in (embed_client.PROJECT_ENV, embed_client.MODEL_ENV)
             if os.environ.get(k)
         }
-        description += f"      env_vars={json.dumps(settings)},\n"
+        if settings:
+            description += f"      env_vars={json.dumps(settings)},\n"
     price = _PRICES.get(model_name)
     tracing = '{"enabled": True'
     if price:
