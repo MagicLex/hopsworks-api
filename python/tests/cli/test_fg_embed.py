@@ -542,3 +542,26 @@ def test_the_client_posts_to_the_serving_project_by_its_backing_name(monkeypatch
         "instances": [{"model": "bge", "input": ["hi"]}]
     }
     assert call.kwargs["with_base_path_params"] is False
+
+
+def test_every_shipped_text_awaits_the_embed_build_with_job_wait():
+    """`hops job info` shows a job's config and no run state: an agent told to read an embed build there polls it."""
+    import re
+    from pathlib import Path
+
+    from hopsworks.cli.commands import embed
+
+    root = Path(__file__).resolve().parents[3]
+    texts = {
+        "embed --help": embed.fg_embed.callback.__doc__,
+        **{
+            str(p.relative_to(root)): p.read_text()
+            for pattern in ("python/hopsworks/skills/**/*.md", "python/hopsworks/cli/templates/*.md", ".claude/**/*.md")
+            for p in root.glob(pattern)
+        },
+    }
+    stale = {name for name, text in texts.items() if re.search(r"job info[^\n|]{0,40}_embed", text)}
+    assert not stale
+    naming = {name for name, text in texts.items() if "hops fg embed" in text and "_embed" in text}
+    assert naming, "no shipped text describes the embed build"
+    assert all("hops job wait" in texts[name] for name in naming), sorted(n for n in naming if "hops job wait" not in texts[n])
