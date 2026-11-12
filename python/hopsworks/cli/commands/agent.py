@@ -12,8 +12,11 @@ agent-only lookup that excludes model-backed deployments.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +26,7 @@ from hopsworks.cli import output, session
 
 @click.group("agent")
 def agent_group() -> None:
-    """Python agent deployment commands."""
+    """Agents: Python agents served as deployments."""
 
 
 @agent_group.command("list")
@@ -31,6 +34,7 @@ def agent_group() -> None:
 def agent_list(ctx: click.Context) -> None:
     """List every agent deployment in the active project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -62,6 +66,7 @@ def agent_list(ctx: click.Context) -> None:
 def agent_info(ctx: click.Context, name: str) -> None:
     """Show details for a single agent.
 
+    \f
     Args:
         ctx: Click context.
         name: Agent name.
@@ -96,7 +101,8 @@ def agent_info(ctx: click.Context, name: str) -> None:
     help="Local requirements.txt to install into the agent environment.",
 )
 @click.option(
-    "--environment",
+    "--env",
+    "environment",
     help="Python environment name; defaults to the agent name.",
 )
 @click.option(
@@ -126,16 +132,17 @@ def agent_create(
 ) -> None:
     """Create (or update) an agent from a local script or package.
 
-    ``ENTRY`` is a ``.py`` file or a directory containing ``pyproject.toml``.
+    `ENTRY` is a `.py` file or a directory containing `pyproject.toml`.
     On re-runs, the latest code is uploaded and the deployment's predictor is
-    rewritten; the running state is left untouched (use ``start`` or invoke
-    ``restart`` via the SDK to roll a running agent onto new code).
+    rewritten; the running state is left untouched (use `start` or invoke
+    `restart` via the SDK to roll a running agent onto new code).
 
+    \f
     Args:
         ctx: Click context.
         entry: Local path to script or package.
-        name: Agent name; defaults to the basename of ``entry``.
-        requirements: Optional ``requirements.txt`` path.
+        name: Agent name; defaults to the basename of `entry`.
+        requirements: Optional `requirements.txt` path.
         environment: Python environment name.
         upload_dir: HopsFS upload directory.
         description: Description string.
@@ -153,7 +160,9 @@ def agent_create(
             resources=_memory_limit(memory),
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Agent create failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not create agent '{name or entry}': {exc}"
+        ) from exc
 
     output.success("✓ Created agent %s", getattr(agent, "name", name or entry))
 
@@ -161,52 +170,68 @@ def agent_create(
 @agent_group.command("start")
 @click.argument("name")
 @click.option(
-    "--wait",
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait until the agent is RUNNING.",
+)
+@click.option(
+    "--timeout",
     type=int,
     default=600,
     show_default=True,
-    help="Seconds to wait for RUNNING.",
+    help="Seconds to wait.",
 )
 @click.pass_context
-def agent_start(ctx: click.Context, name: str, wait: int) -> None:
+def agent_start(ctx: click.Context, name: str, wait: bool, timeout: int) -> None:
     """Start an agent and optionally wait for the RUNNING state.
 
+    \f
     Args:
         ctx: Click context.
         name: Agent name.
-        wait: Seconds to wait for the agent to become RUNNING.
+        wait: Whether to wait for RUNNING.
+        timeout: Seconds to wait.
     """
     agent = _get_agent(ctx, name)
     try:
-        agent.start(await_running=wait)
+        agent.start(await_running=timeout if wait else 0)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Start failed: {exc}") from exc
+        raise click.ClickException(f"Could not start agent '{name}': {exc}") from exc
     output.success("✓ Started agent %s", name)
 
 
 @agent_group.command("stop")
 @click.argument("name")
 @click.option(
-    "--wait",
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help="Wait until the agent is STOPPED.",
+)
+@click.option(
+    "--timeout",
     type=int,
     default=600,
     show_default=True,
-    help="Seconds to wait for STOPPED.",
+    help="Seconds to wait.",
 )
 @click.pass_context
-def agent_stop(ctx: click.Context, name: str, wait: int) -> None:
+def agent_stop(ctx: click.Context, name: str, wait: bool, timeout: int) -> None:
     """Stop a running agent.
 
+    \f
     Args:
         ctx: Click context.
         name: Agent name.
-        wait: Seconds to wait for the agent to stop.
+        wait: Whether to wait for STOPPED.
+        timeout: Seconds to wait.
     """
     agent = _get_agent(ctx, name)
     try:
-        agent.stop(await_stopped=wait)
+        agent.stop(await_stopped=timeout if wait else 0)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Stop failed: {exc}") from exc
+        raise click.ClickException(f"Could not stop agent '{name}': {exc}") from exc
     output.success("✓ Stopped agent %s", name)
 
 
@@ -228,6 +253,7 @@ def agent_query(
 ) -> None:
     """Send a request to a running agent.
 
+    \f
     Args:
         ctx: Click context.
         name: Agent name.
@@ -248,7 +274,7 @@ def agent_query(
     try:
         response = agent.predict(data=payload)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Query failed: {exc}") from exc
+        raise click.ClickException(f"Could not query agent '{name}': {exc}") from exc
 
     if output.JSON_MODE:
         output.print_json(response)
@@ -280,6 +306,11 @@ def agent_query(
 )
 @click.option("--since", help="ISO-8601 lower bound on log timestamp.")
 @click.option("--until", help="ISO-8601 upper bound on log timestamp.")
+@click.option(
+    "--previous",
+    is_flag=True,
+    help="Read the previous, terminated container: the crash of a predictor that restarted.",
+)
 @click.option(
     "-f",
     "--follow",
@@ -319,6 +350,7 @@ def agent_logs(
     source: str,
     since: str | None,
     until: str | None,
+    previous: bool,
     follow: bool,
     interval: float,
     download: bool,
@@ -326,18 +358,20 @@ def agent_logs(
 ) -> None:
     """Read or follow logs from an agent component.
 
+    \f
     Args:
         ctx: Click context.
         name: Agent name.
-        component: Component to query (e.g. ``predictor``, ``transformer``).
+        component: Component to query (e.g. `predictor`, `transformer`).
         tail: Number of lines.
-        source: ``kubernetes`` or ``opensearch`` (deprecated).
+        source: `kubernetes` or `opensearch` (deprecated).
         since: ISO-8601 lower bound on log timestamp.
         until: ISO-8601 upper bound on log timestamp.
+        previous: Read the previous, terminated container.
         follow: Stream new lines instead of returning a one-shot tail.
         interval: Seconds between polls when following.
         download: Download the HopsFS log archives instead of reading pods.
-        log_dir: With ``--download``, the directory to download into.
+        log_dir: With `--download`, the directory to download into.
     """
     agent = _get_agent(ctx, name)
 
@@ -356,7 +390,9 @@ def agent_logs(
                 os.makedirs(path, exist_ok=True)
             local_paths = agent.download_logs(path=path)
         except Exception as exc:  # noqa: BLE001
-            raise click.ClickException(f"Log download failed: {exc}") from exc
+            raise click.ClickException(
+                f"Could not download the logs of agent '{name}': {exc}"
+            ) from exc
         if output.JSON_MODE:
             output.print_json({"paths": local_paths})
             return
@@ -364,6 +400,8 @@ def agent_logs(
             click.echo(local_path)
         return
 
+    if follow and previous:
+        raise click.UsageError("--previous cannot be combined with --follow.")
     if follow:
         try:
             for chunk in agent.tail_logs(
@@ -376,7 +414,9 @@ def agent_logs(
         except KeyboardInterrupt:
             return
         except Exception as exc:  # noqa: BLE001
-            raise click.ClickException(f"Log follow failed: {exc}") from exc
+            raise click.ClickException(
+                f"Could not follow the logs of agent '{name}': {exc}"
+            ) from exc
         return
 
     try:
@@ -386,11 +426,19 @@ def agent_logs(
             source=source,
             since=since,
             until=until,
+            previous=previous,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Log fetch failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not read the logs of agent '{name}': {exc}"
+        ) from exc
     if output.JSON_MODE:
         output.print_json({"component": component, "logs": text})
+        return
+    if not text and not previous:
+        click.echo(
+            "<no logs> (a restarted container starts empty: --previous reads the last one)"
+        )
         return
     click.echo(text or "<no logs>")
 
@@ -403,20 +451,427 @@ def agent_logs(
 def agent_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete an agent deployment.
 
+    \f
     Args:
         ctx: Click context.
         name: Agent name.
         yes: Skip confirmation when True.
-        force: Pass ``force=True`` to the SDK (stops the agent first if running).
+        force: Pass `force=True` to the SDK (stops the agent first if running).
     """
     agent = _get_agent(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete agent '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete agent '{name}'?")
     try:
         agent.delete(force=force)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Delete failed: {exc}") from exc
+        raise click.ClickException(f"Could not delete agent '{name}': {exc}") from exc
     output.success("✓ Deleted agent %s", name)
+
+
+# USD per million tokens (input, output), as of _PRICES_AS_OF.
+_PRICES_AS_OF = "2026-11-04"
+_PRICES = {
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
+}
+_SUPPORTED_PROVIDERS = ("anthropic",)
+_AGENT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+_PY_CASTS = {
+    "int": "int",
+    "bigint": "int",
+    "smallint": "int",
+    "tinyint": "int",
+    "float": "float",
+    "double": "float",
+    "decimal": "float",
+}
+
+
+@agent_group.command("init")
+@click.argument("name")
+@click.option(
+    "--reads",
+    "reads",
+    multiple=True,
+    required=True,
+    metavar="FG[:VERSION]",
+    help="A feature group the agent answers from; repeat it or comma-separate. "
+    "The latest version when none is given.",
+)
+@click.option(
+    "--search",
+    "search",
+    metavar="FG[:VERSION]",
+    help="An embedding feature group for a search tool (up to 10 neighbours).",
+)
+@click.option(
+    "--model",
+    default="anthropic/claude-sonnet-5-5",
+    show_default=True,
+    help="The LLM as PROVIDER/MODEL; only anthropic is supported.",
+)
+@click.option(
+    "--key-secret",
+    help="The Hopsworks secret holding the provider's API key; PROVIDER_api_key "
+    "by default. Check it with `hops secrets list`.",
+)
+@click.option(
+    "--force", is_flag=True, help="Overwrite agents/NAME/agent.py if it exists."
+)
+@click.pass_context
+def agent_init(
+    ctx: click.Context,
+    name: str,
+    reads: tuple[str, ...],
+    search: str | None,
+    model: str,
+    key_secret: str | None,
+    force: bool,
+) -> None:
+    """Write agents/NAME/agent.py: a traced agent over feature groups.
+
+    The script is an `AgentApp` that calls the LLM with tools: per feature
+    group a bounded Trino aggregate (50 rows at most) and, when the group has
+    a primary key and an online store, a primary-key lookup. The system prompt
+    names the groups and their columns. Edit the prompt and tools, then deploy
+    with the hint printed at the end. Nothing is deployed here.
+
+    \f
+    Args:
+        ctx: Click context.
+        name: Agent name: a letter first, then letters and digits.
+        reads: Feature groups, `name` or `name:version`.
+        search: An embedding feature group, `name` or `name:version`.
+        model: `provider/model`.
+        key_secret: Secret name holding the provider's API key.
+        force: Overwrite an existing script.
+    """
+    if not _AGENT_NAME.fullmatch(name):
+        raise click.BadParameter(
+            "Use a letter first, then letters and digits.", param_hint="NAME"
+        )
+    provider, _, model_name = model.partition("/")
+    if provider not in _SUPPORTED_PROVIDERS or not model_name:
+        raise click.BadParameter(
+            f"Use anthropic/<model>; got '{model}'.", param_hint="--model"
+        )
+    target = Path("agents") / name / "agent.py"
+    if target.exists() and not force:
+        raise click.ClickException(
+            f"{target} already exists. Pass --force to overwrite it."
+        )
+
+    from hopsworks.cli.commands import fg as fg_commands  # noqa: PLC0415
+
+    groups = [
+        _read_group(ctx, fg_commands, ref, search=False) for ref in _split_refs(reads)
+    ]
+    search_group = None
+    if search:
+        if importlib.util.find_spec("hopsworks_agents.embed") is None:
+            raise click.ClickException(
+                "Search needs the embedding endpoint (hopsworks_agents.embed), "
+                "which this install does not have. Run without --search."
+            )
+        search_group = _read_group(ctx, fg_commands, search, search=True)
+
+    code = _render_agent(
+        name, model_name, key_secret or f"{provider}_api_key", groups, search_group
+    )
+    ast.parse(code)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(code, encoding="utf-8")
+
+    tools = [t["name"] for t in _tool_specs(groups, search_group)]
+    if output.JSON_MODE:
+        output.print_json({"path": str(target), "tools": tools, "model": model})
+        return
+    output.success("✓ Wrote %s", target)
+    click.echo("Tools: " + ", ".join(tools))
+    click.echo(_deploy_hint(name, target, model_name, search_group))
+
+
+def _split_refs(values: tuple[str, ...]) -> list[str]:
+    return [r.strip() for v in values for r in v.split(",") if r.strip()]
+
+
+def _read_group(ctx: click.Context, fg_commands: Any, ref: str, search: bool) -> dict:
+    """What the script needs of one feature group, read with the SDK."""
+    fg_name, _, raw_version = ref.partition(":")
+    try:
+        version = int(raw_version) if raw_version else None
+    except ValueError:
+        raise click.BadParameter(
+            f"Version of '{fg_name}' must be a number.", param_hint="--reads"
+        ) from None
+    fg = fg_commands._get_fg(ctx, fg_name, version)
+    own_id = session.get_feature_store(ctx).id
+    if getattr(fg, "feature_store_id", own_id) != own_id:
+        raise click.ClickException(
+            f"Feature group '{fg.name}' is in the shared feature store "
+            f"'{getattr(fg, 'feature_store_name', None) or fg.feature_store_id}', "
+            "not this project's own. An agent reads its own store only: "
+            "copy the group into this project first."
+        )
+    features = getattr(fg, "features", []) or []
+    group = {
+        "name": fg.name,
+        "version": fg.version,
+        "description": output.first_line(getattr(fg, "description", ""), ""),
+        "columns": [(f.name, f.type) for f in features],
+        "primary_key": list(getattr(fg, "primary_key", []) or []),
+        "online": bool(getattr(fg, "online_enabled", False)),
+        "sample": None,
+        "embeddings": [],
+    }
+    if search:
+        index = getattr(fg, "embedding_index", None)
+        if index is None:
+            raise click.ClickException(
+                f"Feature group '{fg.name}' has no embedding index: pass an embedding group to --search."
+            )
+        group["embeddings"] = [e.name for e in index.get_embeddings()]
+        return group
+    try:
+        rows = fg.select_all().show(3)
+        group["sample"] = rows.head(3).to_dict(orient="records")
+    except Exception as exc:  # noqa: BLE001 - a preview is a convenience, not a gate
+        output.warn(
+            "Could not preview %s: %s. Its suggested prompts are generic.", fg.name, exc
+        )
+    return group
+
+
+def _table(group: dict) -> str:
+    return f"{group['name']}_{group['version']}"
+
+
+def _tool_specs(groups: list[dict], search_group: dict | None) -> list[dict]:
+    """The Anthropic tool definitions, in the order the script lists them."""
+    specs = []
+    for g in groups:
+        specs.append(
+            {
+                "name": f"aggregate_{g['name']}",
+                "description": f"Run one Trino SELECT on {_table(g)} for counts, sums, "
+                f"averages or top-k. At most {_MAX_ROWS} rows come back.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": f"A SELECT reading {_table(g)}, Trino dialect.",
+                        }
+                    },
+                    "required": ["sql"],
+                },
+            }
+        )
+        if _has_lookup(g):
+            specs.append(
+                {
+                    "name": f"lookup_{g['name']}",
+                    "description": f"Read the rows of {g['name']} for one primary key, "
+                    "from the online store.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            pk: {"type": "string", "description": f"Value of {pk}."}
+                            for pk in g["primary_key"]
+                        },
+                        "required": g["primary_key"],
+                    },
+                }
+            )
+    if search_group:
+        specs.append(
+            {
+                "name": "search",
+                "description": f"Find the rows of {search_group['name']} closest in "
+                "meaning to a text query.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "k": {
+                            "type": "integer",
+                            "description": "Rows to return, 1 to 10.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            }
+        )
+    return specs
+
+
+_MAX_ROWS = 50
+
+
+def _has_lookup(group: dict) -> bool:
+    return bool(group["online"] and group["primary_key"])
+
+
+def _render_agent(
+    name: str,
+    model_name: str,
+    key_secret: str,
+    groups: list[dict],
+    search_group: dict | None,
+) -> str:
+    from hopsworks.cli import scaffold  # noqa: PLC0415
+
+    template = scaffold.load_template("agent_init.py.tmpl")
+    tool_code = ""
+    for g in groups:
+        types = dict(g["columns"])
+        casts = {
+            pk: _PY_CASTS.get(str(types.get(pk, "")).split("(")[0].lower(), "str")
+            for pk in g["primary_key"]
+        }
+        lookup = ""
+        if _has_lookup(g):
+            lookup = _fill(
+                scaffold.load_template("agent_init_lookup.py.tmpl"),
+                FN=g["name"],
+                CASTS="{"
+                + ", ".join(f"{json.dumps(k)}: {v}" for k, v in casts.items())
+                + "}",
+            )
+        tool_code += _fill(
+            scaffold.load_template("agent_init_group.py.tmpl"),
+            FN=g["name"],
+            FG=json.dumps(g["name"]),
+            VERSION=str(g["version"]),
+            TABLE=json.dumps(_table(g)),
+            LOOKUP=lookup,
+        )
+    imports = ""
+    if search_group:
+        imports = "from hopsworks_agents.embed import embed_query\n"
+        tool_code += _fill(
+            scaffold.load_template("agent_init_search.py.tmpl"),
+            FG=json.dumps(search_group["name"]),
+            VERSION=str(search_group["version"]),
+            SKIP=json.dumps(search_group["embeddings"]),
+        )
+    specs = _tool_specs(groups, search_group)
+    handler_map = (
+        "{\n" + "".join(f'    "{s["name"]}": {s["name"]},\n' for s in specs) + "}"
+    )
+    return _fill(
+        template,
+        NAME=json.dumps(name),
+        NAME_TEXT=name,
+        TABLES=", ".join(_table(g) for g in groups),
+        IMPORTS=imports,
+        PRICE_COMMENT=_price_comment(model_name),
+        MODEL=json.dumps(model_name),
+        KEY_SECRET=json.dumps(key_secret),
+        SYSTEM_PROMPT=_system_prompt(name, groups, search_group),
+        DESCRIPTION=json.dumps(
+            f"Answers questions about {', '.join(g['name'] for g in groups)}."
+        ),
+        PROMPTS="[\n"
+        + "".join(f"        {json.dumps(p)},\n" for p in _suggested_prompts(groups))
+        + "    ]",
+        TOOL_CODE=tool_code,
+        TOOL_SCHEMAS=json.dumps(specs, indent=4),
+        TOOL_HANDLERS=handler_map,
+    )
+
+
+def _fill(template: str, **values: str) -> str:
+    for key, value in values.items():
+        template = template.replace(f"@@{key}@@", value)
+    return re.sub(r"\n{4,}", "\n\n\n", template)
+
+
+def _system_prompt(name: str, groups: list[dict], search_group: dict | None) -> str:
+    lines = [
+        f"You are {name}, an assistant that answers questions about the tables below.",
+        "Answer with numbers from tool results only, and say so when the data has none.",
+        f"Every tool returns at most {_MAX_ROWS} rows: aggregate in SQL instead of listing.",
+        "",
+    ]
+    for g in groups:
+        lines.append(
+            f"Table {_table(g)} (feature group {g['name']}, version {g['version']})"
+            + (f": {g['description']}" if g["description"] else "")
+        )
+        if g["primary_key"]:
+            lines.append(f"  primary key: {', '.join(g['primary_key'])}")
+        lines.append(f"  columns: {', '.join(f'{c} ({t})' for c, t in g['columns'])}")
+    if search_group:
+        lines.append(
+            f"Search tool: meaning-based lookup in {search_group['name']}; "
+            "cite what it returns. When it answers that search is unavailable, "
+            "say so in your answer and answer without it."
+        )
+    body = "".join(f"        {json.dumps(line)},\n" for line in lines)
+    return '"\\n".join(\n    [\n' + body + "    ]\n)"
+
+
+def _suggested_prompts(groups: list[dict]) -> list[str]:
+    first = groups[0]
+    prompts = [f"How many rows does {first['name']} have?"]
+    sample = (first["sample"] or [None])[0]
+    pk = first["primary_key"][0] if first["primary_key"] else None
+    if sample and pk and _has_lookup(first):
+        prompts.append(f"What do we know about {pk} {sample[pk]}?")
+    other = next(
+        (c for c, _ in first["columns"] if c not in first["primary_key"]), None
+    )
+    if other:
+        prompts.append(f"What are the most common values of {other}?")
+    return prompts
+
+
+def _price_comment(model_name: str) -> str:
+    price = _PRICES.get(model_name)
+    if price:
+        return (
+            f"# Prices, USD per million tokens, as of {_PRICES_AS_OF}: "
+            f"{model_name} input {price[0]:.2f}, output {price[1]:.2f}\n"
+        )
+    return (
+        f"# Prices for {model_name} are not in the CLI's table: take them from "
+        "the provider before deploying.\n"
+    )
+
+
+def _deploy_hint(
+    name: str, target: Path, model_name: str, search_group: dict | None = None
+) -> str:
+    # `hops fg embed delete` refuses while a deployment's description names its group.
+    description = ""
+    if search_group:
+        from hopsworks.cli import embed_run  # noqa: PLC0415
+
+        description = (
+            f'      description="Searches {search_group["name"]}. '
+            f'{embed_run.SEARCH}{search_group["name"]}",\n'
+        )
+    price = _PRICES.get(model_name)
+    tracing = '{"enabled": True'
+    if price:
+        tracing += (
+            f', "input_token_price_per_million_tokens": {price[0]}'
+            f', "output_token_price_per_million_tokens": {price[1]}'
+        )
+    else:
+        tracing += ', "input_token_price_per_million_tokens": <in>, "output_token_price_per_million_tokens": <out>'
+    tracing += "}"
+    return (
+        f"Edit the system prompt and tools, then deploy with tracing and prices "
+        f"(prices for {model_name} as of {_PRICES_AS_OF}):\n"
+        "  project = hopsworks.login()\n"
+        "  agent = project.get_agent_serving().deploy_agent(\n"
+        f'      entry="{target}", name="{name}", environment="python-agent-pipeline",\n'
+        f"{description}"
+        f"      tracing={tracing})\n"
+        "  agent.start(await_running=900)"
+    )
 
 
 def _get_model_serving(ctx: click.Context) -> Any:
@@ -438,7 +893,7 @@ def _get_agent(ctx: click.Context, name: str) -> Any:
     try:
         d = ms.get_deployment(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Agent '{name}' not found: {exc}") from exc
+        raise click.ClickException(f"Could not find agent '{name}': {exc}") from exc
     if d is None or not _is_agent(d):
         raise click.ClickException(f"Agent '{name}' not found.")
     return d
@@ -463,6 +918,21 @@ def _predictor_attr(d: Any, attr: str, default: Any) -> Any:
 
 
 def _deployment_status(d: Any) -> str:
+    """Whether the agent is running, which has to be asked for rather than read.
+
+    A deployment's state is not an attribute on the object: `get_state()` fetches
+    it. Reading `status`/`deployment_state`/`_state` off a deployment that had not
+    been asked found nothing every time, so `hops agent info` printed `Status -`
+    for a pod that was running and answering -- the one line anybody runs the
+    command for. The attributes stay as a fallback for an object that carries one.
+    """
+    try:
+        state = d.get_state()
+    except Exception:  # noqa: BLE001 -- a status we cannot fetch is not a failed command
+        state = None
+    status = getattr(state, "status", None)
+    if status:
+        return str(status)
     for attr in ("status", "deployment_state", "_state"):
         value = getattr(d, attr, None)
         if value:

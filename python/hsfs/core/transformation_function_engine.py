@@ -33,7 +33,6 @@ from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import shared_memory
 from typing import TYPE_CHECKING, Any, TypeVar
 
-import pandas as pd
 from hopsworks_common.client import exceptions
 from hopsworks_common.core.constants import HAS_POLARS, HAS_PYARROW
 from hsfs import (
@@ -74,17 +73,11 @@ def _warmup_barrier_wait(barrier, timeout):
     barrier.wait(timeout)
 
 
-if HAS_POLARS:
-    import polars as pl
-
-if HAS_PYARROW:
-    import pyarrow as pa
-    import pyarrow.ipc as ipc
-
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import pandas as pd
+    import polars as pl
     import pyspark.sql as spark_sql
 
 
@@ -717,6 +710,11 @@ class TransformationFunctionEngine:
         transformations are the unit of parallelism: with `n_processes > 1` they
         run concurrently in a worker pool, otherwise sequentially in-process.
         """
+        import pandas as pd
+
+        if HAS_POLARS:
+            import polars as pl
+
         engine_type = engine._get_type()
         is_polars = HAS_POLARS and isinstance(data, pl.DataFrame)
         dropped_features, column_order = (
@@ -864,6 +862,11 @@ class TransformationFunctionEngine:
     @staticmethod
     def _update_request_parameter_data(transformed_data, request_parameters):
         """Merge request parameters into the transformed data."""
+        import pandas as pd
+
+        if HAS_POLARS:
+            import polars as pl
+
         is_batch = isinstance(request_parameters, list)
 
         if isinstance(transformed_data, pd.DataFrame):
@@ -965,6 +968,13 @@ class TransformationFunctionEngine:
         Returns (shm, buffer_size, is_polars). Caller must call
         shm.close() and shm.unlink() after all workers are done.
         """
+        if HAS_POLARS:
+            import polars as pl
+
+        if HAS_PYARROW:
+            import pyarrow as pa
+            import pyarrow.ipc as ipc
+
         is_polars = HAS_POLARS and isinstance(dataframe, pl.DataFrame)
         if is_polars:
             table = dataframe.to_arrow()
@@ -1013,6 +1023,13 @@ class TransformationFunctionEngine:
         as_polars: bool = False,
     ) -> pd.DataFrame:
         """Deserialize a DataFrame from Arrow IPC in shared memory."""
+        if HAS_POLARS:
+            import polars as pl
+
+        if HAS_PYARROW:
+            import pyarrow as pa
+            import pyarrow.ipc as ipc
+
         shm = shared_memory.SharedMemory(name=shm_name, create=False)
         try:
             if as_polars:
@@ -1108,6 +1125,11 @@ class TransformationFunctionEngine:
         predecessor_columns: dict[str, Any] | None,
     ) -> Any:
         """Run one prepared UDF job, with this job's serving context already bound."""
+        import pandas as pd
+
+        if HAS_POLARS:
+            import polars as pl
+
         if shm_name is not None:
             data = TransformationFunctionEngine._read_from_shared_memory(
                 shm_name, shm_size, is_polars
@@ -1173,6 +1195,8 @@ class TransformationFunctionEngine:
         Returns:
             A dictionary containing only the transformed output columns.
         """
+        import pandas as pd
+
         if not online and engine_type == "spark":
             raise exceptions.FeatureStoreException(
                 "Cannot apply transformation functions on a dictionary in offline mode when the engine is spark. Please use the python engine or use the online mode."
