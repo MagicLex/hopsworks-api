@@ -22,11 +22,14 @@ Authentication is handled automatically via the Hopsworks Superset login endpoin
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import requests
 from hopsworks_apigen import public
-from hopsworks_common import client, usage
+from hopsworks_common import client, events, usage
+from hopsworks_common.core.superset_query_context import build_query_context
 from hopsworks_common.core.variable_api import VariableApi
 
 
@@ -37,6 +40,8 @@ if TYPE_CHECKING:
 SUPERSET_SERVICE_NAME = "app.superset.service"
 SUPERSET_PORT = 8088
 SUPERSET_BASE_PATH = "/hopsworks-api/superset"
+# From outside, Hopsworks proxies Superset at the same path and names the session cookie this way.
+SUPERSET_PROXY_COOKIE = "!Proxy!SupersetProxyServletsession"
 
 
 @public("hopsworks.core.superset_api.SupersetApi")
@@ -44,7 +49,8 @@ class SupersetApi:
     """API for managing Superset datasets, charts, and dashboards.
 
     This class provides methods to create, read, update, and delete
-    Superset resources directly from within Hopsworks.
+    Superset resources, from within Hopsworks or from an external client
+    (through the Hopsworks Superset proxy).
     Authentication is handled automatically using the project user's
     Superset credentials stored in Hopsworks secrets.
 
@@ -75,7 +81,7 @@ class SupersetApi:
             params=json.dumps({                  # chart config as a JSON string
                 "metrics": [{"label": "count", "expressionType": "SQL", "sqlExpression": "COUNT(*)"}],
                 "groupby": [],
-                "time_column": "event_time",
+                "x_axis": "event_time",
                 "time_grain_sqla": "P1D",
                 "row_limit": 1000,
             }),
@@ -112,13 +118,14 @@ class SupersetApi:
         self._session_token: str | None = None
         self._csrf_token: str | None = None
         self._http = requests.Session()
+        self._external = client._is_external()
+        self._cookie = SUPERSET_PROXY_COOKIE if self._external else "session"
+        if self._external:
+            self._http.verify = client._get_instance()._verify
 
     def _get_superset_url(self) -> str:
-        if client._is_external():
-            raise RuntimeError(
-                "SupersetApi is only available from within the Hopsworks cluster. "
-                "Connecting from an external client is not supported."
-            )
+        if self._external:
+            return client._get_instance()._base_url
         if not self._service_discovery_domain:
             raise RuntimeError(
                 "Service discovery domain is not configured. "
@@ -127,6 +134,17 @@ class SupersetApi:
                 "returned an empty value."
             )
         return f"http://{SUPERSET_SERVICE_NAME}.{self._service_discovery_domain}:{SUPERSET_PORT}"
+
+    def _referer(self) -> str:
+        # Flask-WTF compares host strings, so the default port must not be spelled out.
+        url = urlparse(self._get_superset_url())
+        default = {"https": 443, "http": 80}.get(url.scheme)
+        host = (
+            url.hostname
+            if url.port in (None, default)
+            else f"{url.hostname}:{url.port}"
+        )
+        return f"{url.scheme}://{host}{SUPERSET_BASE_PATH}/"
 
     def _get_session_token(self) -> str:
         _client = client._get_instance()
@@ -141,15 +159,12 @@ class SupersetApi:
             + SUPERSET_BASE_PATH
             + "/api/v1/security/csrf_token/"
         )
-        headers = {
-            "Content-Type": "application/json",
-            "Cookie": f"session={self._session_token}",
-        }
+        headers = {"Cookie": f"{self._cookie}={self._session_token}"}
         resp = self._http.get(url, headers=headers, timeout=60)
         resp.raise_for_status()
         # Update session cookie if the server rotated it during CSRF token generation
-        if "session" in resp.cookies:
-            self._session_token = resp.cookies["session"]
+        if self._cookie in resp.cookies:
+            self._session_token = resp.cookies[self._cookie]
         self._csrf_token = resp.json()["result"]
         return self._csrf_token
 
@@ -168,12 +183,14 @@ class SupersetApi:
             self._get_csrf_token()
 
         url = self._get_superset_url() + SUPERSET_BASE_PATH + path
-        headers = {
-            "Content-Type": "application/json",
-            "Cookie": f"session={self._session_token}",
-        }
+        # requests sets Content-Type with a JSON body. Superset answers 400 to a
+        # bodiless GET that claims JSON, such as /api/v1/chart/<id>/data/.
+        headers = {"Cookie": f"{self._cookie}={self._session_token}"}
         if needs_csrf:
             headers["X-CSRFToken"] = self._csrf_token
+            # Behind the Hopsworks proxy Superset sees HTTPS, and Flask-WTF then
+            # refuses a write without a same-origin Referer.
+            headers["Referer"] = self._referer()
 
         resp = self._http.request(
             method, url, json=json_data, headers=headers, params=params, timeout=60
@@ -182,7 +199,7 @@ class SupersetApi:
         if resp.status_code == 401:
             self._get_session_token()
             self._csrf_token = None
-            headers["Cookie"] = f"session={self._session_token}"
+            headers["Cookie"] = f"{self._cookie}={self._session_token}"
             if needs_csrf:
                 self._get_csrf_token()
                 headers["X-CSRFToken"] = self._csrf_token
@@ -190,7 +207,11 @@ class SupersetApi:
                 method, url, json=json_data, headers=headers, params=params, timeout=60
             )
 
-        resp.raise_for_status()
+        if not resp.ok:
+            raise requests.HTTPError(
+                f"{resp.status_code} {resp.reason} for {method} {path}: {resp.text[:500]}",
+                response=resp,
+            )
         if resp.status_code == 204:
             return {}
         return resp.json()
@@ -231,7 +252,7 @@ class SupersetApi:
             table_name: Name of the table (or virtual dataset).
             schema: Database schema name.
             sql: SQL expression for virtual datasets.
-            description: Optional description.
+            description: Optional description, set with a PUT after the create.
             owners: Optional list of Superset user IDs as owners.
 
         Returns:
@@ -245,11 +266,19 @@ class SupersetApi:
             payload["schema"] = schema
         if sql is not None:
             payload["sql"] = sql
-        if description is not None:
-            payload["description"] = description
         if owners is not None:
             payload["owners"] = owners
-        return self._request("POST", "/api/v1/dataset/", json_data=payload)
+        dataset = self._request("POST", "/api/v1/dataset/", json_data=payload)
+        # Superset's dataset POST schema has no description field (400 "Unknown field."): set it after.
+        if description:
+            try:
+                self.update_dataset(dataset["id"], description=description)
+            except requests.HTTPError as e:
+                raise requests.HTTPError(
+                    f"Superset dataset {dataset['id']} was created, but its description was not set: {e}",
+                    response=e.response,
+                ) from e
+        return dataset
 
     @public
     @usage._method_logger
@@ -308,6 +337,9 @@ class SupersetApi:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "chart", "create", key=lambda self, slice_name, *a, **k: {"name": slice_name}
+    )
     def create_chart(
         self,
         slice_name: str,
@@ -321,9 +353,12 @@ class SupersetApi:
     ) -> dict:
         """Create a Superset chart.
 
+        The chart is saved with the query context Superset's explore view would build,
+        so its data endpoint answers without the chart being opened first.
+
         Parameters:
             slice_name: Display name of the chart.
-            viz_type: Visualization type (e.g., "table", "big_number", "echarts_timeseries").
+            viz_type: Visualization type (e.g., "table", "big_number", "echarts_timeseries_line").
             datasource_id: ID of the dataset to use as data source.
             params: JSON string of chart configuration parameters.
             datasource_type: Type of datasource (default "table").
@@ -333,6 +368,9 @@ class SupersetApi:
 
         Returns:
             The created chart as a dict.
+
+        Raises:
+            ValueError: The params hold a value Superset's explore view also refuses.
         """
         payload: dict[str, Any] = {
             "slice_name": slice_name,
@@ -340,6 +378,7 @@ class SupersetApi:
             "datasource_id": datasource_id,
             "datasource_type": datasource_type,
             "params": params,
+            **self._query_context(datasource_id, datasource_type, viz_type, params),
         }
         if description is not None:
             payload["description"] = description
@@ -374,21 +413,60 @@ class SupersetApi:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "chart",
+        "update",
+        key=lambda self, chart_id, **k: {"name": k.get("slice_name") or str(chart_id)},
+    )
     def update_chart(self, chart_id: int, **kwargs: Any) -> dict:
         """Update a Superset chart.
 
         Pass fields to update as keyword arguments (e.g., slice_name, viz_type, params, owners).
+        A change of params, viz_type, datasource_id or datasource_type also rebuilds the chart's
+        query context from the chart's current fields and the new ones, and sends the context
+        with all four fields in the same PUT, so the saved fields match the context.
 
         Parameters:
             chart_id: The chart ID.
 
         Returns:
             The updated chart as a dict.
+
+        Raises:
+            ValueError: The params hold a value Superset's explore view also refuses.
         """
+        query_fields = ("params", "viz_type", "datasource_id", "datasource_type")
+        if any(f in kwargs for f in query_fields):
+            chart = {**self.get_chart(chart_id)["result"], **kwargs}
+            kwargs = {
+                **kwargs,
+                **{f: chart[f] for f in query_fields},
+                **self._query_context(
+                    chart["datasource_id"],
+                    chart["datasource_type"],
+                    chart["viz_type"],
+                    chart["params"],
+                ),
+            }
         return self._request("PUT", f"/api/v1/chart/{chart_id}", json_data=kwargs)
+
+    @staticmethod
+    def _query_context(
+        datasource_id: int, datasource_type: str, viz_type: str, params: str | None
+    ) -> dict:
+        query_context = build_query_context(
+            datasource_id, viz_type, json.loads(params or "{}"), datasource_type
+        )
+        # Superset stores what its explore view sends: the context as a JSON string.
+        # No query_context_generation: a PUT of only that and query_context skips
+        # Superset's owner check, which exists for its report workers.
+        return {"query_context": json.dumps(query_context)}
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "chart", "delete", key=lambda self, chart_id, *a, **k: {"name": str(chart_id)}
+    )
     def delete_chart(self, chart_id: int) -> dict:
         """Delete a Superset chart.
 
@@ -406,6 +484,11 @@ class SupersetApi:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "dashboard",
+        "create",
+        key=lambda self, dashboard_title, *a, **k: {"name": dashboard_title},
+    )
     def create_dashboard(
         self,
         dashboard_title: str,
@@ -444,7 +527,11 @@ class SupersetApi:
             payload["css"] = css
         if owners is not None:
             payload["owners"] = owners
-        return self._request("POST", "/api/v1/dashboard/", json_data=payload)
+        created = self._request("POST", "/api/v1/dashboard/", json_data=payload)
+        # Titles are not unique: the id tells which dashboard this change made.
+        if isinstance(created, dict) and isinstance(created.get("id"), int):
+            events.note(id=created["id"])
+        return created
 
     @public
     @usage._method_logger
@@ -471,6 +558,13 @@ class SupersetApi:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "dashboard",
+        "update",
+        key=lambda self, dashboard_id, **k: {
+            "name": k.get("dashboard_title") or str(dashboard_id)
+        },
+    )
     def update_dashboard(self, dashboard_id: int, **kwargs: Any) -> dict:
         """Update a Superset dashboard.
 
@@ -482,12 +576,18 @@ class SupersetApi:
         Returns:
             The updated dashboard as a dict.
         """
+        events.note(id=dashboard_id)
         return self._request(
             "PUT", f"/api/v1/dashboard/{dashboard_id}", json_data=kwargs
         )
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "dashboard",
+        "delete",
+        key=lambda self, dashboard_id, *a, **k: {"name": str(dashboard_id)},
+    )
     def delete_dashboard(self, dashboard_id: int) -> dict:
         """Delete a Superset dashboard.
 
@@ -497,4 +597,5 @@ class SupersetApi:
         Returns:
             Empty dict on success.
         """
+        events.note(id=dashboard_id)
         return self._request("DELETE", f"/api/v1/dashboard/{dashboard_id}")

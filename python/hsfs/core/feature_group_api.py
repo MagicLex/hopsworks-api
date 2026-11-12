@@ -264,7 +264,8 @@ class FeatureGroupApi:
         res = _client._send_request("GET", path_params, query_params)
 
         fgs = []
-        for fg_json in res.get("items", [res] if "type" in res else []):
+        # The list is always an envelope; an empty one has no items.
+        for fg_json in res.get("items", []):
             fg_obj = self._from_json(fg_json)
             if fg_obj is None:
                 _logger.warning(

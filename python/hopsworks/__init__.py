@@ -15,7 +15,6 @@
 #
 from __future__ import annotations
 
-import getpass
 import importlib
 import logging
 import os
@@ -207,6 +206,7 @@ def login(
     cert_folder: str | None = None,
     engine: Literal["spark", "python", "training", "spark-no-metastore", "spark-delta"]
     | None = None,
+    project_id: int | None = None,
 ) -> project.Project:
     """Connect to [Hopsworks SaaS](https://run.hopsworks.ai/) by calling the `hopsworks.login()` function with no arguments.
 
@@ -231,7 +231,7 @@ def login(
         ```
 
     In addition to setting function arguments directly, `hopsworks.login()` also reads the environment variables:
-    `HOPSWORKS_HOST`, `HOPSWORKS_PORT`, `HOPSWORKS_PROJECT`, `HOPSWORKS_API_KEY`, `HOPSWORKS_HOSTNAME_VERIFICATION`, `HOPSWORKS_TRUST_STORE_PATH`, `HOPSWORKS_CERT_FOLDER` and `HOPSWORKS_ENGINE`.
+    `HOPSWORKS_HOST`, `HOPSWORKS_PORT`, `HOPSWORKS_PROJECT`, `HOPSWORKS_PROJECT_ID`, `HOPSWORKS_API_KEY`, `HOPSWORKS_HOSTNAME_VERIFICATION`, `HOPSWORKS_TRUST_STORE_PATH`, `HOPSWORKS_CERT_FOLDER` and `HOPSWORKS_ENGINE`.
 
     The function arguments do however take precedence over the environment variables in case both are set.
 
@@ -242,6 +242,7 @@ def login(
             Name of the project to access.
             If used inside a Hopsworks environment it always gets the current project.
             If not provided you will be prompted to enter it.
+            Several projects may share a name; the login then fails and lists the ids, to pass as `project_id`.
         api_key_value: Value of the API Key.
         api_key_file: Path to file wih API Key.
         hostname_verification: Whether to verify Hopsworks' certificate.
@@ -259,12 +260,18 @@ def login(
             * `spark-no-metastore`: Functions like `spark` but does not rely on the Hive metastore.
             * `spark-delta`: Minimizes dependencies further by avoiding both Hive metastore and HopsFS.
 
+        project_id:
+            Id of the project to access. Takes precedence over `project`.
+            If neither is given, `HOPSWORKS_PROJECT_ID` is used when set.
+            Inside a Hopsworks environment the current project is found by its id.
+
     Returns:
         The Project object to perform operations on.
 
     Raises:
         hopsworks.client.exceptions.RestAPIError: If the backend encounters an error when handling the request.
         hopsworks.client.exceptions.HopsworksSSLClientError: If SSLError is raised from underlying requests library.
+        hopsworks.client.exceptions.ProjectException: If no project or several projects match.
     """
     global _connected_project
 
@@ -301,9 +308,22 @@ def login(
     ):
         api_key = os.environ["HOPSWORKS_API_KEY"]
 
+    # Without a project argument, HOPSWORKS_PROJECT_ID names the project; the name may be shared by several.
+    if (
+        project is None
+        and project_id is None
+        and os.environ.get("HOPSWORKS_PROJECT_ID", "").isdigit()
+    ):
+        project_id = int(os.environ["HOPSWORKS_PROJECT_ID"])
+
     # If project argument not defined, get HOPSWORKS_PROJECT environment variable
-    if project is None and "HOPSWORKS_PROJECT" in os.environ:
+    if project is None and project_id is None and "HOPSWORKS_PROJECT" in os.environ:
         project = os.environ["HOPSWORKS_PROJECT"]
+
+    # A project name starts with a letter, so an all-digit name is a project id.
+    if project_id is None and project is not None and str(project).isdigit():
+        project_id = int(project)
+        project = None
 
     # If host argument not defined, get HOPSWORKS_HOST environment variable
     if host is None and "HOPSWORKS_HOST" in os.environ:
@@ -353,7 +373,9 @@ def login(
                 trust_store_path=trust_store_path,
                 cert_folder=cert_folder,
             )
-            _connected_project = _prompt_project(_hw_connection, project, is_saas)
+            _connected_project = _prompt_project(
+                _hw_connection, project, is_saas, project_id
+            )
             if _connected_project:
                 _set_active_project(_connected_project)
             print(
@@ -372,6 +394,8 @@ def login(
 
     if api_key is None and is_saas:
         print("Copy your API Key (first register/login at https://run.hopsworks.ai)")
+        import getpass
+
         api_key = getpass.getpass(prompt="\nPaste it here: ")
 
         # If api key was provided as input, save the API key locally on disk to avoid users having to enter it again in the same environment
@@ -392,7 +416,9 @@ def login(
             trust_store_path=trust_store_path,
             cert_folder=cert_folder,
         )
-        _connected_project = _prompt_project(_hw_connection, project, is_saas)
+        _connected_project = _prompt_project(
+            _hw_connection, project, is_saas, project_id
+        )
         if _connected_project:
             _set_active_project(_connected_project)
     except RestAPIError as hw_e:
@@ -428,6 +454,8 @@ def _get_cached_api_key_path():
     If not sufficient permissions are set in HOME to create the API key (writable and executable), it uses the temp directory to store it.
     """
     api_key_name = ".hw_api_key"
+    import getpass
+
     api_key_folder = f".{getpass.getuser()}_hopsworks_app"
 
     # Path for current working directory api key
@@ -455,7 +483,14 @@ def _get_cached_api_key_path():
     return api_key_path
 
 
-def _prompt_project(valid_connection, project, is_saas):
+def _prompt_project(valid_connection, project, is_saas, project_id=None):
+    if project_id is not None:
+        try:
+            return valid_connection._project_api._get_project_by_id(project_id)
+        except RestAPIError as x:
+            raise ProjectException(
+                f"Could not find project with id {project_id}"
+            ) from x
     if project is None:
         saas_projects = valid_connection._project_api._get_projects()
         if len(saas_projects) == 0:
@@ -467,7 +502,9 @@ def _prompt_project(valid_connection, project, is_saas):
         while True:
             print("\nMultiple projects found. \n")
             for index in range(len(saas_projects)):
-                print("\t (" + str(index + 1) + ") " + saas_projects[index].name)
+                print(
+                    f"\t ({index + 1}) {saas_projects[index].name} ({saas_projects[index].id})"
+                )
             while True:
                 project_index = input(
                     "\nEnter number corresponding to the project to use: "
@@ -494,6 +531,15 @@ def _prompt_project(valid_connection, project, is_saas):
         try:
             return valid_connection._project_api._get_project(project)
         except RestAPIError as x:
+            # A refused key is not a missing project: raise the backend's error as it is.
+            if x.response.status_code in (
+                RestAPIError.STATUS_CODE_UNAUTHORIZED,
+                RestAPIError.STATUS_CODE_FORBIDDEN,
+            ):
+                raise
+            if x.response.status_code == x.STATUS_CODE_CONFLICT:
+                # Several projects carry this name; the message names each by id.
+                raise ProjectException(x.user_message) from x
             raise ProjectException(f"Could not find project {project}") from x
 
 
@@ -667,7 +713,9 @@ def _set_active_project(project):
     if _client._is_external():
         # login already fetched this project; hand the id over instead of
         # letting the client look it up a second time.
-        _client._provide_project(project.name, project_id=project.id)
+        _client._provide_project(
+            project.name, project_id=project.id, backing_name=project.backing_name
+        )
 
 
 @public

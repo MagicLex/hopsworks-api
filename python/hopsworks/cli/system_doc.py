@@ -506,19 +506,29 @@ def release(directory: Path, token: str | None = None) -> bool:
         Whether it was released.
     """
     token = token or os.environ.get(TOKEN_ENV)
-    held = lease(directory)
-    if not token or held is None or held.get("token") != token:
+    if not token:
         return False
-    with contextlib.suppress(FileNotFoundError):
-        (directory / LEASE).unlink()
+    with _guard(directory):
+        held = lease(directory)
+        if held is None or held.get("token") != token:
+            return False
+        with contextlib.suppress(FileNotFoundError):
+            (directory / LEASE).unlink()
     return True
 
 
 def _held_message(directory: Path, held: dict) -> str:
-    return (
+    message = (
         f"{directory.name} is being built by {held.get('owner', 'unknown')} "
         f"(lease until {held.get('expires')}); wait for it, or for the lease to expire"
     )
+    if not os.environ.get(TOKEN_ENV):
+        # The common case in a build's own shells: the lease is ours, its token not exported.
+        message += (
+            f". If this build holds it, export {TOKEN_ENV} with the token "
+            "`hops factory system lease acquire` printed"
+        )
+    return message
 
 
 # endregion
