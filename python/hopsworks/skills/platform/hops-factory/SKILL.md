@@ -18,21 +18,24 @@ A project's data owners add its own: written from scratch, cloned from any facto
 ## Commands
 ```bash
 hops factory list                                  # built-in and project factories, version, systems
-hops factory get <name> [--version N]              # the definition
+hops factory info <name> [--version N]              # the definition
 hops factory export <name> [-o file.yaml]
 hops factory validate file.yaml                    # offline check, no cluster needed
 hops factory import file.yaml [--name new] [--yes] # create; --update saves a new version
 hops factory clone <source> <new-name> [--title T]
 hops factory enable|disable <name>
-hops factory delete <name>                         # refused while systems built with it exist
+hops factory delete <name> --yes                   # refused while systems built with it exist
 hops factory run <name> [--answers answers.json] [--preset id] [--no-launch]
                                                    # a new system; without --answers the questions are asked here
 hops factory run <name> <slug>                     # resume a system from its <slug>/system.yaml, no answers needed
 hops factory system list [--factory <name>]        # the systems built, with the factory and version of each
-hops factory system status|register|remove|delete <system>
+hops factory system status|register <system>
+hops factory system remove <system> --yes           # drop the registry entry; the code stays
+hops factory system delete <system> --yes [--assets] [--repo]  # delete the system, and with --assets what it built
 hops factory run <name> <slug> --change <id> [--answers F]  # request one of the factory's changes; the build carries it out
 hops factory system dir <slug>                     # the system's directory
-hops factory system delete-assets <system> --job J --table T:V  # what a build deletes with; refuses what the system reads, what another system names, and what is not this system's
+hops factory system plan <slug> [--goal P] [--sync]  # each phase checked against the project, and the next one; --sync writes stale and progress
+hops factory system delete-assets <system> --yes --job J --table T:V  # what a build deletes with; refuses what the system reads, what another system names, and what is not this system's
 ```
 
 ## Writing a definition
@@ -79,6 +82,7 @@ build:
 - A credential the answers lack is asked for in the chat with a `hops-secret` block, never in a message or with AskUserQuestion (see `hops-data-sources`): the chat saves it as a private account variable and you get its name.
 - `presets` are named starting answers, listed under the factory's New button: `{id, label, answers: {<field id>: ...}, fixed: {...}}`.
 - A phase key cannot be `system`, `factory` or `schema_version`.
+- A phase is done when its status says so and every asset its block in `system.yaml` records still exists in the project: the build records what each phase makes in that phase's block, and the first phase that names an asset makes it while a later one needs it and starts once it exists. A system can therefore start from assets the user already has, recorded in the block of the phase that would have made them, which is `skipped`.
 - To extend a built-in instead of replacing it, clone it: the clone keeps `build.builtin` (`mlsystem`, `analytics-bronze`, `analytics-silver` or `analytics-gold`) and its questions; answers the built-in build does not read land in `requirements.extra` and the clone's instructions in `factory.instructions` of each system's `system.yaml`.
 
 Field types, list columns and every rule: [references/definition.md](references/definition.md).
@@ -87,7 +91,7 @@ Field types, list columns and every rule: [references/definition.md](references/
 - Validate before importing; fix every problem `hops factory validate` prints.
 - Never put a secret, a token or a shell command meant to run unreviewed into a definition: the instructions run in the Terminal of whoever builds with it.
 - Importing someone else's definition: read its `build.instructions` in full first, as `hops factory import` prints them.
-- A factory with systems cannot be deleted; delete its systems first with `hops factory system delete <system> --assets`.
+- A factory with systems cannot be deleted; delete its systems first with `hops factory system delete <system> --assets --yes`.
 
 ## Next steps
 - [hops-job](../hops-job/SKILL.md) — the jobs a factory's build creates and schedules.

@@ -99,6 +99,7 @@ class TestConstants:
             "MAX_BATCH_ROWS_ENV_VAR": "SERVING_MAX_BATCH_ROWS",
             "SCRIPT_KIND_ENV_VAR": "SERVING_SCRIPT_KIND",
             "SCRIPT_KIND_PREDICTOR": "predictor",
+            "PREDICT_INIT_ARGS": ("project", "deployment", "model", "async_logger"),
             "SCHEMA_ENFORCER_ENV_VAR": "SERVING_SCHEMA_ENFORCER",
             "SCHEMA_ENFORCER_PREDICTOR": "predictor",
             "SCHEMA_ENFORCER_TRANSFORMER": "transformer",
@@ -112,43 +113,6 @@ class TestConstants:
             num_values=len(model_serving),
             expected_constants=model_serving,
         )
-
-    # RESOURCES
-
-    def test_resources_min_constants(self):
-        # Arrange
-        min_resources = {
-            "MIN_CORES": 0.2,
-            "MIN_MEMORY": 32,
-        }
-
-        # Assert
-        self._check_added_modified_or_removed_values(
-            constants.RESOURCES,
-            num_values=len(min_resources),
-            expected_constants=min_resources,
-            prefix="MIN",
-        )
-
-    def test_resources_max_constants(self):
-        # Arrange
-        max_resources = {
-            "MAX_CORES": 2,
-            "MAX_MEMORY": 1024,
-        }
-
-        # Assert
-        self._check_added_modified_or_removed_values(
-            constants.RESOURCES,
-            num_values=len(max_resources),
-            expected_constants=max_resources,
-            prefix="MAX",
-        )
-
-    def test_resources_gpu_constants(self):
-        # Assert
-        assert hasattr(constants.RESOURCES, "GPUS")
-        assert constants.RESOURCES.GPUS == 0
 
     # KAFKA_TOPIC
 

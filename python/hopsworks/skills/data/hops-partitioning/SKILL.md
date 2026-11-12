@@ -13,15 +13,17 @@ Decide from the data, not by default.
 
 - **Input:** the source (bronze) feature group and its time column (the arrival or event time column the job windows on).
 - **Output:** a decision, `none` or `partition` by `hour`, `day` or `week`, with the evidence, recorded in the table's design (`system.yaml` `partitioning`).
-- **Pre-condition:** a Hopsworks terminal, where offline feature groups are mounted read-only at `/hopsfs/featurestore/<project>_featurestore.db/<fg>_<version>`.
+- **Pre-condition:** a Hopsworks terminal, where offline feature groups are mounted read-only at `/hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version>`.
 
 ## Measure the source
 
 ```bash
-T=/hopsfs/featurestore/<project>_featurestore.db/<fg>_<version>
+T=/hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version>
 du -sh "$T"; ls "$T" | head                      # size, and existing partition directories (col=value)
-python <skills>/data/hops-partitioning/scripts/partition_advisor.py "$T" --time-column <arrival_column>
+python <hops-partitioning>/scripts/partition_advisor.py "$T" --time-column <arrival_column>
 ```
+
+`<hops-partitioning>` is the directory of the path `hops skills info hops-partitioning` prints.
 
 The script reads only the Parquet footers: total bytes, rows, and the time column's minimum and maximum, from which it gets the bytes per hour, day and week.
 For a Delta table, files removed by later commits stay on disk until the table is vacuumed, so the bytes are an upper bound; `_delta_log` holds the active set (hops-table-maintenance reads it).

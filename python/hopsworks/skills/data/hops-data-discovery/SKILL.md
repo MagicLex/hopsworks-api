@@ -18,8 +18,8 @@ Discovery enables **feature reuse**: a model that reuses an existing feature doe
 ```bash
 hops fg list                              # all feature groups in the project
 hops fg info <name> --version 1           # metadata (online flag, PK, event time)
-hops fg features <name> --version 1       # schema with PK / partition flags
-hops fg preview <name> --version 1 --n 10 # first rows (note: preview <name>, not <name> preview)
+hops fg feature list <name> --version 1       # schema with PK / partition flags
+hops fg preview <name> --version 1 --limit 10 # first rows (note: preview <name>, not <name> preview)
 hops fv list                              # feature views
 ```
 
@@ -36,7 +36,12 @@ hops search <term> --global            # search across shared/other projects
 ```bash
 hops datasource list                      # configured connectors (Snowflake, S3, JDBC, ...)
 hops datasource info <name>
+hops datasource databases <name>
+hops datasource tables <name> --database <db>
+hops datasource preview <name> --table <t> [--database <db>]
 ```
+
+Read a source only through Hopsworks (preview, or mount a LIMIT query as an external feature group; see **hops-data-sources**), never with a database driver and a credential copied from a secret. A failed read is reported, not routed around.
 
 ### Files (HopsFS)
 

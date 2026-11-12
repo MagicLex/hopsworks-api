@@ -21,6 +21,7 @@ import json
 import humps
 from hopsworks_apigen import public
 from hopsworks_common import client, constants, usage, util
+from hopsworks_common.app import absolute_url
 from hopsworks_common.core import execution_api, execution_pod_log
 from hopsworks_common.engine import execution_engine
 
@@ -184,9 +185,9 @@ class Execution:
     @property
     def success(self) -> bool | None:
         """Boolean to indicate if execution ran successfully or failed."""
-        is_yarn_job = (
-            self.job_type.lower() == "spark" or self.job_type.lower() == "pyspark"
-        )
+        if self.state in constants.JOBS.FAILED_WITHOUT_FINAL_STATUS:
+            return False
+        is_yarn_job = (self.job_type or "").lower() in ("spark", "pyspark")
 
         if not is_yarn_job:
             if self.state in constants.JOBS.ERROR_STATES:
@@ -213,14 +214,7 @@ class Execution:
             and isinstance(self._monitoring, dict)
             and self._monitoring.get("appUrl")
         ):
-            _client = client._get_instance()
-            base_url = _client._base_url.rstrip("/")
-            app_url = str(self._monitoring["appUrl"]).lstrip("/")
-            if app_url.startswith(("http://", "https://")):
-                return app_url
-            if app_url.startswith("hopsworks-api/"):
-                return base_url + "/" + app_url
-            return base_url + "/hopsworks-api/" + app_url
+            return absolute_url(str(self._monitoring["appUrl"]))
         return None
 
     @public

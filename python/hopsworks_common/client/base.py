@@ -21,25 +21,45 @@ import contextlib
 import hashlib
 import logging
 import os
+import random
+import re
+import socket
 import struct
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 import furl
 import requests
 import urllib3
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    load_der_private_key,
-)
 from hopsworks_apigen import also_available_as
-from hopsworks_common.client import auth, exceptions
+from hopsworks_common.client import auth, exceptions, session_cache
 from hopsworks_common.decorators import _connected
 
 
 _logger = logging.getLogger(__name__)
+
+# A Hopsable sandbox's HopsFS mount uploads files behind close. Every request drains it first, so
+# a job, an app or a model the request points at reads what the sandbox wrote.
+MOUNT_CONTROL = "/run/hopsfs/control.sock"
+MOUNT_DRAIN_SECONDS = 30
+
+
+def _drain_mount() -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+        c.settimeout(MOUNT_DRAIN_SECONDS + 5)
+        try:
+            c.connect(MOUNT_CONTROL)
+        except (FileNotFoundError, ConnectionRefusedError):
+            return  # no mount serving: none, or a dead one whose socket file stayed
+        c.sendall(f"drain {MOUNT_DRAIN_SECONDS}\n".encode())
+        lines = c.makefile("r", encoding="utf-8", errors="replace").read().splitlines()
+    if lines[-1:] == ["exit 0"]:
+        return
+    if lines[-1:] == ["exit 2"]:
+        raise RuntimeError(f"Files written in /Projects are still uploading to HopsFS after {MOUNT_DRAIN_SECONDS} s; run the command again.")
+    failed = "; ".join(line[len("unresolved ") :].replace("\t", ": ") for line in lines if line.startswith("unresolved "))
+    raise RuntimeError(f"Files written in /Projects are not on HopsFS, so Hopsworks would not see them: {failed or lines[-3:]}")
 
 
 urllib3.disable_warnings(urllib3.exceptions.SecurityWarning)
@@ -58,6 +78,20 @@ class Client:
     REST_ENDPOINT = "REST_ENDPOINT"
     DEFAULT_DATABRICKS_ROOT_VIRTUALENV_ENV = "DEFAULT_DATABRICKS_ROOT_VIRTUALENV_ENV"
     HOPSWORKS_PUBLIC_HOST = "HOPSWORKS_PUBLIC_HOST"
+
+    # `on` (default) or `off`: whether a call retries while the backend is unavailable.
+    RETRY_ENV = "HOPSWORKS_REQUEST_RETRY"
+    # Positive number of seconds a call keeps retrying.
+    RETRY_SECONDS_ENV = "HOPSWORKS_REQUEST_RETRY_SECONDS"
+    RETRY_SECONDS_DEFAULT = 600
+    RETRY_CONNECT_TIMEOUT = 10
+    # Off for a client whose callers need the backend's own answer; the env var cannot turn it on.
+    RETRY_WHILE_UNAVAILABLE = True
+    RETRY_FIRST_DELAY = 1
+    RETRY_MAX_DELAY = 60
+    RETRY_REPORT_EVERY = 60
+    # Seconds of retry window, or None when retrying is off. Set at client init.
+    _retry_window: float | None = None
 
     def _get_verify(self, verify: bool, trust_store_path: str | None) -> str | bool:
         """Get verification method for sending HTTP requests to Hopsworks.
@@ -131,6 +165,8 @@ class Client:
         files: dict | None = None,
         with_base_path_params: bool = True,
         timeout: float | tuple[float, float] | None = None,
+        retry_while_unavailable: bool = True,
+        deadline: float | None = None,
     ) -> dict:
         """Send REST request to Hopsworks.
 
@@ -147,13 +183,20 @@ class Client:
             with_base_path_params: Whether to include the base path parameters (hopsworks-api/api) in the request URL.
             timeout: How long to wait for the connection and for each block of the response, in seconds, passed straight through to `requests`.
                 Without it a stalled connection blocks the caller indefinitely, so pass one wherever the caller has its own deadline to honour.
+            retry_while_unavailable: False sends the call once, for a caller that needs the backend's own answer to a gateway error.
+            deadline: A `time.monotonic()` value after which no retry of an expired token starts. With it, an
+                error answer is closed unread and raised as `requests.HTTPError` with its status and reason.
 
         Returns:
             Response json
 
         Raises:
             RestAPIError: Raised when request wasn't correctly received, understood or accepted
+            BackendUnavailableError: Raised when the backend stays unavailable for the whole retry window (`HOPSWORKS_REQUEST_RETRY_SECONDS`, default 600),
+                or when it may have received a call that is not safe to resend (any PUT, DELETE or non-read-only POST).
+                A call with its own `timeout`, or with `retry_while_unavailable=False`, is never retried.
         """
+        _drain_mount()
         f_url = furl.furl(self._base_url)
         if with_base_path_params:
             base_path_params = ["hopsworks-api", "api"]
@@ -175,17 +218,57 @@ class Client:
         _logger.debug(f"url:{url} hostname_verification:{self._verify}")
 
         prepped = self._session.prepare_request(request)
-        response = self._session.send(
-            prepped, verify=self._verify, stream=stream, timeout=timeout
-        )
+        try:
+            response = self._send_until_available(
+                method, url, prepped, stream, timeout, retry_while_unavailable
+            )
+        except requests.exceptions.SSLError:
+            # Under a deadline a cached session is not refreshed: the refresh's own calls carry no budget.
+            if not session_cache.used() or deadline is not None:
+                raise
+            response = None
+        if (
+            session_cache.used()
+            and deadline is None
+            and _session_went_stale(response)
+        ):
+            # A session an earlier process cached is refused: log in again and repeat the call once.
+            # Refused this way the server did nothing, so a write repeats safely. Not under a
+            # deadline: the refusal's body is not read, and the refresh's calls carry no budget.
+            return self._send_request(
+                method,
+                self._refresh_session(path_params),
+                query_params=query_params,
+                headers=headers,
+                data=data,
+                stream=stream,
+                files=files,
+                with_base_path_params=with_base_path_params,
+                timeout=timeout,
+                retry_while_unavailable=retry_while_unavailable,
+                deadline=deadline,
+            )
 
-        if response.status_code == 401 and self.REST_ENDPOINT in os.environ:
-            # refresh token and retry request - only on hopsworks
+        if (
+            response.status_code == 401
+            and self.REST_ENDPOINT in os.environ
+            and isinstance(self._auth, auth.BearerAuth)
+        ):
+            # refresh token and retry request - only on hopsworks. An API key does not expire into a
+            # new token.jwt, so its 401 (a deleted key, for one) is raised as the backend reports it.
+            response.close()
             response = self._retry_token_expired(
-                request, stream, self.TOKEN_EXPIRED_RETRY_INTERVAL, 1, timeout
+                request, stream, self.TOKEN_EXPIRED_RETRY_INTERVAL, 1, timeout, deadline
             )
 
         if response.status_code // 100 != 2:
+            if deadline is not None:
+                # Reading the error body could outlast the deadline: status and reason only.
+                response.close()
+                raise requests.HTTPError(
+                    f"HTTP {response.status_code} {response.reason} from {url}",
+                    response=response,
+                )
             raise exceptions.RestAPIError(url, response)
 
         if stream:
@@ -195,11 +278,125 @@ class Client:
             return None
         return response.json()
 
-    def _retry_token_expired(self, request, stream, wait, retries, timeout=None):
+    def _send_until_available(
+        self, method, url, prepped, stream, timeout, retry_while_unavailable=True
+    ):
+        """Send `prepped`, retrying with backoff while the backend is unavailable, within the retry window.
+
+        This is a retry window, not a hard deadline on the call: no try starts after the window.
+        A try against a silent backend ends after its connect timeout (at most `RETRY_CONNECT_TIMEOUT`)
+        plus a read timeout of what was left of the window, so up to that connect timeout past it;
+        a peer that trickles bytes can extend one try further.
+
+        A call that never reached the backend (DNS failure, refused connection, connect timeout) is
+        retried whatever its method. A call the backend may have received (a 502/503/504, a Payara
+        error page, a read timeout, a dropped connection) is retried only when it is a GET, a HEAD or
+        a read-only POST; any other raises `BackendUnavailableError`, so a write is never applied twice.
+        A call with its own `timeout`, with `retry_while_unavailable` off, from a client with
+        `RETRY_WHILE_UNAVAILABLE` off, or with `HOPSWORKS_REQUEST_RETRY=off`, is sent once.
+        """
+        window = self._retry_window
+        if (
+            window is None
+            or timeout is not None
+            or not retry_while_unavailable
+            or not self.RETRY_WHILE_UNAVAILABLE
+        ):
+            # A caller with its own timeout runs its own deadline and expects the raw timeout,
+            # connection error or status back fast: a route probe, a poll loop, a best-effort POST.
+            return self._session.send(
+                prepped, verify=self._verify, stream=stream, timeout=timeout
+            )
+        method = method.upper()
+        path = urlsplit(url).path
+        resendable = _is_resendable(method, path)
+        start = time.monotonic()
+        deadline = start + window
+        next_report = self.RETRY_REPORT_EVERY
+        tries = 0
+        reason, error, last_response = None, None, None
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                detail = f"gave up after {tries} tries in {window:g} s ({reason})"
+                _logger.warning(
+                    f"Backend unavailable during {method} {path}: {detail}."
+                )
+                raise exceptions.BackendUnavailableError(
+                    method, path, detail, response=last_response
+                ) from error
+            tries += 1
+            try:
+                response = self._session.send(
+                    prepped,
+                    verify=self._verify,
+                    stream=stream,
+                    timeout=(min(self.RETRY_CONNECT_TIMEOUT, left), left),
+                )
+            except requests.exceptions.SSLError:
+                raise
+            # A read timeout is not a ConnectionError, but the backend may have received the request.
+            except (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout,
+            ) as e:
+                if not resendable and not _never_sent(e):
+                    _log_series_end(
+                        tries, method, path, "the request may have been applied"
+                    )
+                    raise exceptions.BackendUnavailableError(method, path) from e
+                cause = getattr(e.args[0] if e.args else None, "reason", None) or e
+                reason = f"{type(cause).__name__}: {cause}"
+                error, last_response = e, None
+            else:
+                if not _backend_unavailable(response):
+                    _log_series_end(tries, method, path, "the backend answered")
+                    return response
+                # Read the body before closing, so the answer stays readable on the error. A body that
+                # fails to arrive changes nothing: the status already says the backend is unavailable.
+                try:
+                    _ = response.content
+                except requests.exceptions.RequestException:
+                    response._content = b""
+                finally:
+                    response.close()
+                if not resendable:
+                    _log_series_end(
+                        tries, method, path, "the request may have been applied"
+                    )
+                    raise exceptions.BackendUnavailableError(
+                        method, path, response=response
+                    )
+                reason = f"HTTP {response.status_code}"
+                error, last_response = None, response
+
+            elapsed = time.monotonic() - start
+            left = deadline - time.monotonic()
+            if left <= 0:
+                continue
+            if tries == 1:
+                _logger.warning(
+                    f"Backend unavailable during {method} {path} ({reason}); retrying for up to {window:g} s."
+                )
+            elif elapsed >= next_report:
+                _logger.warning(f"Hopsworks still unavailable, {left:.0f}s left")
+                # From the elapsed time, so a long stall gives one line, not one per missed minute.
+                next_report = (
+                    elapsed // self.RETRY_REPORT_EVERY + 1
+                ) * self.RETRY_REPORT_EVERY
+            delay = min(self.RETRY_MAX_DELAY, self.RETRY_FIRST_DELAY * 2 ** (tries - 1))
+            # Jitter, so the jobs a backend restart interrupted do not all come back at the same moment.
+            time.sleep(min(left, random.uniform(delay / 2, delay)))
+
+    def _retry_token_expired(
+        self, request, stream, wait, retries, timeout=None, deadline=None
+    ):
         """Refresh the JWT token and retry the request. Only on Hopsworks.
 
-        As the token might take a while to get refreshed. Keep trying.
+        As the token might take a while to get refreshed. Keep trying, until `deadline` if one is given.
         """
+        if deadline is not None and time.monotonic() + wait >= deadline:
+            raise TimeoutError("the deadline passes before the token can be retried")
         # Sleep the waited time before re-issuing the request
         time.sleep(wait)
 
@@ -213,8 +410,9 @@ class Client:
 
         if response.status_code == 401 and retries < self.TOKEN_EXPIRED_MAX_RETRIES:
             # Try again.
+            response.close()
             return self._retry_token_expired(
-                request, stream, wait * 2, retries + 1, timeout
+                request, stream, wait * 2, retries + 1, timeout, deadline
             )
         # If the number of retries have expired, the _send_request method
         # will throw an exception to the user as part of the status_code validation.
@@ -465,6 +663,13 @@ class Client:
 
     def _write_client_key(self, ks_keys, client_key_path):
         """Writes client private key PEM from keystore."""
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            NoEncryption,
+            PrivateFormat,
+            load_der_private_key,
+        )
+
         client_key = ""
         for key_der, _ in ks_keys:
             key = load_der_private_key(key_der, password=None)
@@ -473,3 +678,92 @@ class Client:
             ).decode()
 
         self._replace_file(client_key_path, client_key)
+
+
+# Error codes that name the project itself: a cached project id the server no longer knows.
+_PROJECT_NOT_FOUND = 150004
+
+
+def _session_went_stale(response) -> bool:
+    """Whether a refusal means the cached session is stale: an unknown key, a lost project, a rejected certificate."""
+    if response is None:
+        return True
+    if response.status_code == 401:
+        return True
+    if response.status_code in (403, 404):
+        try:
+            return response.json().get("errorCode") == _PROJECT_NOT_FOUND
+        except ValueError:
+            return False
+    return False
+
+
+# POSTs that only read, so sending one twice changes nothing. Any other POST, and every PUT and DELETE,
+# is never resent once the backend may have received it. Matched against the end of the request path.
+_IDEMPOTENT_POSTS = [
+    re.compile(pattern)
+    for pattern in (
+        # A feature view's batch query with an extra filter: the query is built and returned, nothing stored.
+        r"/featureview/[^/]+/version/\d+/query/batch$",
+        # Ingestion estimates: computed from stored metadata, nothing stored.
+        r"/storageconnectors/[^/]+/data_source/estimate-ingestion-resources$",
+        # Credentials tested against the data source without storing them.
+        r"/storageconnectors/[^/]+/credentials/validate$",
+        # npm dependency resolution: an answer only.
+        r"/libraries/npm/resolve$",
+    )
+]
+
+
+def _retry_window() -> float | None:
+    """The retry window in seconds from the environment, or None when retrying is off. Raises `ValueError` on a bad setting."""
+    switch = os.environ.get(Client.RETRY_ENV, "on").strip().lower()
+    if switch not in ("on", "off"):
+        raise ValueError(f"{Client.RETRY_ENV} must be 'on' or 'off', got {switch!r}.")
+    raw = os.environ.get(Client.RETRY_SECONDS_ENV, str(Client.RETRY_SECONDS_DEFAULT))
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = float("nan")
+    if not (0 < seconds < float("inf")):
+        raise ValueError(
+            f"{Client.RETRY_SECONDS_ENV} must be a positive number of seconds, got {raw!r}."
+        )
+    return None if switch == "off" else seconds
+
+
+def _is_resendable(method: str, path: str) -> bool:
+    """Whether a call the backend may have received can be sent again: a read."""
+    if method in ("GET", "HEAD"):
+        return True
+    return method == "POST" and any(p.search(path) for p in _IDEMPOTENT_POSTS)
+
+
+def _never_sent(error: requests.exceptions.ConnectionError) -> bool:
+    """Whether the connection failed before the request went out: a DNS failure, a refused connection, a connect timeout."""
+    if isinstance(error, requests.exceptions.ConnectTimeout):
+        return True
+    cause = error.args[0] if error.args else None
+    return isinstance(
+        getattr(cause, "reason", None),
+        (urllib3.exceptions.NewConnectionError, urllib3.exceptions.ConnectTimeoutError),
+    )
+
+
+def _backend_unavailable(response) -> bool:
+    """A gateway error, or the HTML error page Payara serves while the application is not deployed, a 404 among them."""
+    if response.status_code in (502, 503, 504):
+        return True
+    return (
+        response.status_code >= 400
+        and "text/html" in response.headers.get("Content-Type", "")
+        and b"Payara" in response.content
+        and b"Error report" in response.content
+    )
+
+
+def _log_series_end(tries: int, method: str, path: str, outcome: str) -> None:
+    if tries > 1:
+        _logger.warning(
+            f"Backend unavailable during {method} {path}: {outcome} after {tries} tries."
+        )
