@@ -170,6 +170,26 @@ class TestTracingForwarding:
         # Assert
         assert existing.predictor._env_vars == {"HOPSABLE_EMBEDDING_PROJECT": "p"}
 
+    def test_deploy_agent_redeploy_with_env_vars_keeps_the_other_keys(
+        self, ms, mocker, stub_apis, tmp_path
+    ):
+        # Arrange
+        script = tmp_path / "agent.py"
+        script.write_text("print('hi')")
+        existing = mocker.Mock()
+        existing.predictor.memory = None
+        existing.predictor.env_vars = {"OWN": "kept", "HOPSABLE_EMBEDDING_MODEL": "old"}
+        mocker.patch.object(ms, "get_deployment", return_value=existing)
+        mocker.patch("hsml.model_serving.Predictor.for_server", return_value=mocker.Mock())
+
+        # Act
+        ms.deploy_agent(
+            entry=str(script), name="my_agent", env_vars={"HOPSABLE_EMBEDDING_MODEL": "new"}
+        )
+
+        # Assert
+        assert existing.predictor._env_vars == {"OWN": "kept", "HOPSABLE_EMBEDDING_MODEL": "new"}
+
     def test_create_deployment_sets_tags_on_predictor(self, ms, mocker):
         # create_deployment normalizes the tags through the shared Tag helper and
         # stashes the resulting list[Tag] on the predictor so Predictor.to_dict

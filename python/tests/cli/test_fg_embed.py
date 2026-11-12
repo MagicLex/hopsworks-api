@@ -580,3 +580,6 @@ def test_the_deploy_hint_of_a_search_agent_passes_the_embedding_settings(monkeyp
 
     assert 'env_vars={"HOPSABLE_EMBEDDING_PROJECT": "emb_project", "HOPSABLE_EMBEDDING_MODEL": "emb_model"}' in hint
     assert "env_vars" not in agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5")
+    monkeypatch.delenv("HOPSABLE_EMBEDDING_PROJECT")
+    monkeypatch.delenv("HOPSABLE_EMBEDDING_MODEL")
+    assert "env_vars" not in agent._deploy_hint("a", Path("a.py"), "claude-sonnet-5-5", {"name": "notes_body_emb"})

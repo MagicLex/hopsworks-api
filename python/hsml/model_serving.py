@@ -706,7 +706,7 @@ class ModelServing:
                 its own code; see [`DeploymentMemoryConfig`][hsml.deployment_memory_config.DeploymentMemoryConfig].
                 The agent SDK applies it only when the agent passed no memory store of its
                 own, so code always wins over it.
-            env_vars: Environment variables of the agent's predictor. A redeploy that passes none keeps the existing ones.
+            env_vars: Environment variables of the agent's predictor. A redeploy adds or replaces these keys and keeps the others.
 
         Returns:
             The deployment metadata object.
@@ -828,8 +828,10 @@ class ModelServing:
             # that had been configured in the UI or on the first deploy.
             if memory is None and existing.predictor.memory is not None:
                 predictor._memory = existing.predictor.memory
-            if env_vars is None and existing.predictor.env_vars:
-                predictor._env_vars = existing.predictor.env_vars
+            # A redeploy keeps the agent's other variables (its own, and the ones Hopsworks reads back); the
+            # keys passed here win.
+            if existing.predictor.env_vars:
+                predictor._env_vars = {**existing.predictor.env_vars, **(env_vars or {})}
             existing.predictor = predictor
             existing.description = description
             existing.save()
