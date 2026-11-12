@@ -139,6 +139,57 @@ class TestFeatureView:
         assert len(fv.schema) == 2
         assert isinstance(fv.schema[0], training_dataset_feature.TrainingDatasetFeature)
 
+    def test_a_view_whose_feature_group_is_gone_still_loads_and_deletes(
+        self, mocker, backend_fixtures
+    ):
+        # After `fg delete --force` the backend serves the view without its query.
+        mocker.patch("hopsworks_common.client._get_instance")
+        mocker.patch("hsfs.engine._get_type")
+        delete = mocker.patch(
+            "hsfs.core.feature_view_api.FeatureViewApi._delete_by_name_version"
+        )
+        json = dict(backend_fixtures["feature_view"]["get"]["response"])
+        del json["query"]
+
+        fv = feature_view.FeatureView.from_response_json(json)
+        assert fv._query is None
+        assert (fv.name, fv.version) == ("test_name", 1)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fv.delete(force=True)
+        delete.assert_called_once_with("test_name", 1, True)
+
+    def test_a_view_without_query_names_why_where_the_query_is_used(
+        self, mocker, backend_fixtures
+    ):
+        mocker.patch("hopsworks_common.client._get_instance")
+        mocker.patch("hsfs.engine._get_type")
+        json = dict(backend_fixtures["feature_view"]["get"]["response"])
+        del json["query"]
+        fv = feature_view.FeatureView.from_response_json(json)
+
+        for use in (
+            lambda: fv.query,
+            lambda: fv.get_feature("intt"),
+            fv.get_root_fg,
+        ):
+            with pytest.raises(FeatureStoreException, match="was deleted"):
+                use()
+
+    def test_the_unused_list_call_is_gone(self):
+        from hsfs.core.feature_view_api import FeatureViewApi
+
+        assert not hasattr(FeatureViewApi, "_get_all")
+
+    def test_clean_deletes_by_name_and_version(self, mocker):
+        mocker.patch("hopsworks_common.client._get_instance")
+        delete = mocker.patch(
+            "hsfs.core.feature_view_api.FeatureViewApi._delete_by_name_version"
+        )
+        feature_view.FeatureView.clean(5, "orphan", 2, force=True)
+        delete.assert_called_once_with("orphan", 2, True)
+
     def test_from_response_json_basic_info(self, mocker, backend_fixtures):
         # Arrange
         mocker.patch("hsfs.engine._get_type")
@@ -1292,6 +1343,38 @@ class TestFeatureView:
         td = get_training_data.call_args.kwargs["training_dataset_obj"]
         assert isinstance(td._tags[0], Tag)
         assert [(t.name, t.value) for t in td._tags] == [("team", "fraud")]
+
+    @pytest.mark.parametrize(
+        ("method", "sizes"),
+        [
+            ("training_data", {}),
+            ("train_test_split", {"test_size": 0.2}),
+            ("train_validation_test_split", {"validation_size": 0.2, "test_size": 0.2}),
+        ],
+    )
+    def test_in_memory_create_passes_seed(self, mocker, method, sizes):
+        # Arrange
+        mocker.patch("hopsworks_common.client._get_instance")
+        mocker.patch("hsfs.engine._get_type", return_value="python")
+        fv = feature_view.FeatureView(
+            name="test_fv", featurestore_id=99, query=fg1.select_all(), version=1
+        )
+        get_training_data = mocker.patch.object(
+            fv._feature_view_engine,
+            "_get_training_data",
+            side_effect=lambda self, read_options, training_dataset_obj, **kwargs: (
+                training_dataset_obj,
+                "df",
+            ),
+        )
+        mocker.patch.object(fv, "update_last_accessed_training_dataset")
+
+        # Act
+        getattr(fv, method)(seed=7, **sizes)
+
+        # Assert
+        td = get_training_data.call_args.kwargs["training_dataset_obj"]
+        assert td.seed == 7
 
 
 class TestFeatureViewExecuteOdts:

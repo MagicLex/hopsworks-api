@@ -129,8 +129,8 @@ the read window in the program from `HOPS_END_TIME`, for example "the newest
 snapshot in the 8 days before the window's end", recorded in `system.yaml`:
 
 ```bash
-hops job schedule telco-churn-inference "0 0 4 1 * ?"         # server default window
-hops job schedule-info telco-churn-inference                  # verify cron, enabled, next fire
+hops job schedule set telco-churn-inference "0 0 4 1 * ?"         # server default window
+hops job schedule info telco-churn-inference                  # verify cron, enabled, next fire
 ```
 
 The **same program** serves history: `hops job backfill` runs it once over a past
@@ -184,9 +184,9 @@ without anyone watching a terminal:
 ```bash
 hops alert receiver list
 hops alert receiver create ml-oncall --email oncall@acme.example --slack "#ml-alerts"
-hops alert job create telco-churn-features --receiver ml-oncall --status failed --severity critical
-hops alert job create telco-churn-train --receiver ml-oncall --status long_running --severity warning
-hops alert job list telco-churn-features
+hops job alert create telco-churn-features --receiver ml-oncall --status failed --severity critical
+hops job alert create telco-churn-train --receiver ml-oncall --status long_running --severity warning
+hops job alert list telco-churn-features
 ```
 
 ## Orchestrating Hopsworks Jobs with Airflow
@@ -225,5 +225,5 @@ with DAG(
 
 - What goes in the script: **hops-features** (feature pipeline), **hops-train** (training), **hops-batch-inference** (scoring).
 - Custom libraries for the job: [hops-environments](../hops-environments/SKILL.md) — clone a base env and install requirements.
-- Inspect runs: `hops job list`, `hops job info <name>`, `hops job logs <name>`, `hops job history <name>`.
+- Inspect runs: `hops job list`, `hops job info <name>` (the last run's state, read once), `hops job logs <name>`, `hops job history <name>`. Wait for a run with `hops job wait <name> [--execution ID] --timeout 840`, never a loop over `info` or `history`.
   `hops job logs` downloads `logs-job-<name>-exec-<id>_*` into the working directory unless given `--stdout` (print, no files) or `--dir <dir>`; never download logs into a git work tree such as an ML system's directory (factory logs go to `${HOPSFS_USER_HOME_DIR:-$HOME}/Logs/factory/<slug>/`).

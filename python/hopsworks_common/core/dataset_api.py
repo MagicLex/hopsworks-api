@@ -27,14 +27,14 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING, Literal
 
 from hopsworks_apigen import also_available_as, public
-from hopsworks_common import client, tag, usage, util
+from hopsworks_common import client, events, tag, usage, util
 from hopsworks_common.client.exceptions import DatasetException, RestAPIError
 from hopsworks_common.core import dataset, inode, users_api, variable_api
-from tqdm.auto import tqdm
 
 
 if TYPE_CHECKING:
     import pandas as pd
+    from hopsworks_common.project import Project
     from hsfs.feature_group import FeatureGroup
 
 
@@ -45,6 +45,21 @@ class Chunk:
         self.number = number
         self.status = status
         self.retries = 0
+
+
+def _target_project_params(target_project: str | int | Project) -> dict:
+    """Query params naming the target project. An id is sent as `target_project_id`; a Project object sends its name too."""
+    # Imported here: hopsworks_common.project imports this module.
+    from hopsworks_common.project import Project  # noqa: PLC0415
+
+    if isinstance(target_project, Project):
+        return {
+            "target_project": target_project.name,
+            "target_project_id": target_project.id,
+        }
+    if isinstance(target_project, int):
+        return {"target_project_id": target_project}
+    return {"target_project": target_project}
 
 
 @public(
@@ -148,10 +163,13 @@ class DatasetApi:
         ):
             pbar = None
             try:
+                from tqdm.auto import tqdm
+
                 pbar = tqdm(
                     total=file_size,
                     bar_format="{desc}: {percentage:.3f}%|{bar}| {n_fmt}/{total_fmt} elapsed<{elapsed} remaining<{remaining}",
                     desc="Downloading",
+                    disable=util._progress_disabled(),
                 )
             except Exception:
                 self._log.exception("Failed to initialize progress bar.")
@@ -228,70 +246,73 @@ class DatasetApi:
 
         destination_path = upload_path + "/" + file_name
 
-        if self.exists(destination_path):
-            if overwrite:
-                if "datasetType" in self._get(destination_path):
-                    raise DatasetException(
-                        "overwrite=True not supported on a top-level dataset"
-                    )
-                # Before the removal, never after: see _assert_upload_allowed.
-                self._assert_upload_allowed(destination_path)
-                self.remove(destination_path)
-            else:
-                raise DatasetException(
-                    f"{destination_path} already exists, set overwrite=True to overwrite it"
-                )
-
-        if os.path.isdir(local_path):
-            self.mkdir(destination_path)
-
-        if os.path.isdir(local_path):
-            with ThreadPoolExecutor(simultaneous_uploads) as executor:
-                # if path is a dir, upload files and folders iteratively
-                for root, dirs, files in os.walk(local_path):
-                    # os.walk(local_model_path), where local_model_path is expected to be an absolute path
-                    # - root is the absolute path of the directory being walked
-                    # - dirs is the list of directory names present in the root dir
-                    # - files is the list of file names present in the root dir
-                    # we need to replace the local path prefix with the hdfs path prefix (i.e., /srv/hops/....../root with /Projects/.../)
-                    remote_base_path = root.replace(
-                        local_path, destination_path
-                    ).replace(os.sep, "/")
-                    for d_name in dirs:
-                        self.mkdir(remote_base_path + "/" + d_name)
-
-                    # uploading files in the same folder is done concurrently
-                    futures = [
-                        executor.submit(
-                            self._upload_file,
-                            f_name,
-                            root + os.sep + f_name,
-                            remote_base_path,
-                            chunk_size,
-                            simultaneous_chunks,
-                            max_chunk_retries,
-                            chunk_retry_interval,
+        with events.tracked(
+            "file", "create", long=True, path=destination_path
+        ) as change:
+            if self.exists(destination_path):
+                if overwrite:
+                    if "datasetType" in self._get(destination_path):
+                        raise DatasetException(
+                            "overwrite=True not supported on a top-level dataset"
                         )
-                        for f_name in files
-                    ]
+                    # Before the removal, never after: see _assert_upload_allowed.
+                    self._assert_upload_allowed(destination_path)
+                    self.remove(destination_path)
+                else:
+                    raise DatasetException(
+                        f"{destination_path} already exists, set overwrite=True to overwrite it"
+                    )
 
-                    # wait for all upload tasks to complete
-                    _, _ = wait(futures)
-                    try:
-                        _ = [future.result() for future in futures]
-                    except Exception as e:
-                        raise e
-        else:
-            self._upload_file(
-                file_name,
-                local_path,
-                upload_path,
-                chunk_size,
-                simultaneous_chunks,
-                max_chunk_retries,
-                chunk_retry_interval,
-            )
+            if os.path.isdir(local_path):
+                self.mkdir(destination_path)
 
+            if os.path.isdir(local_path):
+                with ThreadPoolExecutor(simultaneous_uploads) as executor:
+                    # if path is a dir, upload files and folders iteratively
+                    for root, dirs, files in os.walk(local_path):
+                        # os.walk(local_model_path), where local_model_path is expected to be an absolute path
+                        # - root is the absolute path of the directory being walked
+                        # - dirs is the list of directory names present in the root dir
+                        # - files is the list of file names present in the root dir
+                        # we need to replace the local path prefix with the hdfs path prefix (i.e., /srv/hops/....../root with /Projects/.../)
+                        remote_base_path = root.replace(
+                            local_path, destination_path
+                        ).replace(os.sep, "/")
+                        for d_name in dirs:
+                            self.mkdir(remote_base_path + "/" + d_name)
+
+                        # uploading files in the same folder is done concurrently
+                        futures = [
+                            executor.submit(
+                                self._upload_file,
+                                f_name,
+                                root + os.sep + f_name,
+                                remote_base_path,
+                                chunk_size,
+                                simultaneous_chunks,
+                                max_chunk_retries,
+                                chunk_retry_interval,
+                            )
+                            for f_name in files
+                        ]
+
+                        # wait for all upload tasks to complete
+                        _, _ = wait(futures)
+                        try:
+                            _ = [future.result() for future in futures]
+                        except Exception as e:
+                            raise e
+            else:
+                self._upload_file(
+                    file_name,
+                    local_path,
+                    upload_path,
+                    chunk_size,
+                    simultaneous_chunks,
+                    max_chunk_retries,
+                    chunk_retry_interval,
+                    change,
+                )
         return upload_path + "/" + os.path.basename(local_path)
 
     def _upload_file(
@@ -303,6 +324,7 @@ class DatasetApi:
         simultaneous_chunks,
         max_chunk_retries,
         chunk_retry_interval,
+        change=None,
     ):
         file_size = os.path.getsize(local_path)
 
@@ -316,10 +338,13 @@ class DatasetApi:
         with open(local_path, "rb") as f:
             pbar = None
             try:
+                from tqdm.auto import tqdm
+
                 pbar = tqdm(
                     total=file_size,
                     bar_format="{desc}: {percentage:.3f}%|{bar}| {n_fmt}/{total_fmt} elapsed<{elapsed} remaining<{remaining}",
                     desc=f"Uploading {local_path}",
+                    disable=util._progress_disabled(),
                 )
             except Exception:
                 self._log.exception("Failed to initialize progress bar.")
@@ -366,6 +391,12 @@ class DatasetApi:
                         if pbar:
                             pbar.close()
                         raise
+                    if change is not None:
+                        change.progress(
+                            min((chunk_number - 1) * chunk_size, file_size),
+                            file_size,
+                            "bytes",
+                        )
 
             if pbar is not None:
                 pbar.close()
@@ -571,7 +602,8 @@ class DatasetApi:
         """
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "dataset", path]
-        return _client._send_request("DELETE", path_params)
+        with events.tracked("file", "delete", path=path):
+            return _client._send_request("DELETE", path_params)
 
     @public
     def rm(self, remote_path: str):
@@ -592,7 +624,7 @@ class DatasetApi:
     def share(
         self,
         path: str,
-        target_project: str,
+        target_project: str | int | Project,
         permission: Literal[
             "READ_ONLY", "EDITABLE", "EDITABLE_BY_OWNERS"
         ] = "READ_ONLY",
@@ -615,7 +647,7 @@ class DatasetApi:
 
         Parameters:
             path: Dataset path in the active project (e.g. ``Resources/my_dir``).
-            target_project: Name of the project to share with.
+            target_project: Name or id of the project to share with, or the Project object. Pass the id or the object when several projects share a name.
             permission: One of ``READ_ONLY`` (default), ``EDITABLE``,
                 ``EDITABLE_BY_OWNERS``. The target project's data owners
                 still have to accept the share before its members see it.
@@ -634,13 +666,13 @@ class DatasetApi:
                 f"permission must be one of READ_ONLY, EDITABLE, "
                 f"EDITABLE_BY_OWNERS; got {permission!r}"
             )
-        if not target_project:
-            raise ValueError("target_project must be a non-empty project name")
+        if not target_project and target_project != 0:
+            raise ValueError("target_project must be a non-empty project name or id")
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "dataset", path]
         query_params = {
             "action": "SHARE",
-            "target_project": target_project,
+            **_target_project_params(target_project),
             "permission": permission,
         }
         try:
@@ -648,7 +680,7 @@ class DatasetApi:
         except RestAPIError as e:
             if getattr(e.response, "status_code", None) == 403:
                 raise PermissionError(
-                    f"Sharing dataset '{path}' with project '{target_project}' "
+                    f"Sharing dataset '{path}' with project '{getattr(target_project, 'name', target_project)}' "
                     f"requires the Data Owner role in the source project "
                     f"'{_client._project_name}'. Ask a data owner of "
                     f"'{_client._project_name}' to run this, or be granted that role."
@@ -657,7 +689,7 @@ class DatasetApi:
 
     @public
     @usage._method_logger
-    def unshare(self, path: str, target_project: str) -> None:
+    def unshare(self, path: str, target_project: str | int | Project) -> None:
         """Revoke a previously-granted dataset share with another project.
 
         Like :meth:`share`, requires Data Owner role in the active (source) project.
@@ -674,7 +706,7 @@ class DatasetApi:
 
         Parameters:
             path: Dataset path in the active project.
-            target_project: Name of the project to revoke the share from.
+            target_project: Name or id of the project to revoke the share from, or the Project object. Pass the id or the object when several projects share a name.
 
         Raises:
             PermissionError: If the caller lacks the Data Owner role in the
@@ -684,20 +716,20 @@ class DatasetApi:
                 or the backend otherwise rejects the request.
             ValueError: If ``target_project`` is empty.
         """
-        if not target_project:
-            raise ValueError("target_project must be a non-empty project name")
+        if not target_project and target_project != 0:
+            raise ValueError("target_project must be a non-empty project name or id")
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "dataset", path]
         query_params = {
             "action": "UNSHARE",
-            "target_project": target_project,
+            **_target_project_params(target_project),
         }
         try:
             _client._send_request("DELETE", path_params, query_params=query_params)
         except RestAPIError as e:
             if getattr(e.response, "status_code", None) == 403:
                 raise PermissionError(
-                    f"Unsharing dataset '{path}' from project '{target_project}' "
+                    f"Unsharing dataset '{path}' from project '{getattr(target_project, 'name', target_project)}' "
                     f"requires the Data Owner role in the source project "
                     f"'{_client._project_name}'. Ask a data owner of "
                     f"'{_client._project_name}' to run this, or be granted that role."
@@ -737,9 +769,10 @@ class DatasetApi:
             "type": "DATASET",
         }
         headers = {"content-type": "application/json"}
-        return _client._send_request(
-            "POST", path_params, headers=headers, query_params=query_params
-        )["attributes"]["path"]
+        with events.tracked("file", "create", path=path):
+            return _client._send_request(
+                "POST", path_params, headers=headers, query_params=query_params
+            )["attributes"]["path"]
 
     @public
     @usage._method_logger
@@ -783,7 +816,8 @@ class DatasetApi:
             "action": "copy",
             "destination_path": destination_path,
         }
-        _client._send_request("POST", path_params, query_params=query_params)
+        with events.tracked("file", "create", path=destination_path):
+            _client._send_request("POST", path_params, query_params=query_params)
 
     @public
     @usage._method_logger
@@ -827,7 +861,9 @@ class DatasetApi:
             "action": "move",
             "destination_path": destination_path,
         }
-        _client._send_request("POST", path_params, query_params=query_params)
+        with events.tracked("file", "create", path=destination_path):
+            _client._send_request("POST", path_params, query_params=query_params)
+        events.emit("file", "delete", "done", path=source_path)
 
     @public
     @usage._method_logger
@@ -917,7 +953,9 @@ class DatasetApi:
         files = []
         for item in items:
             files.append(
-                util._convert_to_project_rel_path(item.path, _client._project_name)
+                util._convert_to_project_rel_path(
+                    item.path, _client._project_backing_name
+                )
             )
         return files
 
@@ -965,7 +1003,7 @@ class DatasetApi:
         """Read the content of a file.
 
         Parameters:
-            path: The path to the file to read.
+            path: The path to the file to read, absolute or relative to the project.
             dataset_type:
                 The type of dataset, can be `DATASET` or `HIVEDB`; defaults to `DATASET`.
                 `HIVEDB` type is used to read files from Apache Hive.
@@ -981,7 +1019,7 @@ class DatasetApi:
             "dataset",
             "download",
             "with_auth",
-            path[1:],
+            path.lstrip("/"),
         ]
 
         query_params = {
