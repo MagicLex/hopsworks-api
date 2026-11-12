@@ -646,6 +646,7 @@ class ModelServing:
         knative_mode: bool | None = None,
         # Appended rather than inserted, for the reason create_endpoint gives.
         memory: DeploymentMemoryConfig | dict | None = None,
+        env_vars: dict[str, str] | None = None,
     ) -> Deployment:
         """Deploy a Python script or package as an agent.
 
@@ -705,6 +706,7 @@ class ModelServing:
                 its own code; see [`DeploymentMemoryConfig`][hsml.deployment_memory_config.DeploymentMemoryConfig].
                 The agent SDK applies it only when the agent passed no memory store of its
                 own, so code always wins over it.
+            env_vars: Environment variables of the agent's predictor. A redeploy that passes none keeps the existing ones.
 
         Returns:
             The deployment metadata object.
@@ -810,6 +812,7 @@ class ModelServing:
             git_branch=git_branch if git_backed else None,
             git_auto_redeploy=git_auto_redeploy if git_backed else False,
             knative_mode=knative_mode,
+            env_vars=env_vars,
         )
 
         existing = self.get_deployment(name)
@@ -825,6 +828,8 @@ class ModelServing:
             # that had been configured in the UI or on the first deploy.
             if memory is None and existing.predictor.memory is not None:
                 predictor._memory = existing.predictor.memory
+            if env_vars is None and existing.predictor.env_vars:
+                predictor._env_vars = existing.predictor.env_vars
             existing.predictor = predictor
             existing.description = description
             existing.save()
