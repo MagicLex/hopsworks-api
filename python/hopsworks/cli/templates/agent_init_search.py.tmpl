@@ -1,0 +1,24 @@
+
+FG_SEARCH = fs.get_feature_group(@@FG@@, version=@@VERSION@@)
+SEARCH_COLUMNS = [f.name for f in FG_SEARCH.features]
+SEARCH_SKIP = @@SKIP@@
+
+
+def search(query, k=5):
+    k = max(1, min(int(k), 10))
+    try:
+        vector = embed_query(query)
+    except Exception as exc:  # noqa: BLE001 - the model gets a result it can say so from
+        return {
+            "search_unavailable": True,
+            "message": "Search is unavailable right now (" + str(exc) + "). "
+            "Say in your answer that you could not search.",
+        }
+    hits = FG_SEARCH.find_neighbors(vector, k=k)
+    return [
+        {
+            "score": score,
+            **{c: v for c, v in zip(SEARCH_COLUMNS, values) if c not in SEARCH_SKIP},
+        }
+        for score, values in hits
+    ]
