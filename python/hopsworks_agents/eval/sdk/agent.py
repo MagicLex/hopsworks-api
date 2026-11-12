@@ -1203,9 +1203,14 @@ class Agent:
         Raises:
             `AgentServingError`: If this deployment is not an agent, or the name is taken by another job or app.
         """
-        body = self._http.post(
-            f"/serving/{self.id}/chatapp", json={"name": name} if name else {}
-        )
+        from hopsworks_common import events  # noqa: PLC0415
+
+        # The server makes the app, so no AppApi call reports it: the line lets a host show it.
+        with events.tracked("app", "create", name=name) as change:
+            body = self._http.post(
+                f"/serving/{self.id}/chatapp", json={"name": name} if name else {}
+            )
+            change.key = {"name": str(body["name"]), "version": None, "path": None}
         return self._app(str(body["name"]))
 
     @public
@@ -1247,7 +1252,11 @@ class Agent:
         Raises:
             `AgentServingError`: If the agent has no chat app.
         """
-        body = self._http.post(f"/serving/{self.id}/chatapp/customize", json={})
+        from hopsworks_common import events  # noqa: PLC0415
+
+        with events.tracked("app", "update") as change:
+            body = self._http.post(f"/serving/{self.id}/chatapp/customize", json={})
+            change.key = {"name": str(body["name"]), "version": None, "path": None}
         return self._app(str(body["name"]))
 
     @public
