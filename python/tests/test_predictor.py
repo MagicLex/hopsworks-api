@@ -84,6 +84,10 @@ class TestPredictor:
 
     def test_artifact_path_is_the_artifact_files_path(self, mocker):
         self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+        mocker.patch(
+            "hopsworks_common.client._get_instance",
+            return_value=mocker.Mock(_project_backing_name="my_project"),
+        )
         p = predictor.Predictor(
             name="my_model",
             model_server=PREDICTOR.MODEL_SERVER_PYTHON,
@@ -114,6 +118,23 @@ class TestPredictor:
 
         assert d["predictorEnvironment"] == {"name": "my-inference-pipeline"}
         assert d["environmentDTO"] == {"name": "my-inference-pipeline"}
+
+    def test_from_response_json_reports_the_default_predictor(
+        self, mocker, backend_fixtures
+    ):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+        json = copy.deepcopy(
+            backend_fixtures["predictor"]["get_deployments_singleton"]["response"]
+        )
+        item = json["items"][0]
+
+        item["predictor"] = (
+            "/Projects/p/Deployments/d/resources/predictor/default_predictor.py"
+        )
+        assert predictor.Predictor.from_response_json(json)[0].default_predictor
+
+        item["predictor"] = "/Projects/p/Resources/my_predictor.py"
+        assert not predictor.Predictor.from_response_json(json)[0].default_predictor
 
     def test_from_response_json_singleton(self, mocker, backend_fixtures):
         # Arrange
@@ -441,6 +462,50 @@ class TestPredictor:
 
         # Assert
         assert "Predictor scripts are required" in str(e_info.value)
+
+    @pytest.mark.parametrize(
+        "init, refused",
+        [
+            ("self, *args, **kwargs", "*args, **kwargs"),
+            ("self, config", "config"),
+            ("self, model, /", "model (positional-only)"),
+        ],
+    )
+    def test_validate_script_file_refuses_an_unsupported_predict_init(
+        self, tmp_path, init, refused
+    ):
+        script = tmp_path / "predictor.py"
+        script.write_text(
+            f"import os\n\n\nclass Predict:\n    def __init__({init}):\n        pass\n"
+        )
+
+        with pytest.raises(ValueError) as e_info:
+            predictor.Predictor._validate_script_file(
+                MODEL.FRAMEWORK_PYTHON, str(script)
+            )
+
+        message = str(e_info.value)
+        assert f"{script}:5" in message
+        assert refused in message
+        assert "project, deployment, model, async_logger" in message
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "class Predict:\n    def __init__():\n        pass\n",
+            "class Predict:\n    def __init__(self):\n        pass\n",
+            "class Predict:\n    def __init__(self, project, deployment, model, async_logger):\n        pass\n",
+            "class Predict:\n    def predict(self, inputs):\n        return inputs\n",
+            "class Transformer:\n    def __init__(self, config):\n        pass\n",
+        ],
+    )
+    def test_validate_script_file_accepts_a_supported_predict_init(
+        self, tmp_path, source
+    ):
+        script = tmp_path / "predictor.py"
+        script.write_text(source)
+
+        predictor.Predictor._validate_script_file(MODEL.FRAMEWORK_PYTHON, str(script))
 
     def test_validate_script_file_tf_script_file(self):
         # Act
@@ -1556,6 +1621,30 @@ class TestPredictor:
         # Assert
         assert serialized["vllmVariant"] == PREDICTOR.VLLM_VARIANT_VLLM
         assert serialized["vllmImageTag"] is None
+
+    def test_to_dict_omits_unset_resources(self, mocker):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+
+        serialized = predictor.Predictor(
+            name="n", model_name="m", model_path="p", model_server="PYTHON"
+        ).to_dict()
+
+        assert serialized["predictorResources"] == {}
+
+    def test_to_dict_sends_explicit_resources(self, mocker):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+
+        serialized = predictor.Predictor(
+            name="n",
+            model_name="m",
+            model_path="p",
+            model_server="PYTHON",
+            resources={"limits": {"cores": 2, "memory": 1024, "gpus": 0}},
+        ).to_dict()
+
+        assert serialized["predictorResources"] == {
+            "limits": {"cores": 2, "memory": 1024, "gpus": 0}
+        }
 
     def test_non_vllm_to_dict_does_not_emit_vllm_keys(self, mocker):
         # Arrange
