@@ -176,6 +176,19 @@ def test_app_deploy_waits_for_the_users_yes():
         assert "`deploy: no` (the default) stops before the deploy step" in text, d
         assert "only with `deploy: yes`, deploy" in text and "with `deploy: yes` only, `hops app deploy" in text, d
     for d in [root / ".claude" / "commands", SKILLS_ROOT.parent / "cli" / "templates"]:
-        text = " ".join((d / "hops.md").read_text("utf-8").split())
+        text = " ".join((d / "hops-piece-app.md").read_text("utf-8").split())
         assert "whether to deploy it to Hopsworks, never marked \"(Recommended)\"" in text, d
         assert "spawn **hops-app-builder** with `action: deploy`" in text, d
+
+
+# An agent reads a skill file or a playbook whole, in one tool call. Agent hosts cut long tool
+# output (Hopsable keeps the first 8,000 and the last 24,000 characters), so each file stays at
+# 24,000 characters or less, which leaves room for another command's output in the same call.
+READ_WHOLE_BUDGET = 24_000
+
+
+def test_every_skill_file_and_playbook_is_read_whole():
+    templates = SKILLS_ROOT.parent / "cli" / "templates"
+    files = [*SKILLS_ROOT.rglob("*.md"), *templates.glob("*.md")]
+    over = {str(p.relative_to(SKILLS_ROOT.parent)): n for p in files if (n := len(p.read_text("utf-8"))) > READ_WHOLE_BUDGET}
+    assert not over, f"over {READ_WHOLE_BUDGET} characters, move detail into references/: {over}"

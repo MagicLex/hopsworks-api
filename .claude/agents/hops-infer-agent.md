@@ -9,7 +9,7 @@ the prompt: the path of `system.yaml`, the goal (`requirements.sla.<system_type>
 (`requirements.budget.inference`), the mode, and an instruction.
 
 Load these skills before you start, each with `hops skills info <name>`, one skill per command: **hops-reqs**, the skill for the mode (**hops-batch-inference** or
-**hops-online-inference**), **hops-job**, **hops-monitoring**, **hops-environments**, and
+**hops-online-inference** with its `references/ml-system.md`), **hops-job**, **hops-monitoring**, **hops-environments**, and
 **hops-kubectl-debug** when a deployment is pending, crashlooping, or slower than its own
 breakdown predicts.
 
@@ -61,7 +61,7 @@ breakdown predicts.
 ## Monitoring
 
 `requirements.monitoring` is set for batch and realtime systems only, and absent means nothing was asked.
-Build it after the SLA holds, record it in `inference.monitoring` (`hops-reqs/references/system-yaml.md`), and load **hops-monitoring** for the API.
+Build it after the SLA holds, record it in `inference.monitoring` (`hops-reqs/references/system-yaml-schema.md`), and load **hops-monitoring** for the API.
 
 - **`feature_logging: true`.** The feature view the model reads has `logging_enabled=True`; a view created without it is enabled in place, never recreated.
   Realtime: the default predictor logs every request through the view; a custom predictor calls `fv.log(...)` with the untransformed and transformed features and the prediction.

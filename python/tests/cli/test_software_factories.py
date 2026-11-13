@@ -88,6 +88,10 @@ COMMANDS = [
     "hops-bronze.md",
     "hops-silver.md",
     "hops-gold.md",
+    "hops-piece-dashboard.md",
+    "hops-piece-notebook.md",
+    "hops-piece-app.md",
+    "hops-piece-agent.md",
 ]
 AGENTS = {
     # The ML agents inherit the model of /hops-build, the session's own.
@@ -153,8 +157,13 @@ def test_the_menu_runs_on_haiku_and_hands_every_build_to_a_stronger_agent():
     text = (TEMPLATES / "hops.md").read_text(encoding="utf-8")
     assert front["model"] == "haiku"
     assert "AskUserQuestion" in text
-    for section in ("## Explore", "## Status", "## Dashboard", "## App"):
+    for section in ("## Explore", "## Status"):
         assert section in text
+    for piece, section in (("dashboard", "## Dashboard"), ("notebook", "## Notebook"), ("app", "## App"), ("agent", "## Agent")):
+        name = f"hops-piece-{piece}.md"
+        assert _front(name)["model"] == "haiku"
+        assert section in (TEMPLATES / name).read_text(encoding="utf-8")
+        assert f"`hops-piece-{piece}`" in text or f"`/hops-piece-{piece}`" in text
     assert "hops-dashboard-builder" in text and "hops-app-builder" in text
     assert "## Pieces" in text
     for agent in ONE_PIECE:
@@ -318,8 +327,8 @@ def test_every_skill_and_agent_the_templates_name_is_shipped():
         agents = {n for n in named if n in AGENTS}
         assert all((TEMPLATES / f"{a}.md").is_file() for a in agents), agents
         named -= agents
-        # The menu loads no skill; everything that builds does.
-        assert named or template == "hops.md", template
+        # The menu and its piece commands may load no skill; everything that builds does.
+        assert named or template == "hops.md" or template.startswith("hops-piece-"), template
         assert named <= shipped, f"{template} names missing skills: {named - shipped}"
 
 
@@ -461,7 +470,7 @@ def test_the_data_sources_table_names_every_required_option():
 
 
 def test_the_schema_block_parses_as_yaml():
-    text = (REQS / "system-yaml.md").read_text(encoding="utf-8")
+    text = (REQS / "system-yaml-schema.md").read_text(encoding="utf-8")
     schema = re.search(r"## Schema\n\n```yaml\n(.*?)```", text, re.DOTALL).group(1)
     doc = yaml.safe_load(schema)
     for block in (
@@ -2312,6 +2321,7 @@ def test_a_score_request_asks_kumo_first_and_an_app_reads_its_current_run():
     kumo = pieces.index("**Kumo-Relational (Recommended)**")
     assert kumo < pieces.index("**Train models**")
     assert "an app that shows them included" in pieces
-    app = text.split("## App", 1)[1].split("## ", 1)[0]
+    piece = " ".join((TEMPLATES / "hops-piece-app.md").read_text(encoding="utf-8").split())
+    app = piece.split("## App", 1)[1]
     assert "asks how to score first" in app
     assert "`<name>_scores` rows of the current run" in app

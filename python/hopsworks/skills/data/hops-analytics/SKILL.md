@@ -172,25 +172,7 @@ A conformed dimension is built once and marked `shared` in every other mart that
 Gold feature groups are tagged `{"layer": "gold"}` with their silver tables as `parents`.
 The requirement questions every mart answers, the modeling rules and the standards are in [references/gold-marts.md](references/gold-marts.md); `/hops-gold <slug> <mart>` builds a mart or applies its changed requirements (`marts[].requirements` against `marts[].applied`).
 
-## Bronze layers of generated data
-
-A bronze layer built by the Factory is generated data, for trying silver and gold layers without a source system: `system.yaml` has `layer.kind: bronze`, and its `generator` names the program copied from a directory of these references (`reference_code`), with the jobs that run it per cadence in `schedule.cadences` and the tables it writes in `tables`.
-The clickstream example, [references/clickstream_bronze/](references/clickstream_bronze/clickstream.py), writes a web shop's `clickstream_customers`, `clickstream_products`, `clickstream_orders` and `clickstream_clicks`: a backfill of the 30 days up to the last midnight (10,000 customers, 1,000 products, 20,000 orders, 1,000,000 clicks), 10,000 clicks an hour, and each day's new and changed customers, products and orders.
-Its data is raw on purpose: about 0.001% of clicks arrive twice (the same `click_id` under a new `ingest_id`, the bronze primary key), customers, products and orders arrive again whole when they change (`updated_at` is the event time), and an order's lines are a JSON array in `items`, which a silver layer normalizes into an order lines table.
-Every job writes the window `[HOPS_START_TIME, HOPS_END_TIME)` from a generator seeded with the window's start, so a replayed window rewrites the same rows.
-`/hops-bronze <slug>` tests the generator, runs the backfill job, deploys and schedules a job per cadence from the backfill's end with catch-up, and verifies a run; the generator tags each table `{"layer": "bronze"}` when it creates it.
-Deleting a bronze layer deletes its jobs and the bronze tables it wrote, which no other layer ever deletes.
-
-## Building a silver layer
-
-`/hops-silver <slug>` builds what `system.yaml` asks for, phase by phase, recording each in `system.yaml`:
-
-1. **profile**: for each bronze source, its schema, row count, key candidates and duplicate rate on them, null rates, distinct values of low-cardinality strings, and its arrival column (`hops fg info`, `hops fg preview`, `hops trino query`).
-2. **design**: the silver tables in third normal form (one per entity or event, named after it in lowercase, `customers`, `order_lines`), each with its sources, business key, foreign keys, `event_time`, columns and the tasks applied to it; the engine; the cron.
-3. **code**: the dbt project and runner, or the PySpark program, in the layer's directory, with unit tests of the transformations (DuckDB over sample rows for dbt SQL, pandas or local Spark for PySpark) and dbt data tests for `validate`.
-4. **backfill**: deploy the job, run it once over the whole bronze history, and check the silver tables: row counts against bronze, no duplicate keys, no nulls in required columns, rejects counted.
-5. **schedule**: schedule the job; tag every silver feature group `analytics_table` `{"layer": "silver", "lifecycle": <system.yaml lifecycle>}`.
-6. **verify**: run the job for one window (`hops job run <job> --start-time ... --end-time ... --wait`) and check that only that window's rows were processed.
+A bronze layer of generated data (the generator, the clickstream example, its jobs): `hops skills info hops-analytics references/bronze-generated.md`. The phases `/hops-silver` builds a silver layer in: `hops skills info hops-analytics references/silver-tasks.md`.
 
 ## Rules
 
