@@ -22,6 +22,14 @@ class AmbiguousVersionError(click.ClickException):
 
 # hopsworks-ee RESTCodes.DatasetErrorCode.PATH_NOT_FOUND: a missing HopsFS path is a 400.
 PATH_NOT_FOUND = 110018
+# RESTCodes.DatasetErrorCode.DATASET_NOT_FOUND: also what the dataset API answers for a
+# shared feature store's path, since a store share writes no dataset share.
+DATASET_NOT_FOUND = 110011
+
+
+def error_code(exc: BaseException | None) -> str:
+    """The Hopsworks error code of a REST error, or an empty string."""
+    return str(getattr(exc, "error_code", "") or "")
 
 
 def not_found(exc: BaseException) -> bool:

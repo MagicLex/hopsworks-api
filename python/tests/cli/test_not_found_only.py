@@ -17,6 +17,11 @@ def _rest_error(status, body=None):
 NOT_FOUND = _rest_error(404)
 # What the dev cluster answers for a missing HopsFS path (checked live on hopsworks 5.3).
 PATH_NOT_FOUND = _rest_error(400, {"errorCode": 110018, "errorMsg": "Path not found"})
+# What the dev cluster answers for a path in a feature store shared with the project
+# (checked live 2026-11-14: a store share writes no dataset share).
+DATASET_NOT_FOUND = _rest_error(
+    400, {"errorCode": 110011, "errorMsg": "DataSet not found."}
+)
 BROKEN = _rest_error(503)
 
 
@@ -77,11 +82,12 @@ def test_offline_size_none_only_on_404():
             fg._offline_size(api, group)
 
 
-def _fg_info(mock_project, error, *flags):
+def _fg_info(mock_project, error, *flags, store="p_featurestore"):
     from click.testing import CliRunner
     from hopsworks.cli.main import cli
 
-    group = mock.MagicMock(location="hopsfs://nn:8020/apps/hive/warehouse/p.db/orders_1", id=7, version=1, features=[], primary_key=["id"], event_time=None, description="", stream=False, online_enabled=False)
+    mock_project.get_feature_store.return_value.name = "p_featurestore"
+    group = mock.MagicMock(feature_store_name=store, location="hopsfs://nn:8020/apps/hive/warehouse/p.db/orders_1", id=7, version=1, features=[], primary_key=["id"], event_time=None, description="", stream=False, online_enabled=False)
     group.name = "orders"
     mock_project.get_feature_store.return_value.get_feature_group.return_value = group
     mock_project.get_dataset_api.return_value._list_dataset_path.side_effect = error
@@ -112,3 +118,28 @@ def test_schema_label_none_only_when_missing():
     d = mock.MagicMock(schema_id="abc")
     type(d).schema = mock.PropertyMock(side_effect=BROKEN)
     assert deployment._schema_label(d).startswith("could not be read")
+
+
+def test_fg_info_names_the_sql_table_of_its_own_store(mock_project):
+    result = _fg_info(mock_project, PATH_NOT_FOUND, "--json")
+    assert result.exit_code == 0, result.output
+    assert '"sql_table": "orders_1"' in result.output
+
+
+def test_fg_info_of_a_shared_group_says_the_size_is_unavailable(mock_project):
+    result = _fg_info(mock_project, DATASET_NOT_FOUND, store="9abc_featurestore")
+    assert result.exit_code == 0, result.output
+    assert "unavailable (shared feature store)" in result.output
+    assert '"9abc_featurestore".orders_1' in result.output
+    as_json = _fg_info(
+        mock_project, DATASET_NOT_FOUND, "--json", store="9abc_featurestore"
+    )
+    assert as_json.exit_code == 0, as_json.output
+    assert '"offline_size_bytes": null' in as_json.output
+    assert "offline_size_error" not in as_json.output
+
+
+def test_fg_info_of_its_own_group_still_fails_on_dataset_not_found(mock_project):
+    result = _fg_info(mock_project, DATASET_NOT_FOUND)
+    assert result.exit_code == 1, result.output
+    assert "Offline size could not be read" in result.output
