@@ -15,7 +15,6 @@ import re
 import secrets
 import socket
 import ssl
-import sys
 import time
 import urllib.parse
 import webbrowser
@@ -286,17 +285,20 @@ def setup_cmd(
     insecure: bool,
     no_scaffold: bool,
 ) -> None:
-    """Authenticate with Hopsworks and cache an API key in ``~/.hops.toml``.
+    """Authenticate and cache an API key.
+
+    Authenticate with Hopsworks and cache an API key in `~/.hops.toml`.
 
     On first run: opens a browser, lets the user pick a project and confirm
     the API key name, then fetches the generated key via long polling.
     On re-run: verifies the cached key still works and exits silently unless
-    ``--force`` is passed, which always starts a new browser flow.
+    `--force` is passed, which always starts a new browser flow.
 
+    \f
     Args:
         ctx: Click context; used to return non-zero on verification failure.
-        host_flag: Value of ``--host``; prompted when absent.
-        key_name_flag: Value of ``--key-name``; when absent the CLI suggests a name.
+        host_flag: Value of `--host`; prompted when absent.
+        key_name_flag: Value of `--key-name`; when absent the CLI suggests a name.
         force: When True, skip the cached-key short-circuit.
         no_browser: When True, print the URL instead of opening a browser.
         timeout: Seconds to wait for browser completion before erroring out.
@@ -391,6 +393,7 @@ def setup_cmd(
 
     api_key = completed.get("apiKey")
     project = completed.get("workspaceUsername")
+    project_id = completed.get("workspaceProjectId")
     # Older Hopsworks releases do not return ``apiKeyName`` from
     # ``/token-flow/wait`` and ignore the ``key_name`` we sent on ``/create``;
     # in that case the server names the key ``cli-<timestamp>`` regardless of
@@ -402,13 +405,10 @@ def setup_cmd(
     if not api_key:
         raise _failed(host, "the server did not return an API key")
 
-    _finalize_setup(host, api_key, project, server_key_name, cfg, no_scaffold)
+    _finalize_setup(
+        host, api_key, project, server_key_name, cfg, no_scaffold, project_id
+    )
     return None
-
-
-def _interactive() -> bool:
-    """Whether we can prompt the user, false under scripts, CI, and piped input."""
-    return sys.stdin.isatty()
 
 
 def _resolve_host(cfg: config.HopsConfig, host_flag: str | None) -> str:
@@ -424,7 +424,7 @@ def _resolve_host(cfg: config.HopsConfig, host_flag: str | None) -> str:
     """
     if host_flag:
         return host_flag
-    if cfg.host and not _interactive():
+    if cfg.host and output.no_input():
         return cfg.host
     host = click.prompt("Hopsworks host", default=cfg.host or config.DEFAULT_HOST)
     _forget_other_cluster(cfg, host)
@@ -466,6 +466,7 @@ def _finalize_setup(
     server_key_name: str | None,
     cfg: config.HopsConfig,
     no_scaffold: bool = False,
+    project_id: int | None = None,
 ) -> None:
     """Verify the freshly-minted API key, then persist it to ``~/.hops.toml``.
 
@@ -485,6 +486,8 @@ def _finalize_setup(
     cfg.api_key = api_key
     cfg.api_key_name = server_key_name
     cfg.project = project
+    # Display names repeat across owners; a server that returns the id pins the project.
+    cfg.project_id = project_id
     config.save(cfg)
 
     output.success("✓ Connected to %s as %s", host, project or "(no project)")
@@ -509,7 +512,9 @@ def _handle_internal(cfg: config.HopsConfig, no_scaffold: bool = False) -> None:
     try:
         project = auth.login(host=cfg.host or "", project=cfg.project, internal=True)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Internal login failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not log in inside the cluster: {exc}"
+        ) from exc
     output.success(
         "✓ Connected (internal mode) to project %s",
         getattr(project, "name", cfg.project or "?"),
@@ -538,7 +543,7 @@ def _failed(host: str, exc: object) -> click.ClickException:
         hint = (
             " (self-signed certificate? re-run with --insecure, or --ca-bundle <path>)"
         )
-    return click.ClickException(f"Failed to connect to {host}: {_reason(exc)}{hint}")
+    return click.ClickException(f"Could not connect to {host}: {_reason(exc)}{hint}")
 
 
 def _is_ssl_error(exc: BaseException) -> bool:
@@ -595,6 +600,7 @@ def _scaffold_here(*, internal: bool, project: str | None, skip: bool) -> None:
         files = scaffold.build_files(internal=internal, project=project)
         result = scaffold.scaffold(root, files)
         changed = scaffold.ensure_permission(root / ".claude/settings.local.json")
+        docs_mcp_added = scaffold.ensure_docs_mcp(root / ".mcp.json")
     except (OSError, ValueError) as exc:
         output.warn("Could not write agent instruction files: %s", _reason(exc))
         return
@@ -610,6 +616,10 @@ def _scaffold_here(*, internal: bool, project: str | None, skip: bool) -> None:
     if changed:
         output.success(
             "✓ Allowed %s in .claude/settings.local.json", scaffold.HOPS_PERMISSION
+        )
+    if docs_mcp_added:
+        output.success(
+            "✓ Registered the %s MCP server in .mcp.json", scaffold.DOCS_MCP_NAME
         )
     if not internal:
         _suggest_skills_install(root)

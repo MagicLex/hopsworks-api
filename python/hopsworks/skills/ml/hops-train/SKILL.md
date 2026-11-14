@@ -29,10 +29,15 @@ specific algorithm or threshold blindly.
 
 **CLI vs SDK for this task:** training itself is SDK-only — write a `train.py`
 that uses the `hopsworks` Python SDK (the `hops` CLI has no `train`). The CLI
-does the surrounding steps: `hops fv list` / `hops td compute <fv> <v>` before,
+does the surrounding steps: `hops fv list` / `hops td compute <fv> --fv-version <v>` before,
 and running the script as a job after:
 `hops job deploy train train.py --env pandas-training-pipeline --run --wait --overwrite`
 (NAME then SCRIPT are positional; `--overwrite` replaces the uploaded script on re-run).
+
+**The environment by framework:** scikit-learn, XGBoost and CatBoost train in
+`pandas-training-pipeline`; PyTorch in `torch-training-pipeline`; TensorFlow in
+`tensorflow-training-pipeline`; Ray in `ray-training-pipeline`. A library none of them has goes
+into a clone (**hops-environments**), never `pip install` inside the job.
 
 ## 1. Load training data from the feature view
 
@@ -51,37 +56,102 @@ fv = fs.get_feature_view(name="my_fv", version=1)  # no FV yet? create one first
 # Two split methods. They are NOT interchangeable; pick by data size and
 # whether you need a reproducible, stored dataset.
 
-# A. In-memory (default for small/static data). Returns the four frames
-#    directly: no Spark, no stored version. Train right away.
-X_train, X_test, y_train, y_test = fv.train_test_split(test_size=0.2)
+# A. In-memory (default for small/static data): one read with the keys, no Spark and no files.
+#    It registers an in-memory training dataset version (metadata only), which a model
+#    registered with feature_view=fv in the same process records. split_by_key (below, copied
+#    whole into the program) keeps one entity's rows in one part, by a hash of its key: the
+#    same rows give the same parts on every read, so a notebook scores the same test rows later.
+X, y = fv.training_data(primary_key=True, statistics_config=False)
+y = y.squeeze("columns")  # the label comes back as a one-column frame
+td_version = fv.get_last_accessed_training_dataset()
+X_train, X_val, X_test, y_train, y_val, y_test = split_by_key(
+    X, y, key="order_id", drop=[*fv.primary_keys, "order_ts"]  # every key and the event time leave X
+)
+# Scoring later: fv.get_training_data(training_dataset_version=td_version, primary_key=True), then split_by_key.
 
-# B. Materialized + versioned (large data, or a reproducible pinned dataset).
-#    create_train_test_split returns (version, Job) and runs an ASYNC PySpark
-#    job. The version pins the feature-group commits and split seed, so every
+# B. Materialized + versioned, only when the user asks for a stored dataset:
+#    each create_* call starts a PySpark job (minutes). An ML system and the
+#    builders never call it. create_train_test_split returns (version, Job) and
+#    runs the job asynchronously. The version pins the feature-group commits and split seed, so every
 #    model trained on it sees identical rows. Block on the job, then read back
 #    BY VERSION (the dataset 404s until the job finishes).
-# td_version, td_job = fv.create_train_test_split(
-#     test_size=0.2, write_options={"wait_for_job": True}
+# td_version, td_job = fv.create_train_validation_test_split(
+#     validation_size=0.15, test_size=0.15, write_options={"wait_for_job": True}
 # )
-# X_train, X_test, y_train, y_test = fv.get_train_test_split(training_dataset_version=td_version)
+# X_train, X_val, X_test, y_train, y_val, y_test = fv.get_train_validation_test_split(
+#     training_dataset_version=td_version
+# )
 ```
 
-> `train_test_split()` returns `(X_train, X_test, y_train, y_test)`, not a version. `create_train_test_split()` returns `(version, Job)`. Unpacking one as the other (`td_version, _ = fv.train_test_split(...)`) raises `ValueError: too many values to unpack`, and passing the `(version, Job)` tuple to `get_train_test_split` URL-encodes it into the path and 404s. For a static dataset, prefer the in-memory `train_test_split()`.
+```python
+# split_by_key: copy it whole into the program that splits and into the one that scores.
+import hashlib, re
+
+import pandas as pd
+
+
+def key_columns(columns, key):
+    """Every column of `key`: its own name and the prefixed names (`<project>_<fg>_<version>_<key>`)
+    a key comes back with, once per group of a view that joins groups on it."""
+    return [c for c in columns if c == key or re.fullmatch(rf".+_\d+_{re.escape(key)}", c)]
+
+
+def key_column(columns, key):
+    """The column of `key`: its own name, or the prefixed name a key the view leaves out comes
+    back with. Exactly one, else an error naming them."""
+    found = key_columns(columns, key)
+    if len(found) != 1:
+        raise ValueError(f"key {key!r}: {len(found)} matching columns {found} among {list(columns)}")
+    return found[0]
+
+
+def key_bucket(value):
+    """0 to 99 from a key value; 1 and 1.0 (an id read as float) give one bucket, and a missing
+    key (None, NaN, pd.NA, NaT) one."""
+    if pd.isna(value):
+        value = "<none>"
+    elif hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return int(hashlib.sha256(str(value).encode()).hexdigest(), 16) % 100
+
+
+def split_by_key(X, y, key, drop=(), validation=15, test=15):
+    """70/15/15 by default, one entity's rows in one part. `drop`: the other keys and the
+    event time; every copy of each leaves X with the key, since ids and times are no features."""
+    copies = key_columns(X.columns, key)
+    # A view joining groups on the key holds it once per group, all equal: the plain one splits.
+    same = key in copies and all(X[c].equals(X[key]) or bool((X[c] == X[key]).all()) for c in copies)
+    part = X[key if same else key_column(X.columns, key)].map(key_bucket)
+    X = X.drop(columns=[c for k in dict.fromkeys([key, *drop]) for c in key_columns(X.columns, k)])
+    tr, va = part < 100 - validation - test, (part >= 100 - validation - test) & (part < 100 - test)
+    te = part >= 100 - test
+    return X[tr], X[va], X[te], y[tr], y[va], y[te]
+```
+
+> The in-memory splits return frames, not a version: `train_validation_test_split()` six, `train_test_split()` four (`X_train, X_test, y_train, y_test`); `fv.get_last_accessed_training_dataset()` gives the version they registered. `create_*_split()` returns `(version, Job)`. Unpacking one as the other (`td_version, _ = fv.train_test_split(...)`) raises `ValueError: too many values to unpack`, and passing the `(version, Job)` tuple to `get_train_test_split` URL-encodes it into the path and 404s. Each in-memory call registers a new version, so split once per program. For a static dataset, prefer the in-memory split. The split is `split_by_key`, never `fv.train_validation_test_split()`: it keeps one entity's rows in one part, and the program that scores the model later splits the same rows the same way.
 
 Hints:
 - `get_train_test_split` only works on a dataset created BY a split call. A plain
   dataset from `hops td compute <fv>` is read with
   `fv.get_training_data(training_dataset_version=N)` — calling `get_train_test_split`
   on it raises `Use feature_view.get_training_data instead`.
-- `hops td compute <fv> <fv_version>` takes the FEATURE-VIEW version as a required
-  positional; the training-dataset version it creates auto-increments — read it
-  back from `hops td list <fv>` rather than hardcoding `1`.
+- `hops td compute <fv> --fv-version <n>` names the feature view version; the
+  training dataset version it creates auto-increments, so read it back from
+  `hops td list <fv>` rather than hardcoding `1`.
 - `get_train_test_split` returns `(X_train, X_test, y_train, y_test)`; `y` is
   empty when the FV declares no label.
 - Model-dependent transformations (MDTs) declared on the FV are applied
   automatically to the returned frames, using statistics stored with the
   training dataset. The same MDTs run at inference time, so training and
   serving stay equivalent (no training/serving skew).
+- Inputs are every column of the view's groups but the keys, the event time and the label: build
+  the view with `--except <key>,<event time>` (or `select_except`), never a `select([...])` of a
+  few columns picked by hand. A text (categorical) column goes in one-hot: a `ColumnTransformer`
+  in the `Pipeline` (numeric scaled, text `OneHotEncoder(handle_unknown="ignore")`), never left
+  out because it is text. A column left out (a leak, a constant, an identifier) is named with why
+  in the `description=`.
 - Drop target-leaking columns: any value not known at prediction time.
   Post-outcome signals (counts, views, reactions on the thing you predict) and
   source-internal aggregates leak the label, and the store will not stop you.
@@ -90,6 +160,7 @@ Hints:
   They are leaky and break `fit` (a datetime column raises
   `DTypePromotionError: DateTime64 could not be promoted by Float64`).
   The clean fix is upstream: exclude them when you create the FV, with
+  `hops fv create <fv> --feature-group <fg>:<v> --except <pk>,<event_time>`,
   `fg.select_except([pk, event_time])` or
   `fg.select_all(include_primary_key=False, include_event_time=False)` (skill: hops-fv).
 - If you do pull keys/event time into a split (e.g. `get_train_test_split(primary_keys=True, event_time=True)`
@@ -115,7 +186,11 @@ model.fit(X_train, y_train)
 
 Compute the metrics that fit the task (R²/MAE for regression, precision/recall/
 AUC for classification, …) and save plots as PNGs alongside the model so they
-land in the registry.
+land in the registry, in the **hops-design** look: the accent for the model's
+series, greys for references and baselines, no top or right spine, a light grid,
+axis labels with units. An ML system's `charts.py` (**hops-reqs** template) draws
+them that way.
+No frame or border around a figure; the panel draws the card.
 
 Evaluation (metrics on the test set) is distinct from **model validation**:
 checking the model on slices of the data at risk of bias before it ships. Use
@@ -137,7 +212,7 @@ import os, joblib
 
 model_dir = "my_model_dir"
 os.makedirs(model_dir, exist_ok=True)
-joblib.dump(model, f"{model_dir}/model.pkl")
+joblib.dump(model, f"{model_dir}/model.joblib")   # at the root of the dir passed to save(), never a subdirectory
 # Save anything the predictor needs at serving time next to the model, e.g.
 # the input feature order: json.dump(list(X_train.columns), open(f"{model_dir}/feature_names.json", "w"))
 
@@ -164,7 +239,7 @@ hw_model = mr.python.create_model(
     description="What this model predicts",
     input_example=X_train.head(1),
     feature_view=fv,                       # provenance link FV -> model
-    training_dataset_version=td_version,    # the split materialized in step 1
+    training_dataset_version=td_version,    # the version the split in step 1 registered
 )
 hw_model.save(model_dir)                    # uploads the whole dir (model + plots)
 ```
@@ -190,6 +265,99 @@ Hints:
   card**: the handoff doc the I side reads to deploy. Aim to capture intended
   use, performance, and bias-test outcomes, not just raw metrics.
 
+## Runs and sweeps
+
+A sweep (several candidates, or one candidate's settings) is one experiment: the model name. Each
+run is a version of that model; there is no other store. `hops model runs <name>` lists them, best
+first, with `--sweep <id>` and `--json`.
+
+- **One split per sweep.** Read the feature view once and take the version that read registered,
+  `td_version = fv.get_last_accessed_training_dataset()`, right after it. Every run fits on those
+  frames and passes `training_dataset_version=td_version` with `feature_view=fv`. Without the
+  argument a model records the view's last read, so runs registered after several reads all name
+  the last one.
+- **The sweep is one tracked change**, so a watcher (the Hopsable Experiments preview) opens when
+  it starts and sees it end. That signal is a local line only the Hopsable sandbox writes; the
+  record is the runs in the registry, which a job or a notebook registers the same way. The
+  library a job or Jupyter runs may lack `events`, so the block runs without it:
+
+  ```python
+  import contextlib
+
+  try:
+      from hopsworks_common import events  # the live-preview signal, written in the Hopsable sandbox only
+  except ImportError:
+      events = None
+
+  sweep_id = f"{name}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
+  tracked = events.tracked("experiment", "create", long=True, name=name) if events else contextlib.nullcontext()
+  with tracked as sweep:
+      if sweep:
+          sweep.detail.update(sweep_id=sweep_id, candidates=len(candidates), metric=metric, metric_goal=goal)
+      ...  # the one split, then every fit and registration
+  ```
+- **Each run registers** its metrics (`val_<metric>`, `test_<metric>`), a one-line `description=`
+  (candidate and its main params), and a `run.json` written into the model directory before
+  `save()`. `params` is flat, one scalar per key (they become table columns); times are ISO 8601
+  in UTC:
+
+  ```python
+  run = {
+      "experiment": name, "run_id": f"{sweep_id}-{i}", "sweep_id": sweep_id,
+      "candidate": candidate, "params": params, "metric": "val_macro_f1", "metric_goal": "max",
+      "status": "finished", "started": started.isoformat(), "finished": finished.isoformat(),
+      "seed": SEED, "training_dataset_version": td_version,
+  }
+  (Path(model_dir) / "run.json").write_text(json.dumps(run))
+  ```
+
+  A failed fit registers nothing; the final table names it with its error.
+- **Classification metrics** also carry the majority-class baseline and the scores that see
+  through imbalance, on validation and test:
+
+  ```python
+  from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
+
+  majority = y_train.mode()[0]
+  for part, X_, y_ in (("val", X_val, y_val), ("test", X_test, y_test)):
+      pred = model.predict(X_)
+      metrics[f"{part}_accuracy"] = accuracy_score(y_, pred)
+      metrics[f"{part}_macro_f1"] = f1_score(y_, pred, average="macro")
+      metrics[f"{part}_balanced_accuracy"] = balanced_accuracy_score(y_, pred)
+      metrics[f"{part}_baseline_accuracy"] = float((y_ == majority).mean())
+  ```
+
+  A multiclass label whose largest class holds over 40% of the rows selects on `val_macro_f1`;
+  otherwise on the metric asked for.
+- **Done** when `hops model runs <name> --sweep <id>` shows one row per finished candidate, all
+  with the same version under TD.
+- **Report** the `hops model runs` table. When the best run's accuracy is within 2 points of the
+  baseline, say so plainly, naming the class: "No better than always guessing `delivered`: these
+  features carry no signal for `status`." Then the next step: class weights, another target, or
+  more or real data. Name the runs as `hops model runs <name>` and the model's page in Hopsworks;
+  never point to an "Experiments" view the reader may not have.
+
+## In a notebook
+
+A notebook is where the code runs; this skill is the contract. Training, a sweep or a model built
+in notebook cells (`hops notebook run`, **hops-notebook**) follows sections 3 and 4 and "Runs and
+sweeps" as a job would: the sweep in one `events.tracked("experiment", ...)`, each candidate a run
+with its metrics, `description=`, `run.json` and the charts in `images/`, and the chosen model
+registered. In a kernel, leave the matplotlib backend as it is (no `matplotlib.use("Agg")`, which
+blanks every later chart of the notebook) and close each chart after saving it. Data the
+notebook made itself, in no feature group, registers without
+`feature_view=` and `training_dataset_version=`, and its `run.json` leaves the version out. A model to deploy
+needs both: put that data in a feature group and a view of it first.
+Check it from outside the kernel: `hops model runs <name>` (one row per run) and
+`hops model info <name>` (its `Images`). Then offer once per notebook, with no option marked
+"(Recommended)", to promote the training into a pipeline: the data in a feature group, a feature
+view, and the cells as `train.py` (section 5), which **hops-model-builder** writes.
+
+The other way: a model a pipeline or a builder trained opens in a notebook without training it
+again. Load it with `mr.get_model("<name>", version=<v>)` and `model.download()`, read its
+`run.json` and `images/`, and score the test part of the training dataset it records
+(`training_dataset_version` in `hops model info`); never fit it again in the notebook.
+
 ## 5. Run it as a job
 
 ```bash
@@ -210,74 +378,9 @@ irreversibly; confirm the exact name and version with the user, and never tear
 down a model or feature view you created as a side effect (temp or test ones
 included) unless they asked.
 
-## Split policy: train, validation and test
+## Inside an ML system
 
-Three parts: train, validation (selection) and test (acceptance), the last two
-`validation_fraction` and `test_fraction` of the data, 15% each by default.
-
-- `problem.generalises_to: new_periods` gives a **time-ordered** split with test
-  last and validation before it; `new_entities` gives a split **grouped by the
-  entity**, so no entity appears in two parts. Ask the user with
-  `AskUserQuestion` when it is unclear which applies.
-- Rows younger than `problem.label_maturity` have no final label and fall in no
-  part; record the label cutoff.
-- Transformation statistics are fitted on the train part only, which is how
-  Hopsworks computes them for a training dataset with splits.
-- The template's `evaluate.split_boundaries` computes the time boundaries for
-  `fv.create_train_validation_test_split(train_start=..., ..., test_end=...)`;
-  `evaluate.grouped_part` assigns an entity to a part by a stable hash.
-- Selection reads validation only; the test part is scored once per candidate
-  presented for acceptance.
-
-## Pretrained first
-
-When public models cover the task (text, embeddings, image, audio, speech,
-forecasting or tabular foundation models, LLM tasks), shortlist at most three
-Hugging Face Hub candidates by task, modality and a licence in
-`requirements.models.licences`, recording the revision the Hub reports. Import
-each into the registry server-side, so nothing lands on the laptop:
-
-```python
-mr = project.get_model_registry()
-token = hopsworks.get_secrets_api().get_secret("hf_token").value   # requirements.models.token_secret
-candidate = mr.hf_download("owner/repo", hf_token=token, revision="<sha>", timeout=1200)
-# candidate.description names the commit the files came from
-```
-
-Score each on the validation part with the same metric, through the
-`<slug>-eval` job (`evaluate.py --model <name>:<version> --split validation`).
-One that meets the target goes to acceptance as-is; one that comes close is a
-fine-tuning idea for the loop; otherwise train from scratch. Record the search
-under `training.pretrained` either way, `searched: true, chosen: none` included.
-
-## Three program modes
-
-`training_pipeline.py` (from the hops-reqs system template) takes `--mode`:
-
-| Mode | Trains on | Scores | Registers |
-| --- | --- | --- | --- |
-| `research` | train, within `per_run` | validation | the next version of `<ident>_research`, always |
-| `accept` | train + validation, at a given commit | test, once | a version of `<ident>_model` only when the target holds |
-| `retrain` | a new training dataset version with the recorded split policy, after the short checks | test | as `accept` |
-
-Research versions never live under `<ident>_model`, so its newest version is
-always an accepted one and a batch job reading the newest version is safe.
-
-## Experiment loop
-
-Inside `/hops-build`, the training agent improves the model with an auto-research
-loop: `training_pipeline.py` is the one editable file, `evaluate.py`, the
-training dataset version and the environment are frozen, one idea per run,
-every run committed and registered, keep or revert, never pause to ask. The
-protocol is [references/autoresearch.md](references/autoresearch.md). A system
-that names its own copy in `training.autoresearch` follows that copy instead.
-
-## Tests
-
-The training row of [hops-reqs/references/tests.md](../hops-reqs/references/tests.md):
-unit tests for the split, the metrics, the feature list and the registration
-rule of each mode; an integration test that runs `accept` on a small slice into
-`<ident>_model_test_<run_id>` and deletes it.
+The split policy, pretrained candidates first, the three program modes of `training_pipeline.py`, the experiment loop and the tests: `hops skills info hops-train references/ml-system.md`.
 
 ## Next Steps
 

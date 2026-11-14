@@ -56,6 +56,25 @@ def test_list_reads_the_flat_layout(tmp_path, monkeypatch):
     assert skills[0]["bucket"] == ""
 
 
+def test_info_prints_a_file_of_the_skill(tmp_path, monkeypatch):
+    _write(tmp_path, "data/hops-demo/SKILL.md")
+    _write(tmp_path, "data/hops-demo/references/part.md", "The part.\n")
+    _write(tmp_path, "data/secret.md", "Outside the skill.\n")
+    monkeypatch.setenv("HOPS_SKILLS_DIR", str(tmp_path))
+
+    done = CliRunner().invoke(
+        cli, ["skills", "info", "hops-demo", "references/part.md"]
+    )
+    assert done.exit_code == 0, done.output
+    assert "The part." in done.output and "Body." not in done.output
+
+    for wrong in ("references/none.md", "../secret.md"):
+        done = CliRunner().invoke(cli, ["skills", "info", "hops-demo", wrong])
+        assert done.exit_code != 0
+        assert "it has references/part.md" in done.output
+        assert "Outside" not in done.output
+
+
 @pytest.mark.parametrize(
     "skill_md", sorted(SKILLS_ROOT.glob("*/*/SKILL.md")), ids=lambda p: p.parent.name
 )
@@ -95,3 +114,81 @@ def test_shipped_skill_frontmatter_loads_in_every_agent(skill_md):
         f"{skill_md} declares name={fields['name']!r} but lives in "
         f"{skill_md.parent.name!r}"
     )
+
+
+def test_every_skill_file_a_playbook_cites_exists():
+    cite = re.compile(r"hops skills info (hops-[a-z-]+) (references/[\w./-]+)")
+    texts = [
+        *(SKILLS_ROOT.parent / "cli" / "templates").glob("*.md"),
+        *SKILLS_ROOT.rglob("*.md"),
+    ]
+    cited = {m.groups() for p in texts for m in cite.finditer(p.read_text("utf-8"))}
+    assert cited
+    folders = {p.parent.name: p.parent for p in SKILLS_ROOT.glob("*/*/SKILL.md")}
+    missing = [(s, f) for s, f in cited if not (folders[s] / f).is_file()]
+    assert not missing
+
+
+def test_info_puts_its_path_header_on_stdout_for_a_pipe(tmp_path, monkeypatch):
+    path = _write(tmp_path, "data/hops-demo/SKILL.md")
+    monkeypatch.setenv("HOPS_SKILLS_DIR", str(tmp_path))
+
+    done = CliRunner().invoke(cli, ["skills", "info", "hops-demo"])
+    assert done.exit_code == 0, done.output
+    lines = done.stdout.splitlines()
+    assert lines[0].startswith("# hops-demo")
+    assert lines[1] == f"# {path}"
+
+
+def test_playbook_mounts_named_tables_read_in_place_and_previews_crm_tables():
+    root = SKILLS_ROOT.parents[2]
+    playbooks = [root / ".claude" / "commands" / "hops.md", SKILLS_ROOT.parent / "cli" / "templates" / "hops.md"]
+    for p in playbooks:
+        text = " ".join(p.read_text("utf-8").split())
+        assert "is mounted as an external feature group" in text, p
+        assert "A CRM, Google Sheets or REST table cannot be mounted: preview it with `hops datasource preview <source> --table <t>`" in text, p
+    skill = " ".join((SKILLS_ROOT / "data" / "hops-data-sources" / "SKILL.md").read_text("utf-8").split())
+    assert "These sources cannot be mounted" in skill
+    assert "`hops datasource preview` reads a named table's rows here" in skill
+
+
+def test_playbook_asks_one_question_after_a_connect():
+    root = SKILLS_ROOT.parents[2]
+    for p in [root / ".claude" / "commands" / "hops.md", SKILLS_ROOT.parent / "cli" / "templates" / "hops.md"]:
+        text = " ".join(p.read_text("utf-8").split())
+        assert "never a second one for the tables" in text, p
+        for option in ("**Preview all tables**", "**Preview one: `<table>`**", "**Tell me what this data is about**"):
+            assert option in text, (p, option)
+
+
+@pytest.mark.parametrize("name", ["hops", "hops-build", "hops-gold", "hops-silver", "hops-bronze"])
+def test_playbook_asks_a_follow_up_only_after_the_answer_it_depends_on(name):
+    root = SKILLS_ROOT.parents[2]
+    for p in [root / ".claude" / "commands" / f"{name}.md", SKILLS_ROOT.parent / "cli" / "templates" / f"{name}.md"]:
+        text = " ".join(p.read_text("utf-8").split())
+        assert "applies only after some answers of another waits for that answer" in text, p
+
+
+def test_app_deploy_waits_for_the_users_yes():
+    root = SKILLS_ROOT.parents[2]
+    for d in [root / ".claude" / "agents", SKILLS_ROOT.parent / "cli" / "templates"]:
+        text = " ".join((d / "hops-app-builder.md").read_text("utf-8").split())
+        assert "`deploy: no` (the default) stops before the deploy step" in text, d
+        assert "only with `deploy: yes`, deploy" in text and "with `deploy: yes` only, `hops app deploy" in text, d
+    for d in [root / ".claude" / "commands", SKILLS_ROOT.parent / "cli" / "templates"]:
+        text = " ".join((d / "hops-piece-app.md").read_text("utf-8").split())
+        assert "whether to deploy it to Hopsworks, never marked \"(Recommended)\"" in text, d
+        assert "spawn **hops-app-builder** with `action: deploy`" in text, d
+
+
+# An agent reads a skill file or a playbook whole, in one tool call. Agent hosts cut long tool
+# output (Hopsable keeps the first 8,000 and the last 24,000 characters), so each file stays at
+# 24,000 characters or less, which leaves room for another command's output in the same call.
+READ_WHOLE_BUDGET = 24_000
+
+
+def test_every_skill_file_and_playbook_is_read_whole():
+    templates = SKILLS_ROOT.parent / "cli" / "templates"
+    files = [*SKILLS_ROOT.rglob("*.md"), *templates.glob("*.md")]
+    over = {str(p.relative_to(SKILLS_ROOT.parent)): n for p in files if (n := len(p.read_text("utf-8"))) > READ_WHOLE_BUDGET}
+    assert not over, f"over {READ_WHOLE_BUDGET} characters, move detail into references/: {over}"

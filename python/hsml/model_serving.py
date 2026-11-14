@@ -79,11 +79,13 @@ class ModelServing:
         project_name: str,
         project_id: int,
         project_namespace: str | None = None,
+        project_backing_name: str | None = None,
         **kwargs,
     ):
         self._project_name = project_name
         self._project_id = project_id
         self._project_namespace = project_namespace
+        self._project_backing_name = project_backing_name or project_name
 
         self._serving_api = serving_api.ServingApi()
 
@@ -680,6 +682,7 @@ class ModelServing:
         memory: DeploymentMemoryConfig | dict | None = None,
         framework: str | None = None,
         chat_config: dict[str, Any] | str | None = None,
+        env_vars: dict[str, str] | None = None,
     ) -> Deployment:
         """Deploy a Python script or package as an agent.
 
@@ -747,6 +750,7 @@ class ModelServing:
                 Chat contract of the agent, telling the chat panel and chat clients how to talk to it.
                 A protocol name (`"hopsworks"`, `"openai"`) or a dict with `protocol` and, for a custom endpoint (`simple`/`generic`), `path`, `message_field_in` and `message_field_name`.
                 When omitted, a new agent whose local entry builds an `AgentApp` gets `"hopsworks"`, and an existing agent keeps its contract.
+            env_vars: Environment variables of the agent's predictor. A redeploy adds or replaces these keys and keeps the others.
 
         Returns:
             The deployment metadata object.
@@ -843,7 +847,7 @@ class ModelServing:
                     ds_api, env, entry_abs, agent_dir
                 )
             # The serving backend expects the script path under /Projects/<proj>/...
-            script_file = util._convert_to_abs(script_file, self._project_name)
+            script_file = util._convert_to_abs(script_file, self._project_backing_name)
 
         if requirements_abs is not None:
             req_remote = ds_api.upload(requirements_abs, agent_dir, overwrite=True)
@@ -866,6 +870,7 @@ class ModelServing:
             git_branch=git_branch if git_backed else None,
             git_auto_redeploy=git_auto_redeploy if git_backed else False,
             knative_mode=knative_mode,
+            env_vars=env_vars,
         )
 
         existing = self.get_deployment(name)
@@ -889,6 +894,10 @@ class ModelServing:
             # already preserved by the backend.
             if framework is None:
                 predictor._agent_framework = existing.predictor.agent_framework
+            # A redeploy keeps the agent's other variables (its own, and the ones Hopsworks reads back); the
+            # keys passed here win.
+            if existing.predictor.env_vars:
+                predictor._env_vars = {**existing.predictor.env_vars, **(env_vars or {})}
             existing.predictor = predictor
             existing.description = description
             existing.save()
@@ -1176,7 +1185,7 @@ class ModelServing:
     @property
     def project_path(self):
         """Path of the project the registry is connected to."""
-        return f"/Projects/{self._project_name}"
+        return f"/Projects/{self._project_backing_name}"
 
     @public
     @property

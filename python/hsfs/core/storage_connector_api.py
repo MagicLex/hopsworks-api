@@ -19,7 +19,7 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
-from hopsworks_common import client, tag, util
+from hopsworks_common import client, events, tag, util
 from hopsworks_common.client.exceptions import FeatureStoreException
 from hsfs import decorators, storage_connector
 
@@ -57,6 +57,13 @@ class StorageConnectorApi:
 
         return _client._send_request("GET", path_params, query_params=query_params)
 
+    @events.tracking(
+        "datasource",
+        "create",
+        key=lambda self, storage_connector_instance, *a, **k: {
+            "name": storage_connector_instance.name
+        },
+    )
     def _create(
         self,
         storage_connector_instance: storage_connector.StorageConnector,
@@ -104,6 +111,13 @@ class StorageConnectorApi:
             )
         )
 
+    @events.tracking(
+        "datasource",
+        "update",
+        key=lambda self, storage_connector_instance, *a, **k: {
+            "name": storage_connector_instance.name
+        },
+    )
     def _update(
         self,
         storage_connector_instance: storage_connector.StorageConnector,

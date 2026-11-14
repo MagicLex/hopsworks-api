@@ -53,6 +53,7 @@ from hsml.scaling_config import (
     PredictorScalingConfig,
 )
 from hsml.transformer import Transformer
+from hsml.utils.predict_init import check_predict_init
 
 
 _logger = logging.getLogger(__name__)
@@ -279,6 +280,8 @@ class Predictor(DeployableComponent):
             raise ValueError(
                 "Predictor scripts are required in deployments for custom Python models."
             )
+        if script_file is not None:
+            check_predict_init(script_file)
 
     @classmethod
     def _infer_model_server(cls, model_framework):
@@ -517,6 +520,12 @@ class Predictor(DeployableComponent):
         kwargs["serving_tool"] = json_decamelized.pop("serving_tool")
         kwargs["script_file"] = util._extract_field_from_json(
             json_decamelized, "predictor"
+        )
+        # The backend stores no flag for it: a deployment runs the default predictor when
+        # its script is the stub the library uploads.
+        kwargs["default_predictor"] = bool(kwargs["script_file"]) and (
+            kwargs["script_file"].rsplit("/", 1)[-1]
+            == MODEL_SERVING.DEFAULT_PREDICTOR_SCRIPT
         )
         kwargs["config_file"] = util._extract_field_from_json(
             json_decamelized, "config_file"
@@ -815,7 +824,7 @@ class Predictor(DeployableComponent):
         # "/Projects/{project_name}/Deployments/{name}/{version}"
         return "{}/{}/{}/{}/{}".format(
             "/Projects",
-            self._project_name,
+            client._get_instance()._project_backing_name,
             MODEL_SERVING.DEPLOYMENTS_DATASET,
             str(self._name),
             str(self._version),

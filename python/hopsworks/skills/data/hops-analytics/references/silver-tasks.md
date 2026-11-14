@@ -1,6 +1,6 @@
 # Silver tasks: SQL and PySpark
 
-Each task as a dbt model fragment (Trino SQL over `delta.<project>_featurestore.<fg>_<version>`) and as PySpark.
+Each task as a dbt model fragment (Trino SQL over `delta.<backing name>_featurestore.<fg>_<version>`) and as PySpark.
 `{{ arrival }}` is the source's arrival column, `{{ key }}` its business key.
 Chain them as CTEs in one model per silver table, in the order below.
 
@@ -165,3 +165,14 @@ A hash of the natural keys is stable across runs and windows, needs no sequence,
 ```
 
 Orphans are flagged, not dropped: a fact can arrive before its dimension, and the next window may resolve it.
+
+## Building a silver layer
+
+`/hops-silver <slug>` builds what `system.yaml` asks for, phase by phase, recording each in `system.yaml`:
+
+1. **profile**: for each bronze source, its schema, row count, key candidates and duplicate rate on them, null rates, distinct values of low-cardinality strings, and its arrival column (`hops fg info`, `hops fg preview`, `hops trino query`).
+2. **design**: the silver tables in third normal form (one per entity or event, named after it in lowercase, `customers`, `order_lines`), each with its sources, business key, foreign keys, `event_time`, columns and the tasks applied to it; the engine; the cron.
+3. **code**: the dbt project and runner, or the PySpark program, in the layer's directory, with unit tests of the transformations (DuckDB over sample rows for dbt SQL, pandas or local Spark for PySpark) and dbt data tests for `validate`.
+4. **backfill**: deploy the job, run it once over the whole bronze history, and check the silver tables: row counts against bronze, no duplicate keys, no nulls in required columns, rejects counted.
+5. **schedule**: schedule the job; tag every silver feature group `analytics_table` `{"layer": "silver", "lifecycle": <system.yaml lifecycle>}`.
+6. **verify**: run the job for one window (`hops job run <job> --start-time ... --end-time ... --wait`) and check that only that window's rows were processed.

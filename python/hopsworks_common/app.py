@@ -30,7 +30,7 @@ from hopsworks_common.core import app_api
 
 _logger = logging.getLogger(__name__)
 
-SERVING_POLL_INTERVAL = 3.0
+SERVING_POLL_INTERVAL = 0.5
 SERVING_TIMEOUT = 600.0
 
 # Terminal failure states reported by the backend (mirrors JobState.getFinalStates()).
@@ -46,6 +46,17 @@ _FAILED_STATES = frozenset(
         "SUBMISSION_FAILED",
     }
 )
+
+
+def absolute_url(app_url: str) -> str:
+    """The app URL the backend returns (a path under /hopsworks-api) on the client's host."""
+    app_url = app_url.lstrip("/")
+    if app_url.startswith(("http://", "https://")):
+        return app_url
+    base_url = client._get_instance()._base_url.rstrip("/")
+    if app_url.startswith("hopsworks-api/"):
+        return base_url + "/" + app_url
+    return base_url + "/hopsworks-api/" + app_url
 
 
 @public("hopsworks.app.App")
@@ -165,6 +176,12 @@ class App:
 
     @public
     @property
+    def job_id(self) -> int | None:
+        """ID of the job that runs the app, the app's ID."""
+        return self._job_id
+
+    @public
+    @property
     def name(self) -> str:
         """Name of the app."""
         return self._name
@@ -200,14 +217,7 @@ class App:
             ```
         """
         if (self._serving or self._state == "IDLE") and self._app_url:
-            _client = client._get_instance()
-            base_url = _client._base_url.rstrip("/")
-            app_url = self._app_url.lstrip("/")
-            if app_url.startswith(("http://", "https://")):
-                return app_url
-            if app_url.startswith("hopsworks-api/"):
-                return base_url + "/" + app_url
-            return base_url + "/hopsworks-api/" + app_url
+            return absolute_url(self._app_url)
         return None
 
     @public
@@ -639,13 +649,12 @@ class App:
         _logger.info("Stopping app: %s", self._name)
         self._app_api._stop(self._name, self._execution_id)
         # Poll until the state is final
-        elapsed = 0.0
-        while elapsed < 30.0:
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
             self._refresh()
             if self._state in ("KILLED", "STOPPED", "FAILED", "FINISHED"):
                 return self
             time.sleep(SERVING_POLL_INTERVAL)
-            elapsed += SERVING_POLL_INTERVAL
         _logger.warning("Timed out waiting for app to stop.")
         return self._refresh()
 
@@ -742,8 +751,9 @@ class App:
         Raises:
             hopsworks.client.exceptions.JobExecutionException: If the app reaches an error state or the serving timeout is exceeded.
         """
-        elapsed = 0.0
-        while elapsed < SERVING_TIMEOUT:
+        deadline = time.monotonic() + SERVING_TIMEOUT
+        logged = None
+        while time.monotonic() < deadline:
             self._refresh()
             if self._serving:
                 if self.app_url:
@@ -753,9 +763,10 @@ class App:
                 raise JobExecutionException(
                     f"App failed to start. State: {self._state}"
                 )
-            _logger.info("Waiting for app to start. Current state: %s", self._state)
+            if self._state != logged:
+                _logger.info("Waiting for app to start. Current state: %s", self._state)
+                logged = self._state
             time.sleep(SERVING_POLL_INTERVAL)
-            elapsed += SERVING_POLL_INTERVAL
 
         raise JobExecutionException(
             f"Timed out waiting for app to reach Serving state after {SERVING_TIMEOUT}s. "
