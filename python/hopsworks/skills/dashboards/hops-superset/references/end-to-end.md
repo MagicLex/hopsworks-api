@@ -8,7 +8,6 @@ import hopsworks
 
 # Columns below (state, age, …) are illustrative: swap for real ones from
 # `hops fg feature list <FG_NAME> --version <FG_VERSION>`.
-PROJECT_NAME = "<your_project>"        # don't hardcode; set to getattr(project, "backing_name", project.name) after login
 FG_NAME, FG_VERSION = "customers", 1
 
 COUNT_METRIC = {
@@ -22,7 +21,7 @@ def main():
     api = project.get_superset_api()
 
     trino_db_id = find_trino_db_id(api)
-    schema = f"{PROJECT_NAME}_featurestore"
+    schema = f"{getattr(project, 'backing_name', project.name).lower()}_featurestore"
     sql = f"SELECT * FROM delta.{schema}.{FG_NAME}_{FG_VERSION}"
 
     dataset_id = ensure_dataset(
