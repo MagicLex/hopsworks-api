@@ -5,8 +5,14 @@ from __future__ import annotations
 import json
 from unittest import mock
 
+import pytest
 from click.testing import CliRunner
 from hopsworks.cli.main import cli
+
+
+@pytest.fixture(autouse=True)
+def _fast_waits(clock):
+    """Every wait here runs on the fake clock."""
 
 
 def _fake_app(**overrides):
@@ -705,29 +711,84 @@ def test_app_create_with_start_triggers_run(mock_project):
     apps = mock_project.get_app_api.return_value
     a = _fake_app(name="dash", state="RUNNING", serving=True, app_url="https://h/x")
     apps.create_app.return_value = a
-    result = CliRunner().invoke(
-        cli,
-        [
-            "app",
-            "create",
-            "dash",
-            "--path",
-            "Resources/dash.py",
-            "--start",
-        ],
-    )
+    with _polls(_serving("https://h/x")):
+        result = CliRunner().invoke(
+            cli,
+            [
+                "app",
+                "create",
+                "dash",
+                "--path",
+                "Resources/dash.py",
+                "--start",
+            ],
+        )
     assert result.exit_code == 0, result.output
-    a.run.assert_called_once_with(await_serving=True)
+    a.run.assert_called_once_with(await_serving=False)
     assert "https://h/x" in result.output
 
 
-def test_app_start_defaults_await_serving_true(mock_project):
+def _serving(url="https://h/x", execution=9):
+    return {
+        "state": "RUNNING",
+        "serving": True,
+        "appUrl": url,
+        "executionId": execution,
+    }
+
+
+def _polls(*apps):
+    """The app's JSON as each poll of the CLI's wait sees it."""
+    return mock.patch("hopsworks.cli.commands.app._app_json", side_effect=[*apps])
+
+
+def test_app_start_waits_for_its_new_execution(mock_project, clock):
     apps = mock_project.get_app_api.return_value
-    a = _fake_app(state="RUNNING", serving=True, app_url="https://h/x")
+    a = _fake_app(state="KILLED")
+    a.execution_id = 8
     apps.get_app.return_value = a
-    result = CliRunner().invoke(cli, ["app", "start", "dash"])
+    with _polls({"state": "KILLED", "executionId": 8}, _serving()) as polled:
+        result = CliRunner().invoke(cli, ["app", "start", "dash"])
     assert result.exit_code == 0, result.output
-    a.run.assert_called_once_with(await_serving=True)
+    a.run.assert_called_once_with(await_serving=False)
+    assert polled.call_count == 2
+    assert "state=RUNNING, serving=yes" in result.output
+    assert result.stdout.strip().splitlines()[-1] == "https://h/x"
+
+
+def test_app_start_prints_each_state_with_the_pod_reason(
+    mock_project, clock, unschedulable
+):
+    apps = mock_project.get_app_api.return_value
+    apps.get_app.return_value = _fake_app()
+    pending = {"state": "INITIALIZING", "executionId": 9, "kubeMonitor": unschedulable}
+    with _polls(pending, pending, {"state": "RUNNING", "executionId": 9}, _serving()):
+        result = CliRunner().invoke(cli, ["app", "start", "dash"])
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if "App my_app:" in line]
+    assert lines == [
+        "App my_app: INITIALIZING: FailedScheduling: 0/5 nodes are available: "
+        "3 Insufficient memory. (0 s)",
+        "App my_app: RUNNING (6 s)",
+    ]
+
+
+def test_app_start_fails_at_once_naming_the_state_and_reason(
+    mock_project, clock, unschedulable
+):
+    apps = mock_project.get_app_api.return_value
+    apps.get_app.return_value = _fake_app()
+    pending = {"state": "INITIALIZING", "executionId": 9, "kubeMonitor": unschedulable}
+    failed = {"state": "INITIALIZATION_FAILED", "executionId": 9}
+    with _polls(pending, failed):
+        result = CliRunner().invoke(cli, ["app", "start", "dash"])
+    assert result.exit_code == 1
+    assert (
+        "Could not start app 'my_app': it stopped in state INITIALIZATION_FAILED: "
+        "FailedScheduling: 0/5 nodes are available: 3 Insufficient memory. "
+        "Read `hops app logs my_app`." in result.output
+    )
+    assert clock.now == 3
 
 
 def test_app_start_no_wait_passes_false(mock_project):
@@ -739,13 +800,17 @@ def test_app_start_no_wait_passes_false(mock_project):
     a.run.assert_called_once_with(await_serving=False)
 
 
-def test_app_redeploy_defaults_await_serving_true(mock_project):
+def test_app_redeploy_waits_for_the_new_execution(mock_project, clock):
     apps = mock_project.get_app_api.return_value
     a = _fake_app(state="RUNNING", serving=True, app_url="https://h/x")
+    a.execution_id = 8
     apps.get_app.return_value = a
-    result = CliRunner().invoke(cli, ["app", "redeploy", "dash"])
+    with _polls(_serving(execution=8), _serving(execution=9)) as polled:
+        result = CliRunner().invoke(cli, ["app", "redeploy", "dash"])
     assert result.exit_code == 0, result.output
-    a.redeploy.assert_called_once_with(await_serving=True)
+    a.redeploy.assert_called_once_with(await_serving=False)
+    # The old execution still serving does not count.
+    assert polled.call_count == 2
 
 
 def test_app_redeploy_no_wait_passes_false(mock_project):
@@ -831,7 +896,7 @@ def _deploy(
     returns, and `remote` the text of the requirements uploaded last time.
     """
     apps = mock_project.get_app_api.return_value
-    apps.get_app.side_effect = [existing, *polls]
+    apps.get_app.return_value = existing
     dataset_api = mock_project.get_dataset_api.return_value
     present = {"Users/scott"}
     if remote is not None:
@@ -855,10 +920,20 @@ def _deploy(
     ]
     with (
         mock.patch("hopsworks.get_users_api", return_value=users_api, create=True),
-        mock.patch("hopsworks.cli.commands.app._POLL_SECONDS", 0),
+        _polls(*[a if isinstance(a, dict) else _json(a) for a in polls]) as polled,
     ):
         result = CliRunner().invoke(cli, argv)
+    apps.polled = polled
     return result, apps, dataset_api
+
+
+def _json(a):
+    return {
+        "state": a.state,
+        "serving": a.serving,
+        "executionId": a.execution_id,
+        "appUrl": a.app_url,
+    }
 
 
 def _app(execution_id, state="RUNNING", serving=True, env="python-agent-pipeline"):
@@ -941,7 +1016,7 @@ def test_deploy_waits_for_the_new_execution_of_a_running_app(mock_project, tmp_p
     assert result.exit_code == 0, result.output
     running.redeploy.assert_called_once_with(await_serving=False)
     apps.create_app.assert_not_called()
-    assert apps.get_app.call_count == 3
+    assert apps.polled.call_count == 2
 
 
 def test_deploy_starts_a_stopped_app(mock_project, tmp_path):
@@ -959,7 +1034,7 @@ def test_deploy_fails_when_the_new_execution_fails(mock_project, tmp_path):
         mock_project, root, existing=_app(3), polls=[_app(4, "FAILED", serving=False)]
     )
     assert result.exit_code == 1
-    assert "Could not deploy app 'shop': it stopped in state FAILED" in result.output
+    assert "Could not deploy app 'shop': it stopped in state FAILED." in result.output
     assert "hops app logs shop" in result.output
 
 
@@ -1130,3 +1205,19 @@ def test_deploy_check_fails_on_an_html_page_for_an_api_route(mock_project, tmp_p
     )
     assert result.exit_code == 1
     assert "answered an HTML page" in result.output
+
+
+def test_deploy_names_the_stuck_state_and_reason_on_timeout(
+    mock_project, tmp_path, unschedulable
+):
+    root = _app_dir(tmp_path)
+    pending = {"state": "INITIALIZING", "executionId": 4, "kubeMonitor": unschedulable}
+    result, _, _ = _deploy(
+        mock_project, root, "--timeout", "30", existing=_app(3), polls=[pending] * 20
+    )
+    assert result.exit_code == 1
+    assert (
+        "App shop still INITIALIZING after 30 s: FailedScheduling: 0/5 nodes are "
+        "available: 3 Insufficient memory. Read `hops app logs shop`, or raise --timeout."
+        in result.output
+    )
