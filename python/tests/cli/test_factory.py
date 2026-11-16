@@ -398,7 +398,9 @@ def test_validate_runs_without_a_cluster(tmp_path):
     assert refused.exit_code != 0 and "kind must be Factory" in refused.output
 
 
-def test_import_reviews_the_instructions_then_creates(tmp_path, monkeypatch, logged_in):
+def test_import_reviews_the_instructions_then_creates(
+    tmp_path, monkeypatch, logged_in, tty
+):
     path = tmp_path / "review.yaml"
     path.write_text(REVIEW)
     created = []
@@ -483,7 +485,7 @@ def _recording(monkeypatch, tmp_path):
 
 
 def test_run_asks_each_question_then_resumes_from_system_yaml(
-    tmp_path, monkeypatch, logged_in
+    tmp_path, monkeypatch, logged_in, tty
 ):
     registered, launched = _recording(monkeypatch, tmp_path)
     typed = [

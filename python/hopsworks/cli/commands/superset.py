@@ -121,8 +121,8 @@ def superset_dataset_delete(ctx: click.Context, dataset_id: int, yes: bool) -> N
         dataset_id: Superset dataset ID.
         yes: Skip confirmation when True.
     """
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete Superset dataset {dataset_id}?", abort=True)
+    if not yes:
+        output.confirm(f"Delete Superset dataset {dataset_id}?")
     try:
         _api(ctx).delete_dataset(dataset_id)
     except Exception as exc:  # noqa: BLE001
@@ -231,8 +231,8 @@ def superset_chart_delete(ctx: click.Context, chart_id: int, yes: bool) -> None:
         chart_id: Superset chart ID.
         yes: Skip confirmation when True.
     """
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete Superset chart {chart_id}?", abort=True)
+    if not yes:
+        output.confirm(f"Delete Superset chart {chart_id}?")
     try:
         _api(ctx).delete_chart(chart_id)
     except Exception as exc:  # noqa: BLE001
@@ -320,8 +320,8 @@ def superset_dashboard_delete(ctx: click.Context, dashboard_id: int, yes: bool) 
         dashboard_id: Superset dashboard ID.
         yes: Skip confirmation when True.
     """
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete Superset dashboard {dashboard_id}?", abort=True)
+    if not yes:
+        output.confirm(f"Delete Superset dashboard {dashboard_id}?")
     try:
         _api(ctx).delete_dashboard(dashboard_id)
     except Exception as exc:  # noqa: BLE001

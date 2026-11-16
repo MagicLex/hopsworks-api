@@ -15,7 +15,6 @@ import re
 import secrets
 import socket
 import ssl
-import sys
 import time
 import urllib.parse
 import webbrowser
@@ -409,11 +408,6 @@ def setup_cmd(
     return None
 
 
-def _interactive() -> bool:
-    """Whether we can prompt the user, false under scripts, CI, and piped input."""
-    return sys.stdin.isatty()
-
-
 def _resolve_host(cfg: config.HopsConfig, host_flag: str | None) -> str:
     """Choose the host to set up, letting an interactive user switch clusters.
 
@@ -427,7 +421,7 @@ def _resolve_host(cfg: config.HopsConfig, host_flag: str | None) -> str:
     """
     if host_flag:
         return host_flag
-    if cfg.host and not _interactive():
+    if cfg.host and output.no_input():
         return cfg.host
     host = click.prompt("Hopsworks host", default=cfg.host or config.DEFAULT_HOST)
     _forget_other_cluster(cfg, host)

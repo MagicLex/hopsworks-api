@@ -9,6 +9,8 @@ import pytest
 from click.testing import CliRunner
 from hopsworks.cli.main import cli
 
+from tests.cli.conftest import PENDING_REASON, backend
+
 
 @pytest.fixture(autouse=True)
 def _fast_waits(clock):
@@ -769,39 +771,66 @@ def test_app_start_waits_for_its_new_execution(mock_project, clock):
     assert result.stdout.strip().splitlines()[-1] == "https://h/x"
 
 
-def test_app_start_prints_each_state_with_the_pod_reason(
-    mock_project, clock, unschedulable
-):
+def test_app_start_prints_the_url_on_the_clients_host(mock_project, clock):
+    apps = mock_project.get_app_api.return_value
+    a = _fake_app(state="KILLED")
+    a.execution_id = 8
+    apps.get_app.return_value = a
+    hopsworks = mock.MagicMock(_base_url="https://h/")
+    with (
+        mock.patch("hopsworks_common.client._get_instance", return_value=hopsworks),
+        _polls(_serving("/hopsworks-api/pythonapp/demo/dash/")),
+    ):
+        result = CliRunner().invoke(cli, ["app", "start", "dash"])
+    assert result.exit_code == 0, result.output
+    assert (
+        result.stdout.strip().splitlines()[-1]
+        == "https://h/hopsworks-api/pythonapp/demo/dash/"
+    )
+
+
+def test_app_start_prints_each_state_with_the_pod_reason(mock_project, clock):
     apps = mock_project.get_app_api.return_value
     apps.get_app.return_value = _fake_app()
-    pending = {"state": "INITIALIZING", "executionId": 9, "kubeMonitor": unschedulable}
+    pending = {**backend("app_pending"), "executionId": 9}
     with _polls(pending, pending, {"state": "RUNNING", "executionId": 9}, _serving()):
         result = CliRunner().invoke(cli, ["app", "start", "dash"])
     assert result.exit_code == 0, result.output
     lines = [line for line in result.output.splitlines() if "App my_app:" in line]
     assert lines == [
-        "App my_app: INITIALIZING: FailedScheduling: 0/5 nodes are available: "
-        "3 Insufficient memory. (0 s)",
+        f"App my_app: INITIALIZING: {PENDING_REASON} (0 s)",
         "App my_app: RUNNING (6 s)",
     ]
 
 
-def test_app_start_fails_at_once_naming_the_state_and_reason(
-    mock_project, clock, unschedulable
-):
+def test_app_start_fails_at_once_naming_the_state_and_reason(mock_project, clock):
     apps = mock_project.get_app_api.return_value
     apps.get_app.return_value = _fake_app()
-    pending = {"state": "INITIALIZING", "executionId": 9, "kubeMonitor": unschedulable}
+    pending = {**backend("app_pending"), "executionId": 9}
     failed = {"state": "INITIALIZATION_FAILED", "executionId": 9}
     with _polls(pending, failed):
         result = CliRunner().invoke(cli, ["app", "start", "dash"])
     assert result.exit_code == 1
     assert (
         "Could not start app 'my_app': it stopped in state INITIALIZATION_FAILED: "
-        "FailedScheduling: 0/5 nodes are available: 3 Insufficient memory. "
-        "Read `hops app logs my_app`." in result.output
+        f"{PENDING_REASON.rstrip('.')}. Read `hops app logs my_app`." in result.output
     )
     assert clock.now == 3
+
+
+def test_a_queued_app_names_the_scheduler_message_once_per_change(mock_project, clock):
+    apps = mock_project.get_app_api.return_value
+    apps.get_app.return_value = _fake_app()
+    queued = {**backend("app_queued"), "executionId": 9}
+    with _polls(queued, queued, {"state": "RUNNING", "executionId": 9}, _serving()):
+        result = CliRunner().invoke(cli, ["app", "start", "dash"])
+    assert result.exit_code == 0, result.output
+    message = PENDING_REASON.removeprefix("FailedScheduling: ")
+    lines = [line for line in result.output.splitlines() if "App my_app:" in line]
+    assert lines == [
+        f"App my_app: QUEUED: {message} (0 s)",
+        "App my_app: RUNNING (6 s)",
+    ]
 
 
 def test_app_start_no_wait_passes_false(mock_project):
@@ -885,6 +914,8 @@ def test_app_info_surfaces_not_found(mock_project):
 
 _SOURCE = "/Projects/demo/Users/scott/apps/shop/app.py"
 _URL = "https://h/hopsworks-api/pythonapp/demo/shop/"
+# What the backend returns as appUrl: a path, which the CLI puts on the client's host.
+_PATH = "/hopsworks-api/pythonapp/demo/shop/"
 
 
 def _app_dir(tmp_path, requirements=None):
@@ -901,13 +932,24 @@ def _app_dir(tmp_path, requirements=None):
 
 
 def _deploy(
-    mock_project, root, *args, existing=None, polls=(), remote=None, json_mode=False
+    mock_project,
+    root,
+    *args,
+    existing=None,
+    polls=(),
+    remote=None,
+    json_mode=False,
+    hopsworks=None,
 ):
     """Run `hops app deploy shop <root>` against fakes.
 
     `existing` is the app before the deploy, `polls` what each later `get_app`
-    returns, and `remote` the text of the requirements uploaded last time.
+    returns, `remote` the text of the requirements uploaded last time, and
+    `hopsworks` the client (on host https://h).
     """
+    if hopsworks is None:
+        hopsworks = mock.MagicMock(_verify=False)
+    hopsworks._base_url = "https://h"
     apps = mock_project.get_app_api.return_value
     apps.get_app.return_value = existing
     dataset_api = mock_project.get_dataset_api.return_value
@@ -933,6 +975,7 @@ def _deploy(
     ]
     with (
         mock.patch("hopsworks.get_users_api", return_value=users_api, create=True),
+        mock.patch("hopsworks_common.client._get_instance", return_value=hopsworks),
         _polls(*[a if isinstance(a, dict) else _json(a) for a in polls]) as polled,
     ):
         result = CliRunner().invoke(cli, argv)
@@ -945,7 +988,7 @@ def _json(a):
         "state": a.state,
         "serving": a.serving,
         "executionId": a.execution_id,
-        "appUrl": a.app_url,
+        "appUrl": _PATH,
     }
 
 
@@ -1148,12 +1191,14 @@ def test_deploy_checks_a_route_through_the_proxy(mock_project, tmp_path):
     proxy_client = mock.MagicMock(_verify=False)
     proxy_client._send_request.return_value = {"token": "jwt"}
     answer = mock.MagicMock(ok=False, status_code=500, text="Internal Server Error")
-    with (
-        mock.patch("hopsworks_common.client._get_instance", return_value=proxy_client),
-        mock.patch("requests.get", return_value=answer) as get,
-    ):
+    with mock.patch("requests.get", return_value=answer) as get:
         result, _, _ = _deploy(
-            mock_project, root, "--check", "api/top", polls=[_app(1)]
+            mock_project,
+            root,
+            "--check",
+            "api/top",
+            polls=[_app(1)],
+            hopsworks=proxy_client,
         )
     assert result.exit_code == 1
     assert "api/top answered 500" in result.output
@@ -1171,11 +1216,17 @@ def _check(mock_project, tmp_path, answers, path="api/top"):
     proxy_client = mock.MagicMock(_verify=False)
     proxy_client._send_request.return_value = {"token": "jwt"}
     with (
-        mock.patch("hopsworks_common.client._get_instance", return_value=proxy_client),
         mock.patch("requests.get", side_effect=answers) as get,
         mock.patch("time.sleep"),
     ):
-        result, _, _ = _deploy(mock_project, root, "--check", path, polls=[_app(1)])
+        result, _, _ = _deploy(
+            mock_project,
+            root,
+            "--check",
+            path,
+            polls=[_app(1)],
+            hopsworks=proxy_client,
+        )
     return result, get
 
 
@@ -1220,17 +1271,27 @@ def test_deploy_check_fails_on_an_html_page_for_an_api_route(mock_project, tmp_p
     assert "answered an HTML page" in result.output
 
 
-def test_deploy_names_the_stuck_state_and_reason_on_timeout(
-    mock_project, tmp_path, unschedulable
+def test_deploy_names_the_scheduler_message_of_a_queued_app_on_timeout(
+    mock_project, tmp_path
 ):
     root = _app_dir(tmp_path)
-    pending = {"state": "INITIALIZING", "executionId": 4, "kubeMonitor": unschedulable}
+    queued = {**backend("app_queued"), "executionId": 4}
+    result, _, _ = _deploy(
+        mock_project, root, "--timeout", "30", existing=_app(3), polls=[queued] * 20
+    )
+    assert result.exit_code == 1
+    message = PENDING_REASON.removeprefix("FailedScheduling: ").rstrip(".")
+    assert f"App shop still QUEUED after 30 s: {message}. Read" in result.output
+
+
+def test_deploy_names_the_stuck_state_and_reason_on_timeout(mock_project, tmp_path):
+    root = _app_dir(tmp_path)
+    pending = {**backend("app_pending"), "executionId": 4}
     result, _, _ = _deploy(
         mock_project, root, "--timeout", "30", existing=_app(3), polls=[pending] * 20
     )
     assert result.exit_code == 1
     assert (
-        "App shop still INITIALIZING after 30 s: FailedScheduling: 0/5 nodes are "
-        "available: 3 Insufficient memory. Read `hops app logs shop`, or raise --timeout."
-        in result.output
+        f"App shop still INITIALIZING after 30 s: {PENDING_REASON.rstrip('.')}. "
+        "Read `hops app logs shop`, or raise --timeout." in result.output
     )

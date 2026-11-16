@@ -66,8 +66,8 @@ hops fg keyword add <name> <kw>           # Attach a keyword
 hops fg keyword remove <name> <kw>        # Remove a keyword
 hops fg lineage <name> [--version N]      # Upstream/downstream lineage
 hops fg delete <name> --version N --yes                  # Delete
-hops fg delete <name> --version N --force                # Delete even if feature views depend on it (leaves them in place)
-hops fg delete <name> --version N --delete-feature-views # Delete + also delete dependent feature views
+hops fg delete <name> --version N --force --yes          # Delete even if feature views depend on it (leaves them in place)
+hops fg delete <name> --version N --delete-feature-views --yes # Delete + also delete dependent feature views
 ```
 
 `lineage` shows parent feature groups, the storage connector, and the data
@@ -216,7 +216,7 @@ hops job logs <name> [--execution ID]
 hops job history <name>
 hops job schedule set <name> "0 0 * * * ?"              # Quartz 6-field cron
 hops job schedule info <name>
-hops job schedule delete <name>
+hops job schedule delete <name> --yes
 hops job delete <name> --yes
 ```
 

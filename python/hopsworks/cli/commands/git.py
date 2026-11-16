@@ -237,8 +237,9 @@ def set_cmd(
 @provider_group.command("delete")
 @click.option("--provider", default="github", show_default=True)
 @click.option("--host", help="Provider host (default: the provider's public host).")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
-def delete_cmd(ctx: click.Context, provider: str, host: str | None) -> None:
+def delete_cmd(ctx: click.Context, provider: str, host: str | None, yes: bool) -> None:
     """Remove a registered Git provider token.
 
     \f
@@ -246,12 +247,15 @@ def delete_cmd(ctx: click.Context, provider: str, host: str | None) -> None:
         ctx: Click context.
         provider: github, gitlab or bitbucket.
         host: Provider host, defaulting to the provider's public host.
+        yes: Skip confirmation when True.
     """
     label = canonical_provider(provider)
     host = (host or default_host(label)).strip()
     session.get_project(ctx)
     if not find_provider(label, host):
         raise click.ClickException(f"No {label} token registered for {host}.")
+    if not yes:
+        output.confirm(f"Remove the {label} token for {host}?")
     git_provider_api.GitProviderApi()._delete_provider(label, host)
     if output.JSON_MODE:
         output.print_json({"provider": label, "host": host, "deleted": True})
