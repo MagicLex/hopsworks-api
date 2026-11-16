@@ -1939,6 +1939,7 @@ class TestDeltaEngine:
             predicate="fg_1_source.id == fg_1_updates.id",
             source_alias="fg_1_updates",
             target_alias="fg_1_source",
+            commit_properties=None,
         )
         merge_builder.when_matched_update_all.assert_called_once()
         insert_builder = merge_builder.when_matched_update_all.return_value.when_not_matched_insert_all
@@ -4044,6 +4045,8 @@ def test_the_variable_value_is_a_positive_integer_or_ignored(value, interval):
     from hopsworks_common.core.variable_api import _parse_delta_checkpoint_interval
 
     assert _parse_delta_checkpoint_interval(value) == interval
+
+
 class TestWithTableTimestamps:
     """Spark timestamps take the Delta table's flavour, whatever the session zone."""
 
@@ -4124,3 +4127,114 @@ class TestWithTableTimestamps:
 
         assert _with_table_timestamps(source) is source
         assert _with_table_timestamps(source, source.schema) is source
+
+
+# --- writer fence --------------------------------------------------------------
+
+
+def _txn(location):
+    from deltalake import DeltaTable
+
+    return DeltaTable(location).transaction_version(DeltaEngine.WRITER_APP_ID)
+
+
+def _fenced_table(monkeypatch, tmp_path, checkpoint_interval=None):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch,
+        location,
+        [("id", "bigint"), ("v", "string")],
+        checkpoint_interval=checkpoint_interval,
+    )
+    from deltalake import write_deltalake
+
+    write_deltalake(
+        location,
+        pa.table({"id": pa.array([1, 2], pa.int64()), "v": ["a", "b"]}),
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+    engine._feature_group_api = SimpleNamespace(_commit=lambda fg, commit: commit)
+    return engine, location
+
+
+@pytest.mark.parametrize(
+    ("table_epoch", "epoch", "refused"),
+    [(None, 1, False), (3, 3, False), (3, 4, False), (4, 3, True)],
+)
+def test_a_writer_is_refused_only_below_the_table_epoch(table_epoch, epoch, refused):
+    from hsfs.core.delta_engine import writer_epoch_refusal
+
+    assert (writer_epoch_refusal(table_epoch, epoch) is not None) is refused
+
+
+def test_the_fence_commit_records_the_epoch_and_adds_no_rows(monkeypatch, tmp_path):
+    engine, location = _fenced_table(monkeypatch, tmp_path)
+    from deltalake import DeltaTable
+
+    engine._fence(5)
+
+    table = DeltaTable(location)
+    assert (table.version(), _txn(location)) == (1, 5)
+    assert table.to_pyarrow_table().num_rows == 2
+
+
+def test_fenced_upsert_append_and_delete_each_carry_the_epoch(monkeypatch, tmp_path):
+    engine, location = _fenced_table(monkeypatch, tmp_path)
+    from deltalake import DeltaTable
+
+    fenced = {"writer_epoch": 5}
+    engine._fence(5)
+    _write_one(engine, 3, write_options=fenced)
+    engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [4], "v": ["d"]}),
+        operation="insert",
+        write_options=fenced,
+    )
+    engine._delete_record(pd.DataFrame({"id": [1], "v": ["a"]}), fenced)
+
+    table = DeltaTable(location)
+    assert table.version() == 4
+    assert sorted(table.to_pyarrow_table()["id"].to_pylist()) == [2, 3, 4]
+    assert _txn(location) == 5
+
+
+def test_a_lower_writer_is_refused_and_the_table_is_unchanged(monkeypatch, tmp_path):
+    engine, location = _fenced_table(monkeypatch, tmp_path)
+    from deltalake import DeltaTable
+    from hsfs.core.delta_engine import StaleWriterError
+
+    engine._fence(5)
+    for attempt in (
+        lambda: engine._fence(4),
+        lambda: _write_one(engine, 9, write_options={"writer_epoch": 4}),
+        lambda: engine._delete_record(
+            pd.DataFrame({"id": [1], "v": ["a"]}), {"writer_epoch": 4}
+        ),
+    ):
+        with pytest.raises(StaleWriterError, match="epoch 5"):
+            attempt()
+
+    assert (DeltaTable(location).version(), _txn(location)) == (1, 5)
+
+
+def test_a_fenced_write_makes_no_table_property_commit(monkeypatch, tmp_path):
+    engine, location = _fenced_table(monkeypatch, tmp_path, checkpoint_interval=4)
+    from deltalake import DeltaTable
+
+    engine._fence(2)
+    _write_one(engine, 3, write_options={"writer_epoch": 2})
+    engine._delete_record(pd.DataFrame({"id": [3], "v": ["x"]}), {"writer_epoch": 2})
+
+    assert "delta.checkpointInterval" not in _config(location)
+    assert DeltaTable(location).version() == 3
+    assert not any(
+        c["operation"] == "SET TBLPROPERTIES" for c in DeltaTable(location).history()
+    )
+
+
+def test_an_unfenced_write_records_no_writer_epoch(monkeypatch, tmp_path):
+    engine, location = _fenced_table(monkeypatch, tmp_path)
+
+    _write_one(engine, 3)
+
+    assert _txn(location) is None

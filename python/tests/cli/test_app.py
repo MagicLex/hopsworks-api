@@ -849,6 +849,22 @@ def test_app_start_waits_for_its_new_execution(mock_project, clock):
     assert result.stdout.strip().splitlines()[-1] == "https://h/x"
 
 
+def test_app_start_json_stdout_is_only_the_payload(mock_project, clock):
+    apps = mock_project.get_app_api.return_value
+    a = _fake_app(state="KILLED")
+    a.execution_id = 8
+    apps.get_app.return_value = a
+    with _polls({"state": "KILLED", "executionId": 8}, _serving()):
+        result = CliRunner().invoke(cli, ["--json", "app", "start", "dash"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {
+        "name": "my_app",
+        "state": "RUNNING",
+        "serving": True,
+        "url": "https://h/x",
+    }
+
+
 def test_app_start_prints_the_url_on_the_clients_host(mock_project, clock):
     apps = mock_project.get_app_api.return_value
     a = _fake_app(state="KILLED")
