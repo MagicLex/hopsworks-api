@@ -600,3 +600,27 @@ def test_tracing_switched_off_in_the_form_asks_for_nothing():
 def test_a_tracing_answer_outside_its_range_is_refused(kind, tracing, message):
     with pytest.raises(click.BadParameter, match=message):
         build._tracing_record(tracing, kind)
+
+
+class _Wanted:
+    doc = {"inference": {"agent": {"llm": {"provider": "set"}}}}
+    requirements = {"data_sources": [{"kind": "synthetic"}], "sla": {"realtime": {}}}
+
+    def put(self, dotted, value, append=False):
+        pass
+
+    def save(self):
+        pass
+
+
+@pytest.mark.parametrize("step", [build._realtime, build._agent])
+def test_an_app_to_try_the_system_defaults_to_no(monkeypatch, step):
+    asked = []
+    monkeypatch.setattr(
+        build.output, "ask", lambda text, default: asked.append(default) or default
+    )
+    monkeypatch.setattr(build, "_data", lambda *a: None)
+    system = _Wanted()
+    system.requirements = {"data_sources": [], "sla": {"realtime": {}}}
+    step(None, system, None)
+    assert asked == [False]

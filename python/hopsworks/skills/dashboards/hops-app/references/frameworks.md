@@ -4,7 +4,7 @@ Part of **hops-app**: read when writing an app by hand, not from the `/hops app`
 
 ## Streamlit
 
-Stay Streamlit-native and root-based. Prefer seaborn over plotly for charts;
+Only when the user names Streamlit; otherwise an app is the skeleton's plain Python app. Stay Streamlit-native and root-based. Prefer seaborn over plotly for charts;
 plotly is not installed by default.
 
 ```python

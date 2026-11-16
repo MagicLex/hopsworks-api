@@ -22,7 +22,8 @@ Already known, no need to look again:
 - A next-step offer (Explore, Pieces step 6) always has these two options: **Build a data
   pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
   **Explore it in a notebook** (a notebook over the table). The other one or two options are what
-  the result points to: a dashboard or an app over it, a model, or the whole ML system.
+  the result points to: a dashboard over it, a model, or the whole ML system. An app only when
+  the user asked for one.
 - Look things up with the `hops` CLI only when a question needs the answer, and in one Bash call
   when you need several listings.
 - No secrets in arguments or output. Never delete anything the user has not confirmed by name.
@@ -76,8 +77,8 @@ list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>
 `hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT`. `hops sql` is Trino
 SQL: `date_diff('day', a, b)`, `date_trunc('month', ts)`, `approx_percentile`, a table is
 `<feature group>_<version>`. Summarise in a few lines and make the next-step offer (Rules) with
-`AskUserQuestion` (a data pipeline over it, a notebook over it, a dashboard, an app or an ML
-system over it), the one the user's words point to marked "(Recommended)".
+`AskUserQuestion` (a data pipeline over it, a notebook over it, a dashboard or an ML system over
+it), the one the user's words point to marked "(Recommended)".
 
 ## Pieces
 
@@ -121,11 +122,10 @@ is the whole dispatch:
    each with a `GROUP BY` and a `LIMIT`: a short table or a few lines per breakdown. Never a
    dashboard or an app unless the user asked for one by name.
 6. **Then** make the next-step offer (Rules) with `AskUserQuestion`: a data pipeline over the
-   result, a notebook over it, and the next piece, a dashboard or an app over it, or the whole ML
-   system. "(Recommended)" marks only a step the request named and this
+   result, a notebook over it, and the next piece, a dashboard over it, or the whole ML system. "(Recommended)" marks only a step the request named and this
    turn did not make; with the request done, no option is marked, so the turn ends on what was
    asked (an Auto mode answer takes a marked option at once).
-   A deployment, a schedule or an app the request did not name is offered unmarked.
+   A deployment or a schedule the request did not name is offered unmarked; an app is not offered.
 
 Ask only what the request leaves open, in one `AskUserQuestion` call.
 

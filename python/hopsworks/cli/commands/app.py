@@ -256,7 +256,7 @@ def _report_running(name: str, a: Any) -> None:
     type=click.Choice(
         ["STREAMLIT", "FLASK", "GRADIO", "NODEJS", "CUSTOM"], case_sensitive=False
     ),
-    default="STREAMLIT",
+    default="CUSTOM",
     show_default=True,
     help="App type to create.",
 )

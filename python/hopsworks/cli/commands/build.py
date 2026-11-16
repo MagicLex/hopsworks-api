@@ -705,7 +705,7 @@ def _realtime(ctx: click.Context, system: _System, prefetch: _Prefetch) -> None:
         _data(ctx, system, prefetch)
     if "app" not in system.doc:
         wanted = output.ask(
-            click.style("Build an app to try the deployment?", bold=True), default=True
+            click.style("Build an app to try the deployment?", bold=True), default=False
         )
         system.put("requirements.consumers", "api")
         system.put(
@@ -743,7 +743,7 @@ def _agent(ctx: click.Context, system: _System, prefetch: _Prefetch) -> None:
     if not system.requirements.get("data_sources"):
         _data(ctx, system, prefetch)
         wanted = output.ask(
-            click.style("Build an app to try the agent?", bold=True), default=True
+            click.style("Build an app to try the agent?", bold=True), default=False
         )
         system.put(
             "app",
