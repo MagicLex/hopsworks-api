@@ -62,15 +62,23 @@ class TestAppApiCreate:
         assert body["appKind"] == "STREAMLIT"
         assert body["appPath"] == "hdfs:///Projects/demo/Resources/app.py"
         assert body["environmentName"] == "python-app-pipeline"
-        assert body["resourceConfig"] == {
-            "memory": 2048,
-            "cores": 1.0,
-            "gpus": 0,
-            "shmSize": 128,
-        }
+        assert body["resourceConfig"] == {"gpus": 0, "shmSize": 128}
         assert "entrypointCommand" not in body
         assert "appPort" not in body
         assert "description" not in body
+
+    def test_create_app_sends_explicit_memory_and_cores(self, mock_client, api):
+        api.create_app(
+            "my_app", app_path="hdfs:///Projects/demo/app.py", memory=4096, cores=2.0
+        )
+
+        body = json.loads(mock_client._send_request.call_args.kwargs["data"])
+        assert body["resourceConfig"] == {
+            "memory": 4096,
+            "cores": 2.0,
+            "gpus": 0,
+            "shmSize": 128,
+        }
 
     def test_create_streamlit_app_requires_path(self, mock_client, api):
         with pytest.raises(ValueError, match="app_path is required"):
