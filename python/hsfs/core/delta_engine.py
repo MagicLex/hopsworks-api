@@ -1015,17 +1015,16 @@ class DeltaEngine:
                 )
             if append_requested:
                 deltars_write(
-                    location,
+                    fg_source_table,
                     dataset,
                     mode=self.APPEND,
-                    storage_options=storage_options or None,
                     commit_properties=commit_properties,
                 )
                 _logger.debug(
                     f"Explicit append mode requested for {location}. Skipping merge operation."
                 )
                 return self._get_last_commit_metadata(
-                    self._spark_session, location, storage_options=storage_options
+                    self._spark_session, location, delta_rs_table=fg_source_table
                 )
             # Optimisation: if the feature group is partitioned and none of the
             # incoming partition values already exist in the table, a plain append
@@ -1033,12 +1032,7 @@ class DeltaEngine:
             # existing partition data into memory for the join.
             use_append = self._can_use_append(fg_source_table, dataset)
             if use_append:
-                deltars_write(
-                    location,
-                    dataset,
-                    mode="append",
-                    storage_options=storage_options or None,
-                )
+                deltars_write(fg_source_table, dataset, mode="append")
             else:
                 source_alias = (
                     f"{self._feature_group.name}_{self._feature_group.version}_source"
@@ -1075,7 +1069,10 @@ class DeltaEngine:
             f"Executed delta-rs write. Retrieving commit metadata for Delta table at {location}"
         )
         return self._get_last_commit_metadata(
-            self._spark_session, location, storage_options=storage_options
+            self._spark_session,
+            location,
+            storage_options=storage_options,
+            delta_rs_table=fg_source_table if is_delta_table else None,
         )
 
     @staticmethod
@@ -1845,11 +1842,17 @@ class DeltaEngine:
 
     @staticmethod
     def _get_last_commit_metadata(
-        spark_context, base_path, storage_options: dict | None = None
+        spark_context,
+        base_path,
+        storage_options: dict | None = None,
+        delta_rs_table=None,
     ):
         """Retrieve oldest and last data-changing commits (MERGE/WRITE) from a Delta table.
 
-        Uses shared filtering logic for both Spark and delta-rs.
+        Uses shared filtering logic for both Spark and delta-rs. A delta-rs
+        `delta_rs_table` the caller just wrote through is read for the new commit
+        only, without opening the table again; its `last_active_commit_time` is
+        None unless that commit is a checkpoint version.
         """
         data_ops = ["MERGE", "WRITE"]
         _logger.debug(f"Retrieving last commit metadata for Delta table at {base_path}")
@@ -1934,10 +1937,40 @@ class DeltaEngine:
                     "Install 'hops-deltalake' to enable Delta RS features."
                 ) from e
             # delta-rs DeltaTable (returns list[dict])
-            fg_source_table = DeltaRsTable(
+            if delta_rs_table is not None:
+                # The write already advanced this object to its own commit. Another
+                # writer may have landed on top since, so the entry is picked by
+                # the write's version from a bounded range.
+                write_version = delta_rs_table.version()
+                history_records = delta_rs_table.history(limit=1)
+                if history_records and (
+                    history_records[0]["version"] != write_version
+                    or history_records[0].get("operation") not in data_ops
+                ):
+                    head_version = history_records[0]["version"]
+                    history_records = delta_rs_table.history(
+                        limit=head_version - write_version + 1
+                    )
+                own_commit = next(
+                    (
+                        r
+                        for r in history_records
+                        if r["version"] == write_version
+                        and r.get("operation") in data_ops
+                    ),
+                    None,
+                )
+                if own_commit is None:
+                    return None
+                return DeltaEngine._get_delta_feature_group_commit(
+                    own_commit,
+                    DeltaEngine._oldest_commit_on_checkpoint(
+                        delta_rs_table, write_version
+                    ),
+                )
+            history_records = DeltaRsTable(
                 base_path, storage_options=storage_options or {}
-            )
-            history_records = fg_source_table.history()
+            ).history()
             _logger.debug(f"history_records for {base_path}: {history_records}")
 
         if not history_records:
@@ -1962,6 +1995,43 @@ class DeltaEngine:
         return DeltaEngine._get_delta_feature_group_commit(last_commit, oldest_commit)
 
     @staticmethod
+    def _oldest_commit_on_checkpoint(table, version):
+        """Return the oldest readable commit when `version` wrote a checkpoint, else None.
+
+        delta-rs removes expired log files only while writing a checkpoint, which
+        it does when `version + 1` is a multiple of `delta.checkpointInterval`
+        (default 100). Between checkpoints the oldest commit does not change.
+        """
+        import json  # noqa: PLC0415
+
+        from deltalake.fs import DeltaStorageHandler  # noqa: PLC0415
+        from pyarrow.fs import FileSelector  # noqa: PLC0415
+
+        interval = int(
+            table.metadata().configuration.get("delta.checkpointInterval", 100)
+        )
+        if (version + 1) % interval != 0:
+            return None
+        handler = DeltaStorageHandler.from_table(table._table)
+        commit_files = {}
+        for info in handler.get_file_info_selector(FileSelector("_delta_log")):
+            name = info.path.rsplit("/", 1)[-1]
+            stem, _, ext = name.partition(".")
+            if ext == "json" and stem.isdigit():
+                commit_files[int(stem)] = info.path
+        oldest_version = min(commit_files)
+        for line in (
+            handler.open_input_file(commit_files[oldest_version]).read().splitlines()
+        ):
+            commit_info = json.loads(line).get("commitInfo")
+            if commit_info is not None:
+                return {
+                    "version": oldest_version,
+                    "timestamp": commit_info["timestamp"],
+                }
+        return None
+
+    @staticmethod
     def _get_delta_feature_group_commit(last_commit, oldest_commit):
         _logger.debug(f"Extract info about the latest commit {last_commit}")
         operation = last_commit["operation"]
@@ -1972,8 +2042,10 @@ class DeltaEngine:
         operation_metrics = last_commit["operationMetrics"]
 
         # Extract info about the oldest remaining commit
-        oldest_commit_timestamp = util._convert_event_time_to_timestamp(
-            oldest_commit["timestamp"]
+        oldest_commit_timestamp = (
+            util._convert_event_time_to_timestamp(oldest_commit["timestamp"])
+            if oldest_commit is not None
+            else None
         )
 
         # Default all to zero
