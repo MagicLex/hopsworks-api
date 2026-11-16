@@ -96,7 +96,11 @@ def test_certificates_live_in_folders_the_cache_owns(cache_dir):
 
 
 def _response(status, body=None):
-    response = mock.Mock(status_code=status, content=b"{}")
+    response = mock.Mock(
+        status_code=status,
+        content=b"{}",
+        headers={"Content-Type": "application/json"},
+    )
     response.json.return_value = body or {}
     return response
 
