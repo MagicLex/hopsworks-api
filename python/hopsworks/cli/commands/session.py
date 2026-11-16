@@ -1520,13 +1520,13 @@ def reset(ctx: click.Context, yes: bool) -> None:
         output.info("Nothing to reset: no git sync choice remembered, no key staged.")
         return
 
-    if not yes and not output.JSON_MODE:
+    if not yes:
         what = []
         if remembered:
             what.append("the remembered git sync choice")
         if staged:
             what.append(f"{len(staged)} staged key file(s): {', '.join(staged)}")
-        click.confirm(f"Forget {' and '.join(what)}?", abort=True)
+        output.confirm(f"Forget {' and '.join(what)}?")
 
     removed = git_sync.unstage_keys(dataset_api, user_root, staged)
     forgot = git_sync.forget_prefs()

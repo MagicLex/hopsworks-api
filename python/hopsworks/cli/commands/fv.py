@@ -652,11 +652,8 @@ def fv_delete(
     """
     fv = _get_fv(ctx, name, version, exact=True)
 
-    if not yes and not output.JSON_MODE:
-        click.confirm(
-            f"Delete feature view '{name}' v{getattr(fv, 'version', '?')}?",
-            abort=True,
-        )
+    if not yes:
+        output.confirm(f"Delete feature view '{name}' v{getattr(fv, 'version', '?')}?")
     try:
         fv.delete(force=force) if force else fv.delete()
     except Exception as exc:  # noqa: BLE001
