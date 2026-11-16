@@ -332,7 +332,8 @@ with its metrics, `description=`, `run.json` and the charts in `images/`, and th
 registered. In a kernel, leave the matplotlib backend as it is (no `matplotlib.use("Agg")`, which
 blanks every later chart of the notebook) and close each chart after saving it. Data the
 notebook made itself, in no feature group, registers without
-`feature_view=` and `training_dataset_version=`, and its `run.json` leaves the version out.
+`feature_view=` and `training_dataset_version=`, and its `run.json` leaves the version out. A model to deploy
+needs both: put that data in a feature group and a view of it first.
 Check it from outside the kernel: `hops model runs <name>` (one row per run) and
 `hops model info <name>` (its `Images`). Then offer once per notebook, with no option marked
 "(Recommended)", to promote the training into a pipeline: the data in a feature group, a feature
