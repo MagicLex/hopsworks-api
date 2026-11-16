@@ -151,7 +151,10 @@ def test_env_install_into_a_shared_environment_clones_your_own_copy(mock_project
 
     assert result.exit_code == 0, result.output
     envs.api.create_environment.assert_called_once_with(
-        "fraud-app-env-scott", source_environment_name="fraud", await_creation=False
+        "fraud-app-env-scott",
+        source_environment_name="fraud",
+        created_for_app=None,
+        await_creation=False,
     )
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once_with(
         "Users/scott/r.txt", await_installation=True
@@ -279,7 +282,10 @@ def test_env_install_clones_again_over_a_copy_whose_build_failed(mock_project):
     broken.delete.assert_called_once()
     broken.install_requirements.assert_not_called()
     envs.api.create_environment.assert_called_once_with(
-        "fraud-app-env-scott", source_environment_name="fraud", await_creation=False
+        "fraud-app-env-scott",
+        source_environment_name="fraud",
+        created_for_app=None,
+        await_creation=False,
     )
     envs.envs["fraud-app-env-scott"].install_requirements.assert_called_once()
 
@@ -462,7 +468,10 @@ def test_env_info_lists_the_libraries_with_their_versions(mock_project):
     assert "xgboost" in result.output and "2.1.0" in result.output
 
     result = CliRunner().invoke(cli, ["--json", "env", "info", "my_env"])
-    assert json.loads(result.output)["libraries"] == {"xgboost": "2.1.0", "pandas": "2.2.3"}
+    assert json.loads(result.output)["libraries"] == {
+        "xgboost": "2.1.0",
+        "pandas": "2.2.3",
+    }
 
 
 def test_env_info_tells_a_missing_environment_from_a_failed_read(mock_project):
