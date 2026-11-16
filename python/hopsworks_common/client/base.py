@@ -28,14 +28,8 @@ import time
 import furl
 import requests
 import urllib3
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    load_der_private_key,
-)
 from hopsworks_apigen import also_available_as
-from hopsworks_common.client import auth, exceptions
+from hopsworks_common.client import auth, exceptions, session_cache
 from hopsworks_common.constants import _temp_dir
 from hopsworks_common.decorators import _connected
 
@@ -191,12 +185,32 @@ class Client:
         rate_limited = False
         while True:
             prepped = self._session.prepare_request(request)
-            response = self._session.send(
-                prepped,
-                verify=self._verify,
-                stream=stream,
-                timeout=self._deadline_timeout(timeout, deadline),
-            )
+            try:
+                response = self._session.send(
+                    prepped,
+                    verify=self._verify,
+                    stream=stream,
+                    timeout=self._deadline_timeout(timeout, deadline),
+                )
+            except requests.exceptions.SSLError:
+                if not session_cache.used():
+                    raise
+                response = None
+            if session_cache.used() and _session_went_stale(response):
+                # A session an earlier process cached is refused: log in again and repeat the call once.
+                # Refused this way the server did nothing, so a write repeats safely.
+                return self._send_request(
+                    method,
+                    self._refresh_session(path_params),
+                    query_params=query_params,
+                    headers=headers,
+                    data=data,
+                    stream=stream,
+                    files=files,
+                    with_base_path_params=with_base_path_params,
+                    timeout=timeout,
+                    deadline=deadline,
+                )
 
             if response.status_code == 401 and self.REST_ENDPOINT in os.environ:
                 # refresh token and retry request - only on hopsworks
@@ -577,6 +591,13 @@ class Client:
 
     def _write_client_key(self, ks_keys, client_key_path):
         """Writes client private key PEM from keystore."""
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            NoEncryption,
+            PrivateFormat,
+            load_der_private_key,
+        )
+
         client_key = ""
         for key_der, _ in ks_keys:
             key = load_der_private_key(key_der, password=None)
@@ -585,3 +606,21 @@ class Client:
             ).decode()
 
         self._replace_file(client_key_path, client_key)
+
+
+# Error codes that name the project itself: a cached project id the server no longer knows.
+_PROJECT_NOT_FOUND = 150004
+
+
+def _session_went_stale(response) -> bool:
+    """Whether a refusal means the cached session is stale: an unknown key, a lost project, a rejected certificate."""
+    if response is None:
+        return True
+    if response.status_code == 401:
+        return True
+    if response.status_code in (403, 404):
+        try:
+            return response.json().get("errorCode") == _PROJECT_NOT_FOUND
+        except ValueError:
+            return False
+    return False
