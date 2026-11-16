@@ -111,17 +111,49 @@ def _stringify(value: Any) -> str:
 
 
 _MISSING_TABLE = re.compile(r"Table '(?:[^.']+\.)*([^.']+)' does not exist")
+_DIGIT_IDENTIFIER = "identifiers must not start with a digit"
 
 
-def _table_hint(exc: Exception) -> str:
-    """Name the versioned table a missing feature group name most likely meant."""
-    if getattr(exc, "error_name", None) != "TABLE_NOT_FOUND":
+def _table_hint(ctx: click.Context, exc: Exception, schema: str | None) -> str:
+    """Name the table a failed query most likely meant."""
+    name = getattr(exc, "error_name", None)
+    if name == "SYNTAX_ERROR" and _DIGIT_IDENTIFIER in str(exc):
+        return (
+            ". A feature store name that starts with a digit goes in double quotes: "
+            '"<store>".<name>_<version>.'
+        )
+    if name != "TABLE_NOT_FOUND":
         return ""
     match = _MISSING_TABLE.search(str(exc))
-    if not match or re.search(r"_\d+$", match.group(1)):
+    if not match:
         return ""
-    name = match.group(1)
-    return f". A feature group is the table <name>_<version>, such as {name}_1."
+    table = match.group(1)
+    versioned = re.fullmatch(r"(.+)_(\d+)", table)
+    if not versioned:
+        return f". A feature group is the table <name>_<version>, such as {table}_1."
+    if schema is not None:
+        return ""
+    store = _shared_store_of(ctx, versioned.group(1), int(versioned.group(2)))
+    if store is None:
+        return ""
+    return (
+        f". {table} is in the shared feature store {store}: write "
+        f'"{store}".{table}, or pass --schema {store}.'
+    )
+
+
+def _shared_store_of(ctx: click.Context, name: str, version: int) -> str | None:
+    """The first feature store shared with the project that holds this group."""
+    own = _featurestore_schema(ctx)
+    for fs in session.get_accessible_feature_stores(ctx):
+        if fs.name == own:
+            continue
+        try:
+            if fs.get_feature_group(name, version=version) is not None:
+                return fs.name
+        except Exception:  # noqa: BLE001, S112 - not in this store, try the next
+            continue
+    return None
 
 
 def _execute(
@@ -142,7 +174,7 @@ def _execute(
             cur.execute(sql)
         except Exception as exc:  # noqa: BLE001 - the driver raises a mix of types
             raise click.ClickException(
-                f"Could not run the query: {exc}{_table_hint(exc)}"
+                f"Could not run the query: {exc}{_table_hint(ctx, exc, schema)}"
             ) from exc
         if cur.description is None:
             # Statement that returned no rowset (e.g. CREATE/INSERT). Most users
@@ -228,7 +260,9 @@ def trino_query(
 
     The dialect is Trino's: `date_diff('day', a, b)`, `date_trunc('month', ts)`,
     `approx_percentile(x, 0.5)`. A feature group is the table `<name>_<version>` in
-    the feature store's schema, the default.
+    the feature store's schema, the project's own store by default. A group of a
+    store shared with the project is `"<store>".<name>_<version>`, or pass
+    `--schema <store>`; `hops fg info` names the table.
 
     \f
     Args:
