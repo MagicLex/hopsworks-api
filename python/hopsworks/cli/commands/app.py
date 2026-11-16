@@ -585,7 +585,8 @@ _POLL_SECONDS = 3.0
     "--check",
     "check_path",
     default=None,
-    help="A route to fetch through the Hopsworks proxy once the app serves (api/top); a non-2xx answer fails the deploy.",
+    help="A route to fetch through the Hopsworks proxy once the app serves (api/top); a non-2xx answer, "
+    "or an HTML page for an api/ route, fails the deploy. A 502 or 503 is asked again for up to 60 seconds.",
 )
 @click.option(
     "--description",
@@ -765,28 +766,44 @@ def app_deploy(
         click.echo(url)
 
 
+# A 502 or 503 from a fresh app is usually the model deployment behind it still
+# starting: boot time, not a failure. The check asks again for this long.
+_CHECK_BOOT_SECONDS = 60
+_CHECK_RETRY_SECONDS = 5
+
+
 def _check_route(project: Any, name: str, url: str | None, path: str) -> None:
     """GET `path` of the deployed app through the proxy, as a browser would.
 
     The proxy wants a session, not an API key: an app proxy token minted with the
-    key stands in for it, as the Hopsworks UI and Hopsable's previews do.
+    key stands in for it, as the Hopsworks UI and Hopsable's previews do. A 502
+    or 503 is asked again for up to `_CHECK_BOOT_SECONDS`, then fails with the
+    last answer. An `api/` route answered with an HTML page fails too: that is
+    the proxy or the Hopsworks UI answering, not the app.
     """
+    import time
+
     import requests
     from hopsworks_common import client
 
     if not url:
         raise click.ClickException(f"Could not check app '{name}': it has no URL.")
     _client = client._get_instance()
+    deadline = time.monotonic() + _CHECK_BOOT_SECONDS
     try:
         token = _client._send_request(
             "POST", ["project", project.id, "apps", name, "proxy-token"]
         )["token"]
-        answer = requests.get(
-            url.rstrip("/") + "/" + path.lstrip("/"),
-            cookies={"proxy_session": token},
-            verify=_client._verify,
-            timeout=60,
-        )
+        while True:
+            answer = requests.get(
+                url.rstrip("/") + "/" + path.lstrip("/"),
+                cookies={"proxy_session": token},
+                verify=_client._verify,
+                timeout=60,
+            )
+            if answer.status_code not in (502, 503) or time.monotonic() >= deadline:
+                break
+            time.sleep(_CHECK_RETRY_SECONDS)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not check app '{name}' at {path}: {exc}"
@@ -795,6 +812,14 @@ def _check_route(project: Any, name: str, url: str | None, path: str) -> None:
         raise click.ClickException(
             f"Could not check app '{name}': {path} answered {answer.status_code}: "
             f"{answer.text[:300]}. Read `hops app logs {name}`."
+        )
+    if "api/" in path and answer.headers.get("content-type", "").startswith(
+        "text/html"
+    ):
+        raise click.ClickException(
+            f"Could not check app '{name}': {path} answered an HTML page, not the "
+            'app\'s data. The page must fetch relative URLs (`fetch("api/top")`), '
+            "never `/api/...`."
         )
     output.success("✓ %s answered %s", path, answer.status_code)
 
