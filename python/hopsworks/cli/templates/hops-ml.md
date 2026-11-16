@@ -16,6 +16,7 @@ Already known, no need to look again:
 - Feature groups: !`hops fg list 2>&1 | head -40`
 - Data sources: !`hops datasource list 2>&1 | head -20`
 - Repository: !`git remote get-url origin 2>/dev/null || echo "not a git repository with an origin"`
+- `<hops-reqs>` below, the directory of the hops-reqs skill: !`dirname "$(hops skills info hops-reqs | sed -n '2s/^# //p')"`
 
 ## How to ask and record
 
@@ -58,7 +59,7 @@ predicts a number for coming periods (demand next week). A problem that fits non
 first as options before creating it. `set.py` rejects any other value.
 
 ```bash
-python <hops-reqs>/references/new_system.py <slug>      # <hops-reqs>: the directory of the path `hops skills info hops-reqs` prints
+python <hops-reqs>/references/new_system.py <slug>      # <hops-reqs>: the directory listed above
 python <slug>/set.py 'schema_version=1' 'system.name=<short title>' 'system.slug=<slug>' \
   'system.target={cluster: <Host>, project: <Project>, stage: development}' 'system.version=0.1.0' 'system.status=draft' \
   'requirements.status=pending' 'requirements.description=<the problem in the user words>' \
@@ -82,8 +83,9 @@ independent.
 
 ### Batch
 
-- **How often are predictions made, or the dashboard updated?** Hourly, daily (recommended for
-  most), weekly, or the user's own. Record `requirements.sla.batch.cadence`.
+- **How often are predictions made, or the dashboard updated?** Hourly, daily, weekly, or the
+  user's own, none marked "(Recommended)": a schedule holds cluster resources, so the user picks
+  it. Record `requirements.sla.batch.cadence`.
 - **Data.** See *Data sources* below.
 - **How are the predictions used?** A dashboard (recommended for a list people read), an app, or
   neither (another system reads the prediction feature group); ask the user to describe how they
@@ -125,8 +127,8 @@ source**, **upload files**, or **generate synthetic data** (when there is no dat
 
 - existing feature group: `{name, kind: feature_group, version, status: present}`;
 - an existing feature view or model (one `/hops` built on its own): not a data source. Name it in
-  the problem, `requirements.description+=' Starts from feature view <name>:<version>.'` (or
-  model), and record the feature groups it reads as sources; `/hops-build` records it in its
+  the problem, `requirements.description='<the problem> Starts from feature view <name>:<version>.'`
+  (or model), and record the feature groups it reads as sources; `/hops-build` records it in its
   phase's block and skips that phase;
 - file: ask the path; put it in `Resources/<slug>/data/` as the **hops** skill's *Project files* rule (in a Hopsable sandbox, `$HOPS_TEMPLATES/SKILL.md`) says
   (a copy in the mount, else `hops files upload <path> Resources/<slug>/data/`); record
@@ -188,7 +190,8 @@ GitHub login, keeping the code in Hopsworks only. Record
 ## Finish
 
 Print the requirements recorded so far (`python <slug>/status.py` for the table, then the
-`requirements` block in a few lines), and end with exactly one line:
+`requirements` block in a few lines). Leave `requirements.status` at `pending`: `/hops-build`
+completes the specification and writes `met`. End with exactly one line:
 
 > Interview recorded in `<slug>/system.yaml`. Run `/hops-build` to complete the specification
 > (target, features, budget) and build the system on a stronger model.
