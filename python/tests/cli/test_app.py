@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from unittest import mock
 
 import pytest
 from click.testing import CliRunner
+from hopsworks.cli.commands import app as app_commands
 from hopsworks.cli.main import cli
 
 from tests.cli.conftest import (
     PENDING_REASON,
+    Clock,
     Environments,
     backend,
     environment_refused,
@@ -20,6 +23,15 @@ from tests.cli.conftest import (
 @pytest.fixture(autouse=True)
 def _fast_waits(clock):
     """Every wait here runs on the fake clock."""
+
+
+@pytest.fixture(autouse=True)
+def _own_lock_dir(tmp_path, monkeypatch):
+    """Each test's app environment locks in its own directory."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "locks"))
+    (tmp_path / "locks").mkdir()
 
 
 def _fake_app(**overrides):
@@ -1030,6 +1042,7 @@ def _deploy(
     hopsworks=None,
     user="scott",
     hopsfs=None,
+    command="deploy",
 ):
     """Run `hops app deploy shop <root>` against fakes.
 
@@ -1076,7 +1089,7 @@ def _deploy(
     argv = [
         *(["--json"] if json_mode else []),
         "app",
-        "deploy",
+        command,
         "shop",
         str(root),
         *args,
@@ -1599,3 +1612,183 @@ def test_app_create_defaults_to_a_custom_app(mock_project):
     )
     assert result.exit_code == 0, result.output
     assert apps.create_app.call_args.kwargs["app_kind"] == "CUSTOM"
+
+
+# --- prepare-env -------------------------------------------------------------
+
+
+def _prepare(mock_project, root, **kwargs):
+    return _deploy(mock_project, root, command="prepare-env", **kwargs)
+
+
+@contextlib.contextmanager
+def _env_held(release_after=None):
+    """Another run holds shop's environment lock; the CLI's clock releases it after `release_after` s."""
+    import fcntl
+    import os
+    import tempfile
+
+    path = os.path.join(tempfile.gettempdir(), "hops-app-env-demo-shop.lock")
+    with open(path, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        clock = Clock()
+        sleep = clock.sleep
+
+        def tick(seconds):
+            sleep(seconds)
+            if release_after is not None and clock.now >= release_after:
+                fcntl.flock(held, fcntl.LOCK_UN)
+
+        clock.sleep = tick
+        with mock.patch.object(app_commands, "time", clock):
+            yield
+
+
+def test_prepare_env_without_requirements_clones_nothing(mock_project, tmp_path):
+    root = _app_dir(tmp_path)
+    envs = Environments(mock_project)
+    result, _, dataset_api = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    assert "has no app-requirements.txt: nothing to prepare" in result.output
+    assert "ended after" in result.output
+    envs.api.create_environment.assert_not_called()
+    dataset_api.upload.assert_not_called()
+
+
+def test_prepare_env_clones_and_installs_and_the_deploy_skips_the_install(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project)
+    result, apps, dataset_api = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "shop-app-env",
+        base_environment_name="python-agent-pipeline",
+        await_creation=True,
+    )
+    envs.envs["shop-app-env"].install_requirements.assert_called_once_with(
+        "/Projects/demo/Users/scott/apps/shop/app-requirements.txt",
+        await_installation=True,
+    )
+    assert dataset_api.records == ["shop-app-env\npolars==1.0\n"]
+    apps.create_app.assert_not_called()
+
+    result, apps, _ = _deploy(
+        mock_project,
+        root,
+        polls=[_app(1, env="shop-app-env")],
+        hopsfs=dataset_api.hopsfs,
+    )
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once()
+    envs.envs["shop-app-env"].install_requirements.assert_called_once()
+    assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env"
+
+
+def test_prepare_env_installs_into_your_copy_of_a_shared_environment(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+    result, _, dataset_api = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "shop-app-env-scott",
+        source_environment_name="shop-app-env",
+        await_creation=False,
+    )
+    copy = envs.envs["shop-app-env-scott"]
+    copy.install_requirements.assert_called_once()
+    assert dataset_api.records == ["shop-app-env-scott\npolars==1.0\n"]
+
+    result, apps, _ = _deploy(
+        mock_project,
+        root,
+        polls=[_app(1, env="shop-app-env-scott")],
+        hopsfs=dataset_api.hopsfs,
+    )
+    assert result.exit_code == 0, result.output
+    copy.install_requirements.assert_called_once()
+    assert envs.envs["shop-app-env"].install_requirements.call_count == 1
+    assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env-scott"
+
+
+def test_prepare_env_failure_only_logs(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    env_api = mock_project.get_environment_api.return_value
+    env_api.get_environment.side_effect = RuntimeError("boom")
+    result, _, dataset_api = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    assert "Could not prepare the environment of app shop" in result.output
+    assert "boom" in result.output
+    assert "ended after" in result.output
+    assert dataset_api.records == []
+
+
+def test_a_second_prepare_env_steps_aside(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    envs = Environments(mock_project)
+    with _env_held():
+        result, _, dataset_api = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    assert "Another prepare-env or deploy of shop holds its environment" in (
+        result.output
+    )
+    envs.api.create_environment.assert_not_called()
+    dataset_api.upload.assert_not_called()
+
+
+def test_deploy_waits_for_a_running_prepare_env(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project)
+    with _env_held(release_after=30):
+        result, apps, _ = _deploy(
+            mock_project, root, polls=[_app(1, env="shop-app-env")]
+        )
+    assert result.exit_code == 0, result.output
+    assert "Waited 30 s for the environment of app shop" in result.output
+    envs.envs["shop-app-env"].install_requirements.assert_called_once()
+    assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env"
+
+
+def test_deploy_fails_after_600_s_beside_a_running_prepare_env(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    envs = Environments(mock_project)
+    with _env_held():
+        result, apps, dataset_api = _deploy(mock_project, root)
+    assert result.exit_code == 1
+    assert "still holds its environment after 600 s: run this deploy again" in (
+        result.output
+    )
+    dataset_api.upload.assert_not_called()
+    envs.api.create_environment.assert_not_called()
+    apps.create_app.assert_not_called()
+
+
+def test_app_delete_waits_for_a_running_prepare_env(mock_project):
+    with _env_held(release_after=30):
+        result, a, envs = _delete_as_scott(
+            mock_project, "shop-app-env-scott", "shop-app-env-scott"
+        )
+    assert result.exit_code == 0, result.output
+    assert "Waited 30 s for the environment of app shop" in result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_called_once()
+
+
+def test_app_delete_fails_after_600_s_beside_a_running_prepare_env(mock_project):
+    with _env_held():
+        result, a, envs = _delete_as_scott(
+            mock_project, "shop-app-env-scott", "shop-app-env-scott"
+        )
+    assert result.exit_code == 1
+    assert "still holds its environment after 600 s: run this delete again" in (
+        result.output
+    )
+    a.delete.assert_not_called()
+    envs.envs["shop-app-env-scott"].delete.assert_not_called()
