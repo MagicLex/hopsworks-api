@@ -166,7 +166,7 @@ import hopsworks
 project = hopsworks.login()
 api = project.get_superset_api()
 
-project_name = project.name.lower()                # e.g. "af"
+project_name = getattr(project, "backing_name", project.name).lower()  # e.g. "af"
 fg_name, fg_version = "customers", 1
 
 trino_db_id = find_trino_db_id(api)                # or a cached int

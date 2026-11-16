@@ -38,7 +38,10 @@ def test_the_rule_trusts_only_a_mount_of_this_project_that_is_up():
     rule = project_files(read("SKILL.md"))
     assert "cat /run/hopsfs/status.json" in rule
     assert '"state": "mounted"' in rule
-    assert '"mountpoint": "/Projects/$HOPSWORKS_PROJECT"' in rule
+    assert (
+        '"mountpoint": "/Projects/${HOPSWORKS_PROJECT_BACKING_NAME:-$HOPSWORKS_PROJECT}"'
+        in rule
+    )
     assert (
         "Any other state, no such file, or another mountpoint: use `hops files`" in rule
     )

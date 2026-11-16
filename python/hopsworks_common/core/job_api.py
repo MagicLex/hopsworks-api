@@ -80,7 +80,7 @@ class JobApi:
         """
         _client = client._get_instance()
 
-        config = util._validate_job_conf(config, _client._project_name)
+        config = util._validate_job_conf(config, _client._project_backing_name)
 
         path_params = ["project", _client._project_id, "jobs", name]
 
@@ -217,7 +217,7 @@ class JobApi:
         """
         _client = client._get_instance()
 
-        config = util._validate_job_conf(config, _client._project_name)
+        config = util._validate_job_conf(config, _client._project_backing_name)
 
         path_params = ["project", _client._project_id, "jobs", name]
 
