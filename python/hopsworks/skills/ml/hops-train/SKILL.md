@@ -146,6 +146,12 @@ Hints:
   automatically to the returned frames, using statistics stored with the
   training dataset. The same MDTs run at inference time, so training and
   serving stay equivalent (no training/serving skew).
+- Inputs are every column of the view's groups but the keys, the event time and the label: build
+  the view with `--except <key>,<event time>` (or `select_except`), never a `select([...])` of a
+  few columns picked by hand. A text (categorical) column goes in one-hot: a `ColumnTransformer`
+  in the `Pipeline` (numeric scaled, text `OneHotEncoder(handle_unknown="ignore")`), never left
+  out because it is text. A column left out (a leak, a constant, an identifier) is named with why
+  in the `description=`.
 - Drop target-leaking columns: any value not known at prediction time.
   Post-outcome signals (counts, views, reactions on the thing you predict) and
   source-internal aggregates leak the label, and the store will not stop you.
