@@ -39,7 +39,7 @@ When a system is listed above, read its `system.yaml`. With `requirements.status
 interview is over: reply with one line, run `/hops-build`, and stop. Otherwise continue from the
 first question below whose answer is not yet recorded.
 
-**Defaults, not questions.** Ask only what the request leaves open and no default below covers, and record each default in `decisions` with `by: claude`: system type batch (unless the problem needs real time); cadence daily; the data the request names (synthetic: batch tables, the story written from the problem); predictions used through the API (`consumers=api`, `app={wanted: false, status: skipped}`); code kept in Hopsworks (`system.repo` url `local`) unless the repository line shows an origin or `gh auth status` is logged in. Then ask one question: proceed with these, listing them in a line each, with no option marked "(Recommended)": the daily schedule holds cluster resources, so the user picks it here.
+**Defaults, not questions.** Ask only what the request leaves open and no default below covers, and record each default in `decisions` with `by: claude`: system type batch (unless the problem needs real time); cadence daily; the data the request names (synthetic: batch tables, the story written from the problem); predictions used through the API (`consumers=api`, `app={wanted: false, status: skipped}`); code kept in Hopsworks (`system.repo` url `local`) unless the repository line shows an origin or `gh auth status` is logged in. Then ask one question: proceed with these, listing them in a line each and the build's estimated time (the phase estimates of **hops-reqs** `references/build-reqs.md`, summed), with no option marked "(Recommended)": the daily schedule holds cluster resources, so the user picks it here.
 
 ## The interview
 
@@ -125,7 +125,9 @@ independent.
 
 ### Data sources
 
-Show the feature groups listed above that fit the problem and ask, multi-select, with the four
+A connected data source listed above that the system will not use: say why in one line (no key
+it shares with the label's table, as **hops-fv** says) and what would link it. Show the feature
+groups listed above that fit the problem and ask, multi-select, with the four
 options that fit of: use these (recommended when they fit), **start from an existing feature view
 or model** (only when `hops fv list` or `hops model list` shows one that fits), **add a new data
 source**, **upload files**, or **generate synthetic data** (when there is no data yet). Record one `requirements.data_sources+=` entry per source, as
