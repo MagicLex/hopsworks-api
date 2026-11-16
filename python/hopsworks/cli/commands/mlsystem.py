@@ -284,8 +284,9 @@ def _other_docs(entry: dict) -> dict[str, dict]:
 
 @system_group.command("remove")
 @click.argument("system")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
-def system_remove(ctx: click.Context, system: str) -> None:
+def system_remove(ctx: click.Context, system: str, yes: bool) -> None:
     """Remove a system from the registry; code stays.
 
     Remove SYSTEM (an id, name or slug) from the registry; its code is left in place.
@@ -294,11 +295,14 @@ def system_remove(ctx: click.Context, system: str) -> None:
     Args:
         ctx: Click context.
         system: The id, name or slug of the system.
+        yes: Skip confirmation when True.
     """
     from hopsworks_common.core import ml_system_api
 
     session.get_project(ctx)
     entry = _find(system)
+    if not yes:
+        output.confirm(f"Remove {entry.get('name')} from the registry?")
     ml_system_api._remove(entry["id"])
     output.success(f"Removed {entry.get('name')} from the registry")
 
@@ -424,8 +428,10 @@ def system_delete(
             click.echo(f"  {label}")
         for line in kept:
             click.echo(f"  {line}")
-    if not yes and not output.JSON_MODE:
-        click.confirm("Delete all of these?", abort=True)
+    if not yes:
+        output.confirm(
+            "Delete all of these?", f"Deleting ML system {entry.get('name')}"
+        )
     outcomes: list[dict] = []
 
     def report(label: str, outcome: str) -> None:
@@ -823,6 +829,7 @@ def lease_release(slug_or_dir: str, token: str | None) -> None:
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="The system's directory, when its code is not in this project's HopsFS.",
 )
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
 def system_delete_assets(
     ctx: click.Context,
@@ -830,6 +837,7 @@ def system_delete_assets(
     jobs: tuple[str, ...],
     tables: tuple[str, ...],
     path: Path | None,
+    yes: bool,
 ) -> None:
     """Delete some of the jobs and tables a system built.
 
@@ -848,6 +856,7 @@ def system_delete_assets(
         jobs: The jobs to delete.
         tables: The feature groups to delete, as NAME or NAME:VERSION.
         path: The system's directory.
+        yes: Skip confirmation when True.
     """
     import yaml
     from hopsworks.cli import teardown
@@ -886,6 +895,12 @@ def system_delete_assets(
         list(jobs),
         resolved,
         _owned_check(doc, directory.name, _other_docs(entry)),
+        None
+        if yes
+        else lambda what: output.confirm(
+            f"Delete {', '.join(what)} of {entry.get('name')}?",
+            f"Deleting assets of {entry.get('name')}",
+        ),
     )
 
 

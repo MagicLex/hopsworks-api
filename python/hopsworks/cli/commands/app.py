@@ -745,7 +745,7 @@ def app_deploy(
         "deploy",
         f"Read `hops app logs {name}`, or raise --timeout.",
     )
-    url = a.get("appUrl")
+    url = _url_of(a)
     output.success("✓ App %s serves the new files", name)
     if check_path is not None:
         _check_route(project, name, url, check_path)
@@ -906,6 +906,14 @@ def _app_json(name: str) -> dict:
     )
 
 
+def _url_of(app: dict) -> str | None:
+    """The app's URL on the client's host: the JSON carries it as a path."""
+    from hopsworks_common.app import absolute_url
+
+    url = app.get("appUrl")
+    return absolute_url(url) if url else None
+
+
 def _await_new_execution(
     name: str, previous: Any, timeout: float, verb: str, hint: str
 ) -> dict:
@@ -977,8 +985,8 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
         force: Stop the app first if still running.
     """
     a = _get_app(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete app '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete app '{name}'?")
     if force:
         import contextlib
 
@@ -1054,7 +1062,7 @@ def _launch(a: Any, action: Any, verb: str, done: str, await_serving: bool) -> N
         app = _await_new_execution(
             name, previous, SERVING_TIMEOUT, verb, f"Read `hops app logs {name}`."
         )
-        url, state, serving = app.get("appUrl"), app.get("state"), app.get("serving")
+        url, state, serving = _url_of(app), app.get("state"), app.get("serving")
     else:
         url = getattr(a, "app_url", None)
         state = getattr(a, "state", "-")

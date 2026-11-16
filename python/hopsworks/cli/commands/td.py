@@ -253,12 +253,11 @@ def td_delete(
         yes: Skip confirmation when True.
     """
     fv = _get_fv(ctx, feature_view, fv_version, exact=True)
-    if not yes and not output.JSON_MODE:
+    if not yes:
         target = f"v{td_version}" if td_version else "ALL versions"
-        click.confirm(
+        output.confirm(
             f"Delete training dataset {target} for {feature_view} "
-            f"v{getattr(fv, 'version', '?')}?",
-            abort=True,
+            f"v{getattr(fv, 'version', '?')}?"
         )
     try:
         if td_version is not None:
