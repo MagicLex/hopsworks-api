@@ -95,7 +95,7 @@ a question you are about to ask depends on.
   in `system.releases` whose pull request has merged (repo.md, **Releases**), reconcile work in
   flight (every
   `runs` or `measured` row in state `submitted` or `running` is checked with `hops job history`
-  and `hops deployment status`; finished work is recorded, overdue work is stopped with
+  and `hops deployment info`; finished work is recorded, overdue work is stopped with
   `hops job stop` and recorded as a crash), delete `*_test_*` objects of this system whose run is
   not running, then run `hops factory system plan <slug> --sync` and continue from its `next`. A
   phase marked done whose assets are gone is `stale` again and is rebuilt; a phase whose inputs
@@ -112,7 +112,7 @@ a question you are about to ask depends on.
   UTC). `hops factory run` took it and passed its token as `$HOPS_LEASE_TOKEN`; started any other
   way, take it with `hops factory system lease acquire <slug>`, which prints the token to pass as
   `--token` below. Exit 4 means another invocation builds the system: print
-  `hops factory system lease show <slug>` and stop. Renew it with
+  `hops factory system lease info <slug>` and stop. Renew it with
   `hops factory system lease renew <slug>` when each phase starts and at least hourly while you wait
   on a job; it lapses 4 hours after the last renewal and is then taken over. A renewal that exits 4
   means the lease was lost: stop at once and write nothing more. Release it with
@@ -278,7 +278,7 @@ Make every `requirements.data_sources` entry `present` and record it under `data
 **hops-data-sources** for new connectors, **hops-synthetic-data** for synthetic sources,
 **hops-fg**, **hops-job**, **hops-environments**.
 
-- Existing feature group: `hops fg info <name> --version <v>`, `hops fg preview <name> --n 5`;
+- Existing feature group: `hops fg info <name> --version <v>`, `hops fg preview <name> --limit 5`;
   key and event time must match the declared grain. A mismatch goes back to `reqs` as an
   `open_question`.
 - New connector: follow the secret procedure in `references/data-sources.md` (print the exact
@@ -315,7 +315,7 @@ never a snapshot or pre-joined group for point-in-time correctness, which the fe
 provides (**hops-fv**). Write the unit and integration tests. Commit, build the bundle, run the backfill
 with `hops job backfill`, verify with bounded reads (`hops sql` count and newest event time,
 `hops fg preview`), attach the schedule with its offsets and a failure alert
-(`hops alert job create ... --status failed`), or start the continuous execution; for a batch
+(`hops job alert create ... --status failed`), or start the continuous execution; for a batch
 system run `benchmarks/benchmark_features.py` over one full window. Record each pipeline with its
 environment, job, tests and benchmark. `met` when every pipeline has verified rows, a verified
 schedule or running execution with its alert, and passing tests.
@@ -386,7 +386,7 @@ transition table. Write the `verify` block and commit it as `[<slug>] verify: <c
 
 ### stop
 
-Unschedule the system's jobs (`hops job unschedule` for each scheduled job the YAML names), stop
+Unschedule the system's jobs (`hops job schedule delete` for each scheduled job the YAML names), stop
 its continuous executions (`hops job stop`) and deployments (`hops deployment stop`), leave data
 and models in place, record it in `decisions`, and commit.
 
