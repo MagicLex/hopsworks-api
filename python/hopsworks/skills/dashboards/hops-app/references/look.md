@@ -1,56 +1,62 @@
 # The Hopsworks look in an app
 
-Part of **hops-app**: read when styling an app.
+Part of **hops-app**: read when styling an app made from the skeleton (FastAPI and a static
+JavaScript UI). A Streamlit app is themed in `.streamlit/config.toml`: see
+[frameworks.md](frameworks.md).
 
-In Hopsable, the `look` tool renders the app in headless Chromium at 600 and 900 px wide and
-reports the layout as text: call it, and never script a browser to check the layout.
+The skeleton's `static/app.css` is [hops-design](../../hops-design/SKILL.md) as CSS: its tokens
+first, then the components built from them. A new app starts as a copy of the skeleton, so the
+page is on-brand before anything is added. Extend it; never restyle it.
 
-Apps render as a bare default Streamlit page unless you theme them. Theme them
-with the Hopsworks tokens and follow the layout rules in
-[hops-design](../../hops-design/SKILL.md): light, flat, the green accent only on the
-primary action and the selection.
+## Tokens
 
-`.streamlit/config.toml` must sit in the same directory as the app script,
-not in `~/.streamlit/`. Streamlit reads config from the script's own directory
-(and CWD), so an app under `customer_spend_fti/app.py` needs
-`customer_spend_fti/.streamlit/config.toml`. Copy it per app directory.
+Every colour, radius and spacing in the app is one of these variables. A new rule uses
+`var(--accent)`, never `#1eb182` or another literal.
 
-```toml
-[server]
-fileWatcherType = "none"   # REQUIRED on HopsFS/FUSE: the watcher stats the
-headless = true            # script over FUSE on the event loop and blocks the
-runOnSave = false          # readiness probe, making the managed app flap
-                           # serving<->running. Without this the app never holds.
+| Variable | hops-design token | Use |
+|---|---|---|
+| `--bg` | background | the page and every surface |
+| `--tint` | muted | a tinted region, a hovered row |
+| `--line` | border | hairlines: dividers, table rules, inputs |
+| `--text` | text | body and headings |
+| `--muted` | muted text | labels, metadata, units |
+| `--accent` | accent | the one primary action, the selection, a positive state |
+| `--accent-soft` | accent soft | a selected or positive item's background, the focus ring |
+| `--danger` | danger | errors and destructive actions only |
+| `--warn` | warn | the middle band of a score bar |
+| `--radius` | radius | boxes; controls are 8px |
+| `--s1` to `--s6` | spacing | 4, 8, 12, 16, 24, 32px |
 
-[browser]
-gatherUsageStats = false
+The font is the body's stack (`Inter, system-ui, ...`); code, ids and SQL use the hops-design
+mono stack. Chart colours come from `window.hopsChart` (`static/chart-theme.js`): `accent` for the
+primary series, `context` greys for comparison, `danger` for a breach.
 
-[theme]
-base = "light"
-primaryColor = "#1EB182"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F7F7F7"
-textColor = "#252525"
-font = "sans serif"
-```
+## Components
 
-A plain title, and tabular numbers in metrics, injected once at the top of the app.
-No banner, gradient or emoji:
-```python
-import streamlit as st
+| Class | What |
+|---|---|
+| `header.band` with `h1` and `.sub` | the title and one muted line of source |
+| `.stats` of `.stat` (`.label`, `.value`) | key figures in one divided row; `.value.accent`, `.value.danger` |
+| `.charts` of `figure` with `figcaption` and `.chart > canvas` | charts side by side, stacked when narrow, height reserved |
+| `.table-wrap > table`, `td.num`, `td.id` | records; numbers right-aligned, tabular |
+| `.bar` (`.track`, `.fill`, `.fill.mid`, `.fill.high`, `.num`) | a score in a row |
+| `.status`, `.status.high` | a dot and a word |
+| `form`, `label`, `input`, `select`, `button` | one primary button per view |
+| `.loading`, `.empty`, `.error` | first load, no data, a failure in words |
+| `[aria-busy="true"]` | a list being reloaded, kept and dimmed |
+| `.card` | the one boxed level, for content that must stand apart |
 
-st.set_page_config(page_title="Customer spend", layout="wide")
-st.markdown(
-    """
-    <style>
-      div[data-testid="stMetricValue"] {font-variant-numeric: tabular-nums;}
-      div[data-testid="stMetricLabel"] {color: #737373;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-st.title("Customer spend")
-```
+A part the skeleton lacks is composed from these tokens and the spacing scale, in `app.css`
+after the skeleton's rules.
 
-A full dashboard (statistics, monitoring history, data sample) is in
-[references/monitoring_dashboard.md](monitoring_dashboard.md).
+## The look check
+
+In Hopsable, the `look` tool renders the live app in headless Chromium at 600 and 900px wide
+and reports, as text: layout problems (text past its box, overlapping boxes, clipped labels,
+large gaps, sideways scrolling), script errors and failed requests, and every colour or font
+the page uses that is not in hops-design. Call it once the first full page is written and before
+each deploy, and fix all it reports; never script a browser to check the layout.
+
+After `deploy_app`, Hopsable loads the deployed page through the Hopsworks proxy and flags any
+`api/` call the page makes that is answered with an HTML page or a non-2xx status: the sign of an
+absolute `/api/...` fetch, which reaches Hopsworks instead of the app.

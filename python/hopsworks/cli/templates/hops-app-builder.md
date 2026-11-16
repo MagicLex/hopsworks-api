@@ -9,25 +9,27 @@ You build what the `/hops` menu decided. The prompt gives `action`, `name`, `des
 `change`, `source` and `where`. Everything the user chose is in it: you never ask, and a real
 ambiguity ends the run with one line saying what is missing.
 
-Load **hops-app** and the parts of it you follow, and **hops-design** for the UI:
+Load **hops-app** and the parts of it you follow, and **hops-design** before you write any UI:
 
 ```bash
 hops skills info hops-app                                # its "Fix loop"; the path at the top
 hops skills info hops-app references/hops-app-built.md   # what to build and how to deploy it
 hops skills info hops-app references/data.md             # how the app reads Hopsworks
-hops skills info hops-app references/look.md             # the theme and the layout check
+hops skills info hops-app references/look.md             # the design system in app.css, and the look check
 hops skills info hops-design
 ```
 
 The skeleton is `references/app_skeleton/` next to the SKILL.md whose path the first command
-prints.
+prints. A new app starts as a copy of it (`cp -r <that folder> apps/<name>`), so the hops-design
+tokens and components (`static/app.css`), the chart theme and the vendored Chart.js are in place
+before the first page is written.
 
 **Already made?** For a create, run `hops app list` first: when it lists `<name>` as `RUNNING`, the piece exists; return that in one line and stop. Your exit check at the end is `hops app info <name>` showing `State` `RUNNING`.
 
 ## Actions
 
-- **create:** write the app from the skeleton: a FastAPI backend with `/health` and a JSON API under
-  `/api`, a static ES-module UI with relative URLs and no CDN, and the description as the module
+- **create:** copy the skeleton, then write the app over it: a FastAPI backend with `/health` and a
+  JSON API under `/api`, a static ES-module UI with relative URLs and no CDN, and the description as the module
   docstring of `app.py`, in `./apps/<name>/` (`~/apps/<name>/` in a terminal), or the git
   repository when `source: git`. `python-agent-pipeline` has FastAPI and uvicorn; a library it
   lacks goes into `app-requirements.txt`. Then deploy, the only deploy step:
@@ -35,6 +37,13 @@ prints.
   ```bash
   hops app deploy <name> apps/<name> --check <one api route the description implies>
   ```
+
+  An app that calls a model deployment is deployed only once that deployment is up: run
+  `hops deployment info <d>` every 10 s until its Status is `Running` (at most 10 minutes), then
+  `hops deployment info <d> --stable 30`. A deployment that is stopped, never reaches Running or
+  fails the stable check ends the run with that cause: never start it yourself, never deploy the
+  app over it. `--check` asks a 502 or 503 again for up to 60 s, the time a cold deployment
+  behind a fresh app takes to answer.
 
   It uploads the directory to `Users/<user>/apps/<name>/`, runs the app in a clone
   `<name>-app-env` when `app-requirements.txt` exists, creates or redeploys the app, and returns
@@ -68,9 +77,13 @@ formatted (percentages, thousands separators, dates), and the layout works from 
 Nothing moves when the user interacts: a list or panel that reloads keeps its current content,
 dimmed with `aria-busy`, until the new content replaces it (placeholders only on the first load),
 and the page reserves the scrollbar gutter, so a filter or a selection never makes the layout jump.
-No CDN and no build step: fonts are the system stack, and every chart is Chart.js with the
-skeleton's `static/chart-theme.js`, never hand-drawn SVG. Follow **hops-design**: a white page,
+Every URL the page's JavaScript fetches is relative (`getJSON("api/top")`), never `/api/...` or
+the app's full URL: under the proxy mount an absolute path reaches Hopsworks, which answers with
+its own HTML page, not the app. No CDN and no build step: fonts are the design system's stack,
+and every chart is Chart.js with the skeleton's `static/chart-theme.js`, never hand-drawn SVG. Follow **hops-design**: a white page,
 sections grouped by spacing and hairlines with no box per section, stats that fit their cell.
+Colours and fonts come from the tokens in `app.css` (`var(--accent)`, `var(--muted)`, ...), never a
+new value: the look pass flags a colour or a font outside the design system.
 Look at the page at about 600px and 900px wide once it first shows all its sections, and again
 before each deploy (a screenshot tool when one is available); fix what spills, clips or leaves
 a gap. That pass also checks the JavaScript: it loads the page and reports script errors, so
