@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -719,6 +720,56 @@ def test_set_records_interview_answers_and_refuses_an_invalid_one(tmp_path):
     listed = _set(target, "requirements.consumers=[dashboard]")
     assert listed.returncode == 1
     assert "requirements.consumers" in listed.stderr
+
+
+def test_every_append_the_interview_writes_goes_to_a_list(tmp_path):
+    text = (TEMPLATES / "hops-ml.md").read_text(encoding="utf-8")
+    target = _load(REQS / "new_system.py").create(tmp_path / "deal-win")
+    created = _set(
+        target,
+        "schema_version=1",
+        "system={name: Deal win, slug: deal-win, status: draft, "
+        "target: {cluster: c, project: p, stage: development}}",
+        "requirements.status=pending",
+        "requirements.description=Which open deals will close",
+        "requirements.problem.task=classification",
+    )
+    assert created.returncode == 0, created.stderr
+    doc = yaml.safe_load((target / "system.yaml").read_text(encoding="utf-8"))
+    appended = set(re.findall(r"([a-z_]+(?:\.[a-z_]+)+)\+=", text))
+    assert appended
+    for key in appended:
+        node = doc
+        for part in key.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        assert node is None or isinstance(node, list), f"{key} is not a list"
+
+
+def test_the_interview_names_the_hops_reqs_directory(tmp_path):
+    text = (TEMPLATES / "hops-ml.md").read_text(encoding="utf-8")
+    known = text.split("## How to ask and record")[0]
+    line = next(x for x in known.splitlines() if "`<hops-reqs>`" in x)
+    command = re.search(r"!`(.+)`$", line).group(1)
+    hops = f"{shlex.quote(sys.executable)} -m hopsworks.cli.main"
+    done = subprocess.run(
+        ["bash", "-c", re.sub(r"\bhops (?=skills)", f"{hops} ", command)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert (Path(done.stdout.strip()) / "references" / "new_system.py").is_file()
+
+
+def test_the_interview_leaves_requirements_pending_and_marks_no_cadence():
+    text = (TEMPLATES / "hops-ml.md").read_text(encoding="utf-8")
+    # /hops-build completes the specification and writes met (hops-reqs build-reqs.md).
+    assert "requirements.status=met" not in text
+    finish = " ".join(text.split("## Finish")[1].split())
+    assert "`requirements.status` at `pending`" in finish
+    # A schedule holds cluster resources: the user picks it (/hops Rules).
+    batch = " ".join(text.split("### Batch")[1].split("- **Data.**")[0].split())
+    assert "recommended" not in batch.lower().replace('"(recommended)"', "")
+    assert 'none marked "(Recommended)"' in batch
 
 
 def test_a_new_system_is_a_git_repository_unless_it_is_inside_one(tmp_path):
