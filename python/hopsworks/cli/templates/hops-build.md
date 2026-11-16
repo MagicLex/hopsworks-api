@@ -160,10 +160,14 @@ line why, so `verify` and the next run see what was not done.
   start: it lists the system in the project's ML systems in the Hopsworks UI (from an external
   client it records the repository URL) and is a no-op refresh when the interview already
   registered it. With `system.repo.url: local` from an external client the code has no remote and
-  no HopsFS mount, so do not register at the start, where a plain register fails. After each phase
-  commit, `hops files upload <slug> Users/<user>/systems/ --overwrite` (the `.git` directory too);
-  after the first upload, register once with
-  `--location /Projects/<project>/Users/<user>/systems/<slug>`.
+  no HopsFS mount, so do not register at the start, where a plain register fails. It gets a copy
+  in HopsFS instead: `hops files upload <slug> Users/<user>/systems/ --overwrite` (the `.git`
+  directory too). On the system's first run, upload right after the first phase commit, then
+  register once with `--location /Projects/<project>/Users/<user>/systems/<slug>`, so the system
+  shows in the Hopsworks UI even when the run stops early. Upload once more after the run's last
+  commit, before it stops: the app question, the pull request, the final report, a failure or an
+  escalation. Never after each phase: an upload walks the whole directory, with requests per
+  directory and per file.
 - **The repository and `reqs`.** While `requirements.status` is `pending`, or on `/hops-build
   <slug> reqs`, read `hops skills info hops-reqs references/build-reqs.md` and follow it: it sets up the repository `system.repo` names, then completes the specification.
 - **Edits from the Hopsworks UI.** When `system.edits` lists entries, or the instruction is to
