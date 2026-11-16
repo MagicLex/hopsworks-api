@@ -127,6 +127,8 @@ class Environments:
         env.creator = name.rsplit("-app-env-", 1)[1] if "-app-env-" in name else None
         env.commands = None
         env.library_names = None
+        # A project environment; a test of a built-in one sets it to True.
+        env.preinstalled = False
         self.envs[name] = env
         return env
 
