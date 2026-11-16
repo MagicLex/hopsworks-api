@@ -57,8 +57,10 @@ def code_location(path: Path, project: str | None = None) -> str:
         except ValueError:
             relative = None
         if relative is not None:
+            # The mount is the pod's own project folder, named by its backing name.
             name = (
-                project
+                os.environ.get("HOPSWORKS_PROJECT_BACKING_NAME")
+                or project
                 or os.environ.get("PROJECT_NAME")
                 or os.environ.get("HOPSWORKS_PROJECT")
             )
@@ -112,9 +114,9 @@ def register(
         factory is not None and recorded.get("name") not in (None, factory)
     ):
         recorded = {}
-    if location is not None and not location.startswith(f"/Projects/{project.name}/"):
+    if location is not None and not location.startswith(f"/Projects/{project.backing_name}/"):
         raise click.UsageError(
-            f"--location must be a folder of this project: /Projects/{project.name}/..."
+            f"--location must be a folder of this project: /Projects/{project.backing_name}/..."
         )
     return ml_system_api._register(
         location or code_location(path, getattr(project, "name", None)),

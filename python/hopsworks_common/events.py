@@ -231,7 +231,7 @@ def _relative(path: str | None) -> str | None:
     from hopsworks_common import client
 
     try:
-        project = client._get_instance()._project_name
+        project = client._get_instance()._project_backing_name
     except Exception:  # noqa: BLE001 - no client yet: keep the path as given
         project = None
     if project:
