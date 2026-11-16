@@ -10,7 +10,7 @@ from __future__ import annotations
 from unittest import mock
 
 import pytest
-from hopsworks.cli import config, session
+from hopsworks.cli import config, session, waits
 from hopsworks.cli.commands import factory
 
 
@@ -19,6 +19,75 @@ def factory_enabled():
     """Run `hops factory` commands as on a cluster with the Factory enabled; test_factory_enabled checks the check."""
     with mock.patch.object(factory, "_require_enabled"):
         yield
+
+
+class Clock:
+    """Time for `waits`: sleeping moves it on at once."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    """Run every wait on a fake clock, so a 600 s timeout passes in no time."""
+    fake = Clock()
+    with mock.patch.object(waits, "time", fake):
+        yield fake
+
+
+@pytest.fixture
+def unschedulable():
+    """A pod Kubernetes cannot place, as Hopsworks reports it in a KubeMonitorDTO."""
+    return {
+        "job": {
+            "lastCondition": None,
+            "events": [],
+            "pods": [
+                {
+                    "name": "etl-7-abcde",
+                    "status": "Pending",
+                    "ready": False,
+                    "lastCondition": {
+                        "type": "PodScheduled",
+                        "reason": "Unschedulable",
+                        "status": "False",
+                        "message": "0/5 nodes are available: 3 Insufficient memory.",
+                        "age": "40s",
+                    },
+                    "events": [
+                        {
+                            "type": "Warning",
+                            "reason": "FailedScheduling",
+                            "age": "2m",
+                            "from": "default-scheduler",
+                            "message": "0/5 nodes are available: 5 Insufficient cpu.",
+                        },
+                        {
+                            "type": "Warning",
+                            "reason": "FailedScheduling",
+                            "age": "35s",
+                            "from": "default-scheduler",
+                            "message": "0/5 nodes are available: 3 Insufficient memory.",
+                        },
+                        {
+                            "type": "Normal",
+                            "reason": "Scheduled",
+                            "age": "1s",
+                            "from": "default-scheduler",
+                            "message": "Successfully assigned",
+                        },
+                    ],
+                }
+            ],
+        }
+    }
 
 
 @pytest.fixture
