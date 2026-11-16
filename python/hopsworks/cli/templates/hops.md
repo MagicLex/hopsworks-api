@@ -101,7 +101,7 @@ is the whole dispatch:
 | inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
 | deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, `hops deployment predict <d>` for a known entity returns a prediction, and `hops deployment info <d> --stable 60` passes | **hops-deploy-builder** |
 | dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
-| app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving | `hops app info <a>` shows `State` `RUNNING` | **hops-app-builder** (App below) |
+| app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (App below) |
 | notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (Notebook below) |
 | analytics layer | bronze: a source; silver: feature groups with rows, used as bronze by name, never copied; gold: silver tables | the layer's tables with rows | `hops fg preview <table> --limit 1` for each table its `system.yaml` lists | `/hops-bronze` only for the example bronze of generated data, never when the request names a table or this conversation made one (that table is the bronze: `hops factory run analytics-silver` with it by name), then `/hops-silver`, `/hops-gold` |
 
@@ -261,7 +261,9 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    Ask the name, proposing a slug from the description. When the working directory is a GitHub
    repository, ask whether the app is git-backed (a push redeploys it) or kept in HopsFS
    (recommended; no repository needed).
-3. **Edit.** Ask what should change, in words, unless the instruction says it.
+3. **Edit.** Ask what should change, in words, unless the instruction says it. A move between
+   Python and Node.js is a new app under the same name: ask the user before
+   `hops app delete <name> --yes --force`, then create it.
 4. **Delete.** Ask the user to confirm the exact name.
 5. Spawn **hops-app-builder** with the Agent tool and this prompt, then print what it returns:
 
@@ -270,6 +272,7 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    name: <name>
    description: <the user's words>
    change: <for an edit, the user's words>
+   runtime: <node when the request says Node or an npm framework, else python>
    source: <hopsfs | git>
    where: <Hopsworks terminal | external client>
    ```
