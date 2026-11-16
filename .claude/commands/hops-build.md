@@ -150,9 +150,10 @@ line why, so `verify` and the next run see what was not done.
   `hops factory system register <slug>` once at the start: it lists the system in the project's ML
   systems in the Hopsworks UI (from an external client it records the repository URL) and is a
   no-op refresh when the interview already registered it. With `system.repo.url: local` from an
-  external client the code has no remote and no HopsFS mount, so it gets a home in HopsFS: after
-  each phase commit, `hops files upload <slug> Users/<user>/systems/ --overwrite` (the `.git`
-  directory too), and register once with `--location /Projects/<project>/Users/<user>/systems/<slug>`.
+  external client the code has no remote and no HopsFS mount, so a plain register fails: it gets a
+  home in HopsFS instead. After each phase commit, `hops files upload <slug> Users/<user>/systems/
+  --overwrite` (the `.git` directory too); after the first, register once with
+  `--location /Projects/<project>/Users/<user>/systems/<slug>`.
 - **The repository and `reqs`.** While `requirements.status` is `pending`, or on `/hops-build
   <slug> reqs`, read `hops skills info hops-reqs references/build-reqs.md` and follow it: it sets up the repository `system.repo` names, then completes the specification.
 - **Edits from the Hopsworks UI.** When `system.edits` lists entries, or the instruction is to
@@ -165,13 +166,27 @@ section for each phase in turn.
 
 ### verify
 
-Read-only everywhere except the `verify` block. Follow "Verification" in hops-reqs (`hops skills info hops-reqs`):
-the pushed head (a dirty tree or unpushed commits fail; with `system.repo.url: local`, a dirty tree), existence and state, identity, expiry,
-bounded reads only. Run `pytest` in the system directory; `verify integration` also runs the
-`<slug>-tests` job per environment, `verify benchmark` reruns the benchmark at full length.
-Print a table, one row per claim, observed beside declared. Mark owning phases `stale` per the
-transition table. Write the `verify` block and commit it as `[<slug>] verify: <claims> claims,
-<failed> failed`. Never repair a failed claim here.
+Read-only everywhere except the `verify` block. There is no verify command: verify is these
+checks, run one by one, as "Verification" in hops-reqs (`hops skills info hops-reqs`) defines
+them. One claim per asset or piece of evidence `system.yaml` declares:
+
+- the head: `git status --porcelain` is empty and `git rev-parse HEAD` is the pushed commit (with
+  `system.repo.url: local`, a clean tree only);
+- every feature group, its rows and freshness: `hops fg info`, then a bounded read (`hops sql` with
+  a count and the newest event time, or `hops fg preview`);
+- every job: `hops job info`, `hops job schedule info`, `hops job history` (the last run
+  succeeded) and `hops job alert list`;
+- the model and the deployment: `hops model info` and `hops deployment info` name the version and
+  configuration the evidence names;
+- each `inference.monitoring` entry, and expiry: a benchmark or freshness claim older than seven
+  days fails;
+- `pytest` in the system directory; `verify integration` also runs the `<slug>-tests` job per
+  environment, `verify benchmark` reruns the benchmark at full length.
+
+Print the table, one row per claim, with the command run and observed beside declared; `claims`
+in the block is the number of rows, and a block without its table is not a verify. Mark owning
+phases `stale` per the transition table. Write the `verify` block and commit it as
+`[<slug>] verify: <claims> claims, <failed> failed`. Never repair a failed claim here.
 
 ### stop
 

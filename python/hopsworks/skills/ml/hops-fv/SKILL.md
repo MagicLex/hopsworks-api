@@ -118,7 +118,7 @@ Never put the label in a training dataset's `extra_filter`. The filter is stored
 
 Never build an intermediate feature group of pre-joined features and labels, or of snapshots derived from other feature groups, to get point-in-time correctness: the view's join already produces it correctly and the extra group hides the lineage.
 
-Joins: `join_type` is `"left"` (default), `"inner"`, `"right"`, `"full"`, `"cross"`, or `"left_semi_join"`; `left_on`/`right_on` join on differently named keys; `prefix` avoids column-name clashes.
+Joins: `join_type` is `"left"` (default), `"inner"`, `"right"`, `"full"`, `"cross"`, or `"left_semi_join"`; `left_on`/`right_on` join on differently named keys; `prefix` avoids column-name clashes. Join a labels group `"left"`: batch scoring reads the same view without the label, and an inner join keeps only the entities that already have one, so it scores none of the open ones.
 
 ```python
 query = fg1.select_all().join(fg2.select_all(), on=["shared_key"], join_type="left")
