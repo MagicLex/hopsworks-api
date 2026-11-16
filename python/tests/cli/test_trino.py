@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from hopsworks.cli import config, session
 from hopsworks.cli.commands import trino
 from hopsworks.cli.main import cli
+from trino.exceptions import TrinoUserError
 
 
 def _connect_kwargs(catalog=None, schema=None):
@@ -60,3 +61,37 @@ def test_a_rejected_query_is_one_error_line(mock_project):
         "b'Access Denied: Invalid credentials'"
     )
     connection.close.assert_called_once()
+
+
+def _rejected(exc):
+    cursor = mock.MagicMock()
+    cursor.execute.side_effect = exc
+    connection = mock.MagicMock()
+    connection.cursor.return_value = cursor
+    with mock.patch.object(trino, "_connect", return_value=connection):
+        return CliRunner().invoke(cli, ["sql", "SELECT count(*) FROM orders"])
+
+
+def _not_found(table):
+    return TrinoUserError(
+        {
+            "errorName": "TABLE_NOT_FOUND",
+            "errorType": "USER_ERROR",
+            "message": f"line 1:22: Table 'delta.p_featurestore.{table}' does not exist",
+        },
+        "q1",
+    )
+
+
+def test_a_feature_group_name_without_version_gets_the_versioned_table(mock_project):
+    result = _rejected(_not_found("orders"))
+    assert result.exit_code == 1
+    assert result.output.strip().endswith(
+        "A feature group is the table <name>_<version>, such as orders_1."
+    )
+
+
+def test_a_missing_versioned_table_gets_no_hint(mock_project):
+    result = _rejected(_not_found("orders_2"))
+    assert result.exit_code == 1
+    assert "<name>_<version>" not in result.output
