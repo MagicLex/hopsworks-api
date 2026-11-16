@@ -13,12 +13,12 @@ Decide from the data, not by default.
 
 - **Input:** the source (bronze) feature group and its time column (the arrival or event time column the job windows on).
 - **Output:** a decision, `none` or `partition` by `hour`, `day` or `week`, with the evidence, recorded in the table's design (`system.yaml` `partitioning`).
-- **Pre-condition:** a Hopsworks terminal, where offline feature groups are mounted read-only at `/hopsfs/featurestore/<project>_featurestore.db/<fg>_<version>`.
+- **Pre-condition:** a Hopsworks terminal, where offline feature groups are mounted read-only at `/hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version>`.
 
 ## Measure the source
 
 ```bash
-T=/hopsfs/featurestore/<project>_featurestore.db/<fg>_<version>
+T=/hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version>
 du -sh "$T"; ls "$T" | head                      # size, and existing partition directories (col=value)
 python <hops-partitioning>/scripts/partition_advisor.py "$T" --time-column <arrival_column>
 ```
