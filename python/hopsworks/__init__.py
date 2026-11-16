@@ -504,6 +504,12 @@ def _prompt_project(valid_connection, project, is_saas):
         try:
             return valid_connection._project_api._get_project(project)
         except RestAPIError as x:
+            # A refused key is not a missing project: raise the backend's error as it is.
+            if x.response.status_code in (
+                RestAPIError.STATUS_CODE_UNAUTHORIZED,
+                RestAPIError.STATUS_CODE_FORBIDDEN,
+            ):
+                raise
             raise ProjectException(f"Could not find project {project}") from x
 
 
