@@ -54,6 +54,12 @@ Programmatic equivalent: `data_source.infer_metadata()` on a `DataSource` return
 ## Preview source schema and data (CRM / Google Sheets / REST)
 
 Non-SQL sources (CRM, Google Sheets, REST) have no catalog to read the schema from, so Hopsworks samples the source with a server-side schema-fetch job and infers it.
+
+```bash
+hops datasource tables <connector>                     # a CRM's resources (account, contact, ...)
+hops datasource preview <connector> --table account    # its inferred schema and sampled rows
+```
+
 `StorageConnector.get_data(data_source)` fetches one resource and starts one job per call.
 `StorageConnector.get_data_batch(data_sources)` fetches several resources with ONE job that processes them sequentially in a single container — prefer it whenever you preview more than one resource.
 
@@ -200,7 +206,14 @@ SDK equivalents, the naming rules and the access states are in [references/provi
 
 DLTHub copies a source into a managed feature group for the cases mounting cannot serve: loading the online store or a vector index, or pulling from an API/SaaS/REST endpoint. Ingestion runs server-side in the `dlthub-ingestion-pipeline` environment, driven by a `SinkJobConfiguration` attached to a sink-enabled feature group. It is configuration plus a server job, not an in-process `dlt` call.
 
-The per-feature-group `sink_job` shown here is for ingesting a **single** table. When ingesting more than one table from the same connector, default to one multi-table job for all of them — see [Ingest many tables with one job](#ingest-many-tables-with-one-job) — instead of looping this pattern.
+One table, from the CLI: the group's schema is read from the source, then its ingestion job runs once and the command waits for it.
+
+```bash
+hops fg ingest sf_accounts --connector my_salesforce --table account --primary-key id
+hops job run <job printed above>      # copy again later
+```
+
+The per-feature-group `sink_job` shown here is for ingesting a **single** table. Without `features`, `save()` reads the schema from the data source, as `hops datasource preview` shows it. When ingesting more than one table from the same connector, default to one multi-table job for all of them — see [Ingest many tables with one job](#ingest-many-tables-with-one-job) — instead of looping this pattern.
 
 A SQL source is ingested from a table: give the feature group a `DataSource` with its `database` and `table`, such as one from `get_tables()`.
 The ingestion job cannot run a SQL query, so a `DataSource` with a `query` and no `table` is rejected with HTTP 400 and error code 270136; a cluster without that check fails with HTTP 422 "A database must be specified".
