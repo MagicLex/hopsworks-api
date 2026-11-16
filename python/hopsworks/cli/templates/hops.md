@@ -117,7 +117,9 @@ is the whole dispatch:
    features piece turns each such table into one row per key (counts, averages, last values, a
    trend); the model piece then trains on a view joining the label table to it. "Serve",
    "real-time", "an endpoint" or "an API for predictions" is the deployment piece; "score daily"
-   or "in batch" is inference. "An agent", "a chatbot", "an assistant", "a chat over my data" or a
+   or "in batch" is inference. "Score", "rank" or "the chance of" an outcome over connected data
+   (a CRM, a database, a feature group), with no model named, is not a piece: run `hops score` as
+   the **hops-score** skill says. "An agent", "a chatbot", "an assistant", "a chat over my data" or a
    chat UI to talk to the data is the agent piece, never an app that calls a model itself: the
    agent piece is traced and evaluated.
 2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
