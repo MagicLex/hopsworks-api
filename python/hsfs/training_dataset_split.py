@@ -28,12 +28,6 @@ from hopsworks_common.core.constants import HAS_NUMPY, HAS_PANDAS
 from hsfs import util
 
 
-if HAS_NUMPY:
-    import numpy as np
-if HAS_PANDAS:
-    import pandas as pd
-
-
 class TrainingDatasetSplit:
     TIME_SERIES_SPLIT = "TIME_SERIES_SPLIT"
     RANDOM_SPLIT = "RANDOM_SPLIT"
@@ -192,6 +186,12 @@ def _parse_type(offline_type):
 
 
 def _is_missing(value):
+    if HAS_NUMPY:
+        import numpy as np
+
+    if HAS_PANDAS:
+        import pandas as pd
+
     if value is None or isinstance(value, float):
         return value is None or value != value
     if HAS_PANDAS and (value is pd.NA or value is pd.NaT):
@@ -206,6 +206,9 @@ def _misfit(value, kind):
 
 
 def _as_int(value, kind="bigint"):
+    if HAS_NUMPY:
+        import numpy as np
+
     if HAS_NUMPY and isinstance(value, np.generic):
         value = value.item()
     if isinstance(value, float):
@@ -228,12 +231,21 @@ def _encode_int(value, out):
 
 
 def _to_timestamp(value):
+    if HAS_NUMPY:
+        import numpy as np
+
+    if HAS_PANDAS:
+        import pandas as pd
+
     if HAS_NUMPY and isinstance(value, np.datetime64):
         return pd.Timestamp(value)
     return value
 
 
 def _epoch_micros(value):
+    if HAS_PANDAS:
+        import pandas as pd
+
     value = _to_timestamp(value)
     if HAS_PANDAS and isinstance(value, pd.Timestamp):
         # Naive values are read as UTC wall time.
@@ -267,6 +279,9 @@ def _epoch_days(value):
 
 
 def _unscaled(value, scale):
+    if HAS_NUMPY:
+        import numpy as np
+
     if HAS_NUMPY and isinstance(value, np.generic):
         value = value.item()
     if isinstance(value, float):
@@ -288,6 +303,9 @@ def _map_entries(value):
 
 
 def _encode(value, declared, out):
+    if HAS_NUMPY:
+        import numpy as np
+
     if _is_missing(value):
         out += b"N"
         return
@@ -359,6 +377,9 @@ def _encode(value, declared, out):
 
 def _runtime_kind(value):
     """The kind of a value whose column has no declared type."""
+    if HAS_NUMPY:
+        import numpy as np
+
     if (
         HAS_NUMPY
         and isinstance(value, np.generic)
