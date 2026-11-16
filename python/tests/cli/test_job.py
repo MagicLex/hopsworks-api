@@ -13,7 +13,7 @@ from hopsworks.cli.main import cli
 from hopsworks_common.client.exceptions import RestAPIError
 from hopsworks_common.execution import Execution
 
-from tests.cli.conftest import FIXTURES, PENDING_REASON, backend, execution
+from tests.cli.conftest import FIXTURES, PENDING_REASON, execution
 
 
 def _project(created: list):
@@ -109,7 +109,7 @@ def test_kube_reason_without_a_reason():
     assert waits.kube_reason({}) is None
     # A Python job's execution once its pod is gone, and a Python App's execution.
     assert waits.kube_reason(execution("get_python_failed")["kubeMonitor"]) is None
-    assert waits.kube_reason(backend("execution_app_running")["kubeMonitor"]) is None
+    assert waits.kube_reason(execution("get_app_running")["kubeMonitor"]) is None
 
 
 # The backend's answer to an expansion it does not know, as captured.
@@ -135,7 +135,7 @@ STDERR = execution("get_python_failed")["stderrPath"]
 _BODIES = {
     "FINISHED": lambda: execution("get_python_finished"),
     "FAILED": lambda: execution("get_python_failed"),
-    "KILLED": lambda: backend("execution_killed"),
+    "KILLED": lambda: execution("get_app_killed"),
     # KubeJobsMonitor.updateFailedState: the state, with final status FAILED.
     "QUEUE_TIMEOUT": lambda: {
         **execution("get_python_failed"),
@@ -149,11 +149,13 @@ def _body(state):
     if isinstance(state, tuple):
         state, final_status = state
         return {
-            **backend("execution_spark_finished"),
+            **execution("get_spark_finished"),
             "state": state,
             "finalStatus": final_status,
         }
-    body = _BODIES.get(state, lambda: {**backend("execution_running"), "state": state})
+    body = _BODIES.get(
+        state, lambda: {**execution("get_python_running"), "state": state}
+    )
     return body()
 
 
@@ -245,7 +247,7 @@ def test_the_start_timeout_ends_once_the_execution_runs(mock_project, hopsfs, cl
 
 def test_a_spark_job_that_failed_to_start_fails_at_once(mock_project, hopsfs, clock):
     # YarnJob sets INITIALIZATION_FAILED alone; the final status stays UNDEFINED.
-    spark = backend("execution_spark_finished")
+    spark = execution("get_spark_finished")
     for path in (spark["stdoutPath"], spark["stderrPath"]):
         hopsfs.files[path] = ("", 1)
     result, expands, _ = _wait(
@@ -297,16 +299,6 @@ def test_a_failed_execution_without_stdout_reports_at_once(mock_project, hopsfs,
     assert "etl: execution #7 FAILED. Full logs" in result.output
 
 
-def test_a_failed_execution_without_logs_names_them_without_waiting(
-    mock_project, hopsfs, clock
-):
-    result, _, _ = _wait(mock_project, ["RUNNING", "FAILED"])
-    assert result.exit_code == 1
-    assert clock.now == 3
-    assert hopsfs.checks == {STDOUT: 1, STDERR: 1}
-    assert "(no stdout.log)\n(no stderr.log)" in result.output
-
-
 @pytest.mark.parametrize("job_type", ["PYTHON", "DOCKER"])
 def test_a_job_that_writes_its_logs_first_reports_at_once(
     mock_project, hopsfs, clock, job_type
@@ -315,6 +307,8 @@ def test_a_job_that_writes_its_logs_first_reports_at_once(
     assert result.exit_code == 1
     assert len(expands) == 2
     assert clock.now == 3
+    assert hopsfs.checks == {STDOUT: 1, STDERR: 1}
+    assert "(no stdout.log)\n(no stderr.log)" in result.output
 
 
 @pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "RAY", "INGESTION"])
