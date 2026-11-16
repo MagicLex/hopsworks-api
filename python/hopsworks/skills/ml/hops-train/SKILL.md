@@ -90,10 +90,16 @@ import hashlib, re
 import pandas as pd
 
 
+def key_columns(columns, key):
+    """Every column of `key`: its own name and the prefixed names (`<project>_<fg>_<version>_<key>`)
+    a key comes back with, once per group of a view that joins groups on it."""
+    return [c for c in columns if c == key or re.fullmatch(rf".+_\d+_{re.escape(key)}", c)]
+
+
 def key_column(columns, key):
     """The column of `key`: its own name, or the prefixed name a key the view leaves out comes
-    back with (`<project>_<fg>_<version>_<key>`). Exactly one, else an error naming them."""
-    found = [c for c in columns if c == key or re.fullmatch(rf".+_\d+_{re.escape(key)}", c)]
+    back with. Exactly one, else an error naming them."""
+    found = key_columns(columns, key)
     if len(found) != 1:
         raise ValueError(f"key {key!r}: {len(found)} matching columns {found} among {list(columns)}")
     return found[0]
@@ -113,10 +119,12 @@ def key_bucket(value):
 
 def split_by_key(X, y, key, drop=(), validation=15, test=15):
     """70/15/15 by default, one entity's rows in one part. `drop`: the other keys and the
-    event time; each present one leaves X with the key, since ids and times are no features."""
-    part = X[key_column(X.columns, key)].map(key_bucket)
-    present = [k for k in dict.fromkeys([key, *drop]) if any(c == k or re.fullmatch(rf".+_\d+_{re.escape(k)}", c) for c in X.columns)]
-    X = X.drop(columns=[key_column(X.columns, k) for k in present])
+    event time; every copy of each leaves X with the key, since ids and times are no features."""
+    copies = key_columns(X.columns, key)
+    # A view joining groups on the key holds it once per group, all equal: the plain one splits.
+    same = key in copies and all(X[c].equals(X[key]) or bool((X[c] == X[key]).all()) for c in copies)
+    part = X[key if same else key_column(X.columns, key)].map(key_bucket)
+    X = X.drop(columns=[c for k in dict.fromkeys([key, *drop]) for c in key_columns(X.columns, k)])
     tr, va = part < 100 - validation - test, (part >= 100 - validation - test) & (part < 100 - test)
     te = part >= 100 - test
     return X[tr], X[va], X[te], y[tr], y[va], y[te]
