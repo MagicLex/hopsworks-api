@@ -27,7 +27,7 @@ Already known, no need to look again:
 
 | First word | Do |
 | --- | --- |
-| none | Ask "What do you want to do?": **Explore data**, **Build or resume an ML system**, **A dashboard**, **An app**. Then continue with that choice below. |
+| none | Ask "What do you want to do?": **Explore data**, **Build or resume an ML system**, **A dashboard**, **An app**; with a system listed above, **Resume <slug>** first and recommended, which runs `/hops-build <slug>`. Then continue with that choice below. |
 | `explore` | Explore (below). |
 | `dashboard` | Dashboard (below), with the rest as the instruction. |
 | `app` | App (below), with the rest as the instruction. |
@@ -41,14 +41,15 @@ system's `requirements.status` is already `met`, reply with one line that `/hops
 ## Explore
 
 Read-only. Run what the user's words need: `hops fg list`, `hops fv list`, `hops datasource
-list`, `hops search <term>`, `hops fg info <name>`, `hops fg features <name>`,
-`hops fg preview <name> --n 10`, `hops sql "<query>"` with a `LIMIT`. Summarise in a few lines and
+list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>`,
+`hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT`. Summarise in a few lines and
 offer the next step with `AskUserQuestion` (look deeper, a dashboard over it, an app over it, an ML
 system over it).
 
 ## Status
 
-With a system listed above, run `python <slug>/status.py` and print its output verbatim. Without
+With a system listed above, run `python <slug>/status.py` and `hops factory system plan <slug>`
+and print their output verbatim: the plan says what the project already has and what is next. Without
 one, list apps (`hops app list`) and, in a terminal, dashboards (`hops superset dashboard list`);
 from an external client list the programs under `./dashboards/` instead, since Superset is
 reachable only inside the cluster.
@@ -63,7 +64,7 @@ an external client do not, and list the programs under `./dashboards/` instead.
    or delete one. With none, go to create.
 2. **Create.** `hops fg list` and ask which feature groups to chart (multi-select; a group that is
    online only cannot be charted, since Superset reads the offline store). Read their columns with
-   `hops fg features <name>`, then ask which charts to keep from a few you propose by name: a
+   `hops fg feature list <name>`, then ask which charts to keep from a few you propose by name: a
    big-number total, a bar over the categorical column with the fewest distinct values, a
    histogram of a numeric column, a time series on the event time when there is one. Ask the title,
    proposing one from the table names.
