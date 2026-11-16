@@ -24,6 +24,12 @@ Already known, no need to look again:
   **Explore it in a notebook** (a notebook over the table). The other one or two options are what
   the result points to: a dashboard over it, a model, or the whole ML system. An app only when
   the user asked for one.
+- When the result could carry an ML system (a table with an outcome column, a feature group with
+  a key and an event time), that option names what it would build: **An ML system predicting
+  `<label>` from `<feature group>`** (features, training, batch scoring; `<feature group>` is
+  reused). Offer it once per table: never again for a table it was offered for in this
+  conversation. It is never marked "(Recommended)" unless the user asked for an ML system. On yes,
+  run `/hops-ml` with that sentence as its arguments.
 - Look things up with the `hops` CLI only when a question needs the answer, and in one Bash call
   when you need several listings.
 - No secrets in arguments or output. Never delete anything the user has not confirmed by name.
