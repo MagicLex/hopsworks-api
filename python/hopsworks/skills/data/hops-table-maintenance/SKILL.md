@@ -17,7 +17,7 @@ it and generate a controlled, native maintenance program.
 - **Output:** an evidence report, a reviewable plan YAML, the executed Spark
   maintenance (after approval), and a before/after verification table.
 - **Pre-condition:** a terminal in the project. Offline tables are browsable
-  read-only at `/hopsfs/featurestore/<project>_featurestore.db/<fg>_<version>`.
+  read-only at `/hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version>`.
 
 ## Phase 0: ask before scanning
 
@@ -45,7 +45,7 @@ Run the bundled scanner (install its deps once with
 
 ```bash
 python3 <hops-table-maintenance>/scripts/lakehouse_doctor.py analyze \
-  /hopsfs/featurestore/<project>_featurestore.db/<fg>_<version> \
+  /hopsfs/featurestore/<backing name>_featurestore.db/<fg>_<version> \
   --output /tmp/evidence_<fg>.json
 ```
 
@@ -155,9 +155,9 @@ Raw Spark procedures are only for what `optimize()` does not cover, still
 scoped and still approved. Iceberg manifests and snapshot expiry:
 
 ```sql
-CALL spark_catalog.system.rewrite_manifests(table => '<project>_featurestore.<fg>_1');
+CALL spark_catalog.system.rewrite_manifests(table => '<backing name>_featurestore.<fg>_1');
 -- destructive, removes time travel; explicit approval required
--- CALL spark_catalog.system.expire_snapshots(table => '<project>_featurestore.<fg>_1', ...);
+-- CALL spark_catalog.system.expire_snapshots(table => '<backing name>_featurestore.<fg>_1', ...);
 ```
 
 Iceberg partition-spec changes are metadata-only (existing files are not

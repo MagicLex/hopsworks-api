@@ -30,7 +30,7 @@ over exported Parquet produce the same artifacts.
 
 ## Smoke-test (cheap pre/post-flight)
 ```bash
-hops trino tables delta.<project>_featurestore                 # before: sources visible to dbt?
+hops trino tables delta.<backing name>_featurestore                 # before: sources visible to dbt?
 hops job info <job-name>                                       # after: execution FINISHED?
 hops files list Resources/dbt_runs/<job-name>/<execution id>   # after: run_graph.json + execution_graph.html present
 ```
@@ -79,7 +79,7 @@ os.environ.update({
 
 Rules that make dbt work against Hopsworks Trino:
 
-- **Sources are feature-group tables:** `delta.<project>_featurestore.<fg name>_<version>` (see [hops-trino-sql](../hops-trino-sql/SKILL.md) for naming and partition pruning).
+- **Sources are feature-group tables:** `delta.<backing name>_featurestore.<fg name>_<version>` (see [hops-trino-sql](../hops-trino-sql/SKILL.md) for naming and partition pruning).
 - **Materialize models as `ephemeral`.** The offline store is Hopsworks-managed: tables are created and written through the feature-store API so schema, statistics and lineage stay consistent. dbt compiles the SQL; the runner executes it and upserts the rows into a feature group.
 - **Override relation listing.** dbt-trino's default introspection reads `system.metadata`, which Hopsworks Trino restricts. Add this macro to the project:
 

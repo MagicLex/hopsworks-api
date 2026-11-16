@@ -25,7 +25,7 @@ const conn = JSON.parse(
 const trino = Trino.create({
   server: conn.server, // https://coordinator.trino.service.consul:8443
   catalog: "delta",
-  schema: conn.schema, // <project>_featurestore
+  schema: conn.schema, // <backing name>_featurestore
   auth: new BasicAuth(conn.user, conn.password),
   // The cluster CA signs Trino's certificate and is not in Node's trust store.
   ssl: { ca: readFileSync(conn.ca), ...(conn.verifyHostname ? {} : { checkServerIdentity: () => undefined }) },
