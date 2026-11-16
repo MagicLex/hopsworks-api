@@ -18,6 +18,7 @@ import json
 import multiprocessing
 import re
 
+import pytest
 from hopsworks_common import events
 
 
@@ -292,3 +293,59 @@ def test_a_dashboard_line_carries_its_id(tmp_path, monkeypatch, mocker):
     assert (created["key"], created["detail"]) == ({"name": "Churn"}, {"id": 7})
     assert (updated["key"], updated["detail"]) == ({"name": "Churn v2"}, {"id": 7})
     assert (deleted["key"], deleted["detail"]) == ({"name": "7"}, {"id": 7})
+
+
+def test_a_run_line_names_the_execution_hopsworks_took(tmp_path, monkeypatch, mocker):
+    from hopsworks_common import job as job_module
+
+    target = tmp_path / "events.jsonl"
+    monkeypatch.setenv(events.ENV_VAR, str(target))
+    mocker.patch("hopsworks_common.client._get_instance")
+    job = job_module.Job(
+        id=1,
+        name="score",
+        creation_time=None,
+        config={},
+        job_type="PYTHON",
+        creator=None,
+    )
+    mocker.patch.object(job, "_is_materialization_running", return_value=False)
+    start = mocker.patch.object(job._execution_api, "_start")
+    start.side_effect = [mocker.Mock(id=8), mocker.Mock(id=9)]
+
+    job.run(await_termination=False)
+    job.run(await_termination=False)
+
+    lines = _lines(target)
+    assert [(line["phase"], line["detail"]) for line in lines] == [
+        ("started", {"execution": 8}),
+        ("done", {"execution": 8}),
+        ("started", {"execution": 9}),
+        ("done", {"execution": 9}),
+    ]
+    assert all(line["key"] == {"name": "score"} for line in lines)
+
+
+def test_a_refused_run_writes_no_started_line(tmp_path, monkeypatch, mocker):
+    from hopsworks_common import job as job_module
+
+    target = tmp_path / "events.jsonl"
+    monkeypatch.setenv(events.ENV_VAR, str(target))
+    mocker.patch("hopsworks_common.client._get_instance")
+    job = job_module.Job(
+        id=1,
+        name="score",
+        creation_time=None,
+        config={},
+        job_type="PYTHON",
+        creator=None,
+    )
+    mocker.patch.object(job, "_is_materialization_running", return_value=False)
+    mocker.patch.object(job._execution_api, "_start", side_effect=RuntimeError("quota"))
+
+    with pytest.raises(RuntimeError):
+        job.run(await_termination=False)
+
+    [line] = _lines(target)
+    assert line["phase"] == "failed"
+    assert "execution" not in line["detail"]
