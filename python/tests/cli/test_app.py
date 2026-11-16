@@ -876,7 +876,7 @@ def test_app_start_prints_each_state_with_the_pod_reason(mock_project, clock):
     lines = [line for line in result.output.splitlines() if "App my_app:" in line]
     assert lines == [
         f"App my_app: INITIALIZING: {PENDING_REASON} (0 s)",
-        "App my_app: RUNNING (6 s)",
+        f"App my_app: RUNNING ({2 * app_commands._POLL_SECONDS:.0f} s)",
     ]
 
 
@@ -892,7 +892,7 @@ def test_app_start_fails_at_once_naming_the_state_and_reason(mock_project, clock
         "Could not start app 'my_app': it stopped in state INITIALIZATION_FAILED: "
         f"{PENDING_REASON.rstrip('.')}. Read `hops app logs my_app`." in result.output
     )
-    assert clock.now == 3
+    assert clock.now == app_commands._POLL_SECONDS
 
 
 def test_a_queued_app_names_the_scheduler_message_once_per_change(mock_project, clock):
@@ -906,7 +906,7 @@ def test_a_queued_app_names_the_scheduler_message_once_per_change(mock_project, 
     lines = [line for line in result.output.splitlines() if "App my_app:" in line]
     assert lines == [
         f"App my_app: QUEUED: {message} (0 s)",
-        "App my_app: RUNNING (6 s)",
+        f"App my_app: RUNNING ({2 * app_commands._POLL_SECONDS:.0f} s)",
     ]
 
 
@@ -1812,13 +1812,16 @@ def test_deploy_check_fails_on_an_html_page_for_an_api_route(mock_project, tmp_p
     assert "answered an HTML page" in result.output
 
 
+_POLLS_PAST_30_S = int(30 / app_commands._POLL_SECONDS) + 2
+
+
 def test_deploy_names_the_scheduler_message_of_a_queued_app_on_timeout(
     mock_project, tmp_path
 ):
     root = _app_dir(tmp_path)
     queued = {**backend("app_queued"), "executionId": 4}
     result, _, _ = _deploy(
-        mock_project, root, "--timeout", "30", existing=_app(3), polls=[queued] * 20
+        mock_project, root, "--timeout", "30", existing=_app(3), polls=[queued] * _POLLS_PAST_30_S
     )
     assert result.exit_code == 1
     message = PENDING_REASON.removeprefix("FailedScheduling: ").rstrip(".")
@@ -1829,7 +1832,7 @@ def test_deploy_names_the_stuck_state_and_reason_on_timeout(mock_project, tmp_pa
     root = _app_dir(tmp_path)
     pending = {**backend("app_pending"), "executionId": 4}
     result, _, _ = _deploy(
-        mock_project, root, "--timeout", "30", existing=_app(3), polls=[pending] * 20
+        mock_project, root, "--timeout", "30", existing=_app(3), polls=[pending] * _POLLS_PAST_30_S
     )
     assert result.exit_code == 1
     assert (
