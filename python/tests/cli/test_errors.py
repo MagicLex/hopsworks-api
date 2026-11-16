@@ -10,6 +10,7 @@ exceptions still propagate.
 from __future__ import annotations
 
 import json
+from unittest import mock
 
 import click
 import requests
@@ -148,3 +149,78 @@ def test_unrelated_exceptions_are_not_rewritten(tmp_home):
     result = _run_command_raising(tmp_home, ValueError("boom"))
 
     assert isinstance(result.exception, ValueError)
+
+
+ROLE_FORBIDDEN = {
+    "errorCode": 150068,
+    "errorMsg": "Your project role does not allow to perform this action.",
+}
+
+
+def _owned_by_jane(mock_project):
+    mock_project.owner = "jane@example.com"
+    mock_project.project_team = [
+        {
+            "user": {"email": "dan@example.com", "fname": "Dan", "lname": "Lee"},
+            "team_role": "Data scientist",
+        },
+        {
+            "user": {"email": "jane@example.com", "fname": "Jane", "lname": "Doe"},
+            "team_role": "Data owner",
+        },
+    ]
+
+
+def test_role_refusal_names_the_project_owner_and_is_not_retried(mock_project):
+    _owned_by_jane(mock_project)
+    deployment = mock.MagicMock()
+    deployment.stop.side_effect = _rest_error(403, ROLE_FORBIDDEN)
+    mock_project.get_model_serving.return_value.get_deployment.return_value = deployment
+
+    result = CliRunner().invoke(cli, ["deployment", "stop", "fraud"])
+
+    assert result.exit_code == 1
+    assert result.output.endswith(
+        "Only the project's Data owner can do this: ask Jane Doe\n"
+    )
+    assert len(result.output.splitlines()) == 1
+    deployment.stop.assert_called_once()
+    deployment.get_state.assert_not_called()
+
+
+def test_role_refusal_inside_a_wait_stops_it_at_once(mock_project, clock):
+    _owned_by_jane(mock_project)
+    deployment = mock.MagicMock()
+    deployment.get_state.side_effect = _rest_error(403, ROLE_FORBIDDEN)
+    mock_project.get_model_serving.return_value.get_deployment.return_value = deployment
+
+    result = CliRunner().invoke(cli, ["deployment", "stop", "fraud"])
+
+    assert result.exit_code == 1
+    assert "Only the project's Data owner can do this: ask Jane Doe" in result.output
+    assert deployment.get_state.call_count == 1
+    assert clock.now == 0
+
+
+def test_role_refusal_names_the_owner_email_when_no_name_is_known(mock_project):
+    mock_project.owner = "jane@example.com"
+    mock_project.project_team = None
+
+    result = _run_command_raising(None, _rest_error(403, ROLE_FORBIDDEN))
+
+    assert result.output == (
+        "Error: Only the project's Data owner can do this: ask jane@example.com\n"
+    )
+
+
+def test_role_refusal_without_a_readable_project_asks_the_data_owner(tmp_home):
+    result = _run_command_raising(tmp_home, _rest_error(403, ROLE_FORBIDDEN))
+
+    assert result.exit_code == 1
+    assert result.output == (
+        "Error: Only the project's Data owner can do this: "
+        "ask the project's Data owner\n"
+    )
+    assert _explain_rest_error(_rest_error(403, ROLE_FORBIDDEN)) == (
+        "Only the project's Data owner can do this: ask the project's Data owner"
+    )
