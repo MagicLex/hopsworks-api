@@ -12,8 +12,9 @@ Part of **hops-app**: the contract **hops-app-builder** follows, read for every 
   every URL in the UI is relative (`fetch("api/top")`, `src="static/app.js"`),
   and `index.html` adds the trailing slash relative URLs need under the proxy
   mount. A framework that needs a build (React, Vue, Svelte) only for a
-  git-backed app whose repository can hold the built assets. Streamlit when the
-  description is a data view with no custom interaction.
+  git-backed app whose repository can hold the built assets. A data view with no
+  custom interaction is a Superset dashboard (hops-superset), not an app. Streamlit only
+  when the user names it.
 - **Look.** The skeleton's `app.css` carries the Hopsworks tokens; extend it,
   following [hops-design](../../hops-design/SKILL.md) (flat surfaces, records in
   tables or lists, stats in one row, no shadows, light theme only).
