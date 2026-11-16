@@ -70,6 +70,7 @@ GROUP_DEFAULTS: dict[tuple[str, ...], str] = {
 # Command path -> {old flag: new flag}.
 RENAMED_FLAGS: dict[tuple[str, ...], dict[str, str]] = {
     ("fg", "preview"): {"--n": "--limit"},
+    ("datasource", "preview"): {"--n": "--limit"},
     ("fv", "read"): {"--n": "--limit"},
     ("td", "read"): {"--n": "--limit"},
     ("fg", "insert"): {"--online": "--online-only"},
