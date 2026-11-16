@@ -33,6 +33,7 @@ hops notebook update Users/alice/churn.ipynb <<'EOF'
 EOF
 hops notebook stop                      # stops the server and its kernels
 hops notebook start --env <name>        # a not running server, in that environment (`hops env list`)
+hops notebook start --shutdown-hours 8  # Hopsworks stops it 8 h after its start, not 1 h
 ```
 
 - Several cells to change (wording, titles, emojis, a renamed column): read them with
