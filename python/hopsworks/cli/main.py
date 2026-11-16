@@ -15,10 +15,11 @@ import logging
 import os
 import re
 import sys
+import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 import click
-from hopsworks.cli import config, deprecations, output, scaffold
+from hopsworks.cli import auth, config, deprecations, output, scaffold
 
 
 if TYPE_CHECKING:
@@ -98,6 +99,42 @@ def _project_owner(ctx: click.Context) -> str | None:
         return None
 
 
+def _sdk_key_cache(cfg: config.HopsConfig) -> str | None:
+    """The SDK's cached key file when ``hopsworks.login()`` read it, else None.
+
+    With no key from the CLI, the SDK falls back to that cache, for the SaaS host only.
+    """
+    import hopsworks  # noqa: PLC0415 - loaded once a call was refused
+    from hopsworks_common import constants  # noqa: PLC0415
+
+    if cfg.api_key:
+        return None
+    hostname = urllib.parse.urlparse(auth.normalize_host(cfg.host or "")).netloc
+    if hostname.split(":")[0] != constants.HOSTS.SAAS_HOST:
+        return None
+    path = hopsworks._get_cached_api_key_path()
+    return path if os.path.exists(path) else None
+
+
+def _refused_key_hint(cfg: config.HopsConfig | None) -> str:
+    """Name where the refused API key came from and how to replace it."""
+    source = cfg.api_key_source if cfg is not None else None
+    if source:
+        return f" The key came from {source}: {auth.refused_key_fix(source)}."
+    if cfg is not None and cfg.internal:
+        return ""
+    cache = _sdk_key_cache(cfg) if cfg is not None else None
+    if cache:
+        return (
+            f" The key came from the SDK's key cache {cache}: delete it, or run "
+            "`hops setup --force` to create a new one."
+        )
+    return (
+        f" Check the key in {config.CONFIG_PATH}, or run `hops setup --force` "
+        "to create a new one."
+    )
+
+
 def _explain_rest_error(
     exc: BaseException | None, ctx: click.Context | None = None
 ) -> str | None:
@@ -153,10 +190,8 @@ def _explain_rest_error(
     where = f"HTTP {status}" + (f", error {code}" if code else "")
     hint = ""
     if status == 401:
-        hint = (
-            f" Check the key in {config.CONFIG_PATH}, or run `hops setup --force` "
-            "to create a new one."
-        )
+        cfg = (ctx.obj or {}).get("config") if ctx is not None else None
+        hint = _refused_key_hint(cfg)
     elif code == _TAG_SCHEMA_NOT_DEFINED:
         hint = (
             " This cluster has no such tag schema, and only a Hopsworks admin can "
@@ -288,7 +323,10 @@ class LazyGroup(click.Group):
         try:
             return super().invoke(ctx)
         except click.ClickException as exc:
-            cause = exc.__cause__ or exc.__context__
+            # ``raise ... from None`` marks a cause the message already explains.
+            cause = exc.__cause__ or (
+                None if exc.__suppress_context__ else exc.__context__
+            )
             friendly = _explain_rest_error(cause, ctx)
             if friendly:
                 raw = str(cause)
@@ -417,6 +455,8 @@ def cli(
         flag_project=project_flag,
         flag_hostname_verification=verify_flag,
     )
+    if api_key_stdin and api_key_flag:
+        ctx.obj["config"].api_key_source = "--api-key-stdin"
 
 
 def main() -> None:

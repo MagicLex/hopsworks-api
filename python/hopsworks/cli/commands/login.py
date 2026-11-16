@@ -31,7 +31,9 @@ from hopsworks.cli import auth, config, output
     default=True,
     help="Persist the API key to ~/.hops.toml. On by default; use --no-save-key to skip.",
 )
+@click.pass_context
 def login_cmd(
+    ctx: click.Context,
     host_flag: str | None,
     api_key_flag: str | None,
     project_flag: str | None,
@@ -45,21 +47,20 @@ def login_cmd(
 
     \f
     Args:
+        ctx: Click context; its resolved config already carries the root flags.
         host_flag: Value of `--host`; prompted if neither flag, env, nor config has it.
         api_key_flag: Value of `--api-key`; prompted with hidden input if absent.
         project_flag: Value of `--project`; may be None.
         verify_flag: True for `--verify`, False for `--no-verify`, None if neither was passed.
         save_key: When True, persist the validated key to `~/.hops.toml`.
     """
-    cfg = config.load(
-        flag_host=host_flag,
-        flag_api_key=api_key_flag,
-        flag_project=project_flag,
-        flag_hostname_verification=verify_flag,
+    cfg = config.apply_overrides(
+        ctx.obj["config"], host_flag, api_key_flag, project_flag, verify_flag
     )
 
     host = cfg.host or click.prompt("Hopsworks host", default=config.DEFAULT_HOST)
     host = auth.normalize_host(host)
+    source = cfg.api_key_source
     api_key = cfg.api_key or click.prompt("API key", hide_input=True)
     project = cfg.project or project_flag
 
@@ -71,9 +72,7 @@ def login_cmd(
             hostname_verification=cfg.hostname_verification,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(
-            f"Could not log in: {auth.login_failure(exc)}"
-        ) from exc
+        auth.login_failed(exc, source)
 
     project_name = getattr(project_obj, "name", project or None)
 
