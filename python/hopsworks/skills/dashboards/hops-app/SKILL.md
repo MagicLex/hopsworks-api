@@ -98,9 +98,10 @@ skill's `references/` directory):
   `hops app deploy`.
 - [references/data.md](references/data.md): reading feature groups (Trino by default), a model or
   a deployment from the app, and Trino from a JavaScript app.
-- [references/look.md](references/look.md): the Hopsworks theme, and checking the layout.
+- [references/look.md](references/look.md): the hops-design tokens and components in the
+  skeleton's `app.css`, and the look check.
 - [references/frameworks.md](references/frameworks.md): writing a Streamlit, Flask, Gradio,
-  Node.js or custom app by hand, and Streamlit caching.
+  Node.js or custom app by hand, the Streamlit theme, and Streamlit caching.
 - [references/libraries.md](references/libraries.md): a library the environment lacks, or a
   pickled model.
 - [references/git.md](references/git.md): an app whose source is a git repository.

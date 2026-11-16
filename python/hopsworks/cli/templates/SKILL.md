@@ -188,7 +188,8 @@ Register flags:
 
 ```bash
 hops deployment list
-hops deployment info <name>
+hops deployment info <name>                     # Status (live) and Restarts of the predictor's pods
+hops deployment info <name> --stable 60         # exit 1 unless Running with no restart for 60 s
 hops deployment create <model> [--version N] [--script predict.py]
 hops deployment start <name> [--no-wait] [--timeout 600]
 hops deployment stop <name>
