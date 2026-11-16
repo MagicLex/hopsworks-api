@@ -57,6 +57,34 @@ def api_base(host: str) -> str:
     return normalize_host(host) + "/hopsworks-api/api"
 
 
+def login_failure(exc: Exception) -> str:
+    """Return the reason a login failed, for the text after "Could not log in: ".
+
+    A 401 means the backend refused the API key. A 403 means the key is valid but lacks access.
+    Either way the backend's own message is kept.
+
+    Args:
+        exc: Whatever ``hopsworks.login()`` raised.
+
+    Returns:
+        A one-line reason.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status not in (401, 403):
+        return str(exc)
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        body = {}
+    detail = body.get("errorMsg") or body.get("usrMsg") or response.reason
+    if status == 401:
+        return f"the API key was refused ({detail})"
+    return f"access refused ({detail})"
+
+
 def login(
     host: str,
     api_key_value: str | None = None,
