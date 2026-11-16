@@ -299,8 +299,9 @@ def test_a_failed_execution_without_stdout_reports_at_once(mock_project, hopsfs,
     assert "etl: execution #7 FAILED. Full logs" in result.output
 
 
-@pytest.mark.parametrize("job_type", ["PYTHON", "DOCKER"])
-def test_a_job_that_writes_its_logs_first_reports_at_once(
+# Python and Docker write their logs before the final state, Spark and Ray set it after them.
+@pytest.mark.parametrize("job_type", ["PYTHON", "DOCKER", "SPARK", "PYSPARK", "RAY"])
+def test_a_job_whose_logs_are_known_at_its_final_state_reports_at_once(
     mock_project, hopsfs, clock, job_type
 ):
     result, expands, _ = _wait(mock_project, ["RUNNING", "FAILED"], job_type=job_type)
@@ -311,12 +312,10 @@ def test_a_job_that_writes_its_logs_first_reports_at_once(
     assert "(no stdout.log)\n(no stderr.log)" in result.output
 
 
-@pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "RAY", "INGESTION"])
 def test_other_jobs_keep_the_sdk_wait_for_their_logs_for_what_is_left(
-    mock_project, hopsfs, clock, job_type
+    mock_project, hopsfs, clock
 ):
-    # Spark and Ray aggregate their logs after the final status, multi-table ingestion after
-    # the final state.
+    # Multi-table ingestion merges its logs after the final state.
     hopsfs.files[STDOUT] = ("written after the final state\n", 2)
     hopsfs.files[STDERR] = ("Traceback\n", 1)
     left = []
@@ -332,7 +331,7 @@ def test_other_jobs_keep_the_sdk_wait_for_their_logs_for_what_is_left(
             ["RUNNING", "FAILED"],
             "--timeout",
             "100",
-            job_type=job_type,
+            job_type="INGESTION",
             command="wait",
         )
     assert result.exit_code == 1
@@ -357,6 +356,7 @@ def test_a_spark_wait_ends_once_its_final_status_is_known(mock_project, hopsfs, 
     assert "execution #7 SUCCEEDED" in result.output
 
     # Spark sets the final status before it aggregates the logs: only the final state ends it.
+    start = clock.now
     result, expands, _ = _wait(
         mock_project,
         [
@@ -368,6 +368,8 @@ def test_a_spark_wait_ends_once_its_final_status_is_known(mock_project, hopsfs, 
     )
     assert result.exit_code == 1
     assert len(expands) >= 3
+    # The SDK's wait ends with the final state, though the backend wrote no log.
+    assert clock.now - start == 6
     assert "etl: execution #7: AGGREGATING_LOGS (3 s)" in result.output
     assert "etl: execution #7 FAILED" in result.output
 
