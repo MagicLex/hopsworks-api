@@ -161,7 +161,7 @@ When the training agent returns `unmet`, act on its recommendation:
 | --- | --- | --- |
 | a concrete feature from the declared sources | build it, add it to `requirements.features` with `by: claude`, new feature view and training dataset versions with the same split policy, short checks, a new round from a fresh baseline | yes, at most one feature per round, three rounds per invocation |
 | a missing kind of data | ask: add a source, accept the best model, stop | no |
-| target not reachable | ask, with the runs table and the best validation and test metrics: relax the target, add data, accept the best model, stop | no |
+| target not reachable | ask, with the runs table and the best validation and test metrics: relax the target, add data, accept the best model, stop. When the target is `by: claude`: no question; accept the best model with a `decisions` line. | no |
 
 "Accept the best model" runs acceptance on the best kept run and sets
 `training.status: accepted` with a `decisions` line. An unmet inference round is
