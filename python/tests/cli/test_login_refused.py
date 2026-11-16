@@ -8,8 +8,10 @@ from unittest import mock
 import click
 import pytest
 import requests
+from click.testing import CliRunner
 from hopsworks import ProjectException, _prompt_project
-from hopsworks.cli import auth, session
+from hopsworks.cli import auth, config, session
+from hopsworks.cli.main import cli
 from hopsworks_common.client import base, exceptions, session_cache
 
 
@@ -47,6 +49,7 @@ def _get_project(monkeypatch, error):
             project="blah",
             internal=False,
             hostname_verification=False,
+            api_key_source=None,
         ),
     )
     monkeypatch.setattr(auth, "login", mock.Mock(side_effect=error))
@@ -119,6 +122,122 @@ def test_a_refused_key_with_a_cached_session_says_the_same(tmp_path, monkeypatch
         session_cache.bind("h", 443, "k", None)
 
     client._refresh_session.assert_called_once()
-    assert auth.login_failure(e.value) == (
-        "the API key was refused (API key not found in the database)"
+    with pytest.raises(click.ClickException) as refusal:
+        auth.login_failed(e.value)
+    assert refusal.value.message == (
+        "Could not log in: the API key was refused (API key not found in the database)"
     )
+
+
+def _login_refused_through_the_cli(monkeypatch, args=(), stdin=None, error=None):
+    """Run a throwaway command whose login raises ``error``, with ``args`` as root options."""
+
+    @click.command("boom")
+    @click.pass_context
+    def boom(ctx):
+        session.get_project(ctx)
+
+    monkeypatch.setattr(auth, "login", mock.Mock(side_effect=error or _refused()))
+    cli.commands["boom"] = boom
+    try:
+        return CliRunner().invoke(cli, [*args, "boom"], input=stdin)
+    finally:
+        del cli.commands["boom"]
+
+
+REFUSED = "Error: Could not log in: the API key from {} was refused (API key not found in the database). {}.\n"
+
+
+def test_a_refused_key_from_the_config_file_names_file_and_profile(
+    tmp_home, monkeypatch
+):
+    config.save(config.HopsConfig(host="https://h", api_key="A.B"))
+
+    result = _login_refused_through_the_cli(monkeypatch)
+
+    assert result.output == REFUSED.format(
+        f"{config.CONFIG_PATH} (profile default)",
+        "Check it, or run `hops setup --force` to create a new one",
+    )
+
+
+def test_a_refused_key_from_the_env_var_names_it_once(tmp_home, monkeypatch):
+    config.save(config.HopsConfig(host="https://h", api_key="A.B"))
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "C.D")
+
+    result = _login_refused_through_the_cli(monkeypatch)
+
+    assert result.output == REFUSED.format(
+        "HOPSWORKS_API_KEY",
+        f"Check it, or unset it to use the key in {config.CONFIG_PATH}",
+    )
+
+
+def test_a_refused_key_from_the_flag_names_it(tmp_home, monkeypatch):
+    monkeypatch.setenv("HOPSWORKS_HOST", "https://h")
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "C.D")
+
+    result = _login_refused_through_the_cli(monkeypatch, args=("--api-key", "E.F"))
+
+    assert result.output == REFUSED.format("--api-key", "Check it")
+
+
+def test_a_refused_key_from_stdin_names_the_stdin_flag(tmp_home, monkeypatch):
+    monkeypatch.setenv("HOPSWORKS_HOST", "https://h")
+
+    result = _login_refused_through_the_cli(
+        monkeypatch, args=("--api-key-stdin",), stdin="E.F\n"
+    )
+
+    assert result.output == REFUSED.format("--api-key-stdin", "Check it")
+
+
+def test_hops_login_names_the_key_source_once(tmp_home, monkeypatch):
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "C.D")
+    monkeypatch.setattr(auth, "verify", mock.Mock(side_effect=_refused()))
+
+    result = CliRunner().invoke(cli, ["login", "--host", "https://h"])
+
+    assert result.output == REFUSED.format(
+        "HOPSWORKS_API_KEY",
+        f"Check it, or unset it to use the key in {config.CONFIG_PATH}",
+    )
+
+
+def test_hops_login_uses_the_root_api_key_flags(tmp_home, monkeypatch):
+    config.save(config.HopsConfig(host="https://h", api_key="FILE.KEY"))
+    verify = mock.Mock(side_effect=_refused())
+    monkeypatch.setattr(auth, "verify", verify)
+
+    flag = CliRunner().invoke(cli, ["--api-key", "FLAG.KEY", "login"])
+    stdin = CliRunner().invoke(cli, ["--api-key-stdin", "login"], input="STDIN.KEY\n")
+
+    keys = [c.kwargs["api_key_value"] for c in verify.call_args_list]
+    assert keys == ["FLAG.KEY", "STDIN.KEY"]
+    assert flag.output == REFUSED.format("--api-key", "Check it")
+    assert stdin.output == REFUSED.format("--api-key-stdin", "Check it")
+
+
+def test_the_login_flag_overrides_the_root_one(tmp_home, monkeypatch):
+    config.save(config.HopsConfig(host="https://h", api_key="FILE.KEY"))
+    verify = mock.Mock(side_effect=_refused())
+    monkeypatch.setattr(auth, "verify", verify)
+
+    CliRunner().invoke(cli, ["--api-key", "ROOT.KEY", "login", "--api-key", "OWN.KEY"])
+
+    assert verify.call_args.kwargs["api_key_value"] == "OWN.KEY"
+
+
+def test_a_login_refused_for_scope_keeps_the_scope_hint(tmp_home, monkeypatch):
+    monkeypatch.setenv("HOPSWORKS_HOST", "https://h")
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "C.D")
+    no_scope = _error(
+        403,
+        b'{"errorCode": 320004, "errorMsg": "No valid scope found", '
+        b'"usrMsg": "Valid scope for this invocation is: [PROJECT]"}',
+    )
+
+    result = _login_refused_through_the_cli(monkeypatch, error=no_scope)
+
+    assert "Could not log in: access refused" in result.output
+    assert "the PROJECT scope, and yours does not have it" in result.output
