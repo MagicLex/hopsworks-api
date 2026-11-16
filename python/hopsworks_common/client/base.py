@@ -167,6 +167,8 @@ class Client:
                 Without it a stalled connection blocks the caller indefinitely, so pass one wherever the caller has its own deadline to honour.
             deadline: Monotonic time after which no request, token refresh or rate-limit retry starts.
                 Each socket wait is clipped to the time left, so a response can finish after it; a successful one is returned.
+                Under it a cached session is not refreshed, and an error answer is closed unread and raised as
+                `requests.HTTPError` with its status and reason.
             retry_while_unavailable: False sends the call once, for a caller that needs the backend's own answer to a gateway error.
 
         Returns:
@@ -217,12 +219,18 @@ class Client:
                     retry_while_unavailable,
                 )
             except requests.exceptions.SSLError:
-                if not session_cache.used():
+                # Under a deadline a cached session is not refreshed: the refresh's own calls carry no budget.
+                if not session_cache.used() or deadline is not None:
                     raise
                 response = None
-            if session_cache.used() and _session_went_stale(response):
+            if (
+                session_cache.used()
+                and deadline is None
+                and _session_went_stale(response)
+            ):
                 # A session an earlier process cached is refused: log in again and repeat the call once.
-                # Refused this way the server did nothing, so a write repeats safely.
+                # Refused this way the server did nothing, so a write repeats safely. Not under a
+                # deadline: the refusal's body is not read, and the refresh's calls carry no budget.
                 return self._send_request(
                     method,
                     self._refresh_session(path_params),
@@ -254,6 +262,8 @@ class Client:
                 )
                 # A requests.Response is falsy for any 4xx or 5xx, so `or` would drop a refreshed 429.
                 if refreshed is not None:
+                    # The 401 is replaced: release its connection, which a streamed answer holds until read.
+                    response.close()
                     response = refreshed
 
             wait = self._rate_limited_wait(response) if replayable else None
@@ -274,6 +284,13 @@ class Client:
             response.close()
             raise requests.exceptions.Timeout("HTTP request exceeded its deadline")
         if response.status_code // 100 != 2:
+            if deadline is not None:
+                # Reading the error body could outlast the deadline: status and reason only.
+                response.close()
+                raise requests.HTTPError(
+                    f"HTTP {response.status_code} {response.reason} from {url}",
+                    response=response,
+                )
             raise exceptions.RestAPIError(url, response)
 
         if stream:
@@ -481,7 +498,10 @@ class Client:
             refreshed = self._retry_token_expired(
                 request, stream, wait * 2, retries + 1, timeout, deadline
             )
-            return refreshed if refreshed is not None else response
+            if refreshed is None:
+                return response
+            response.close()
+            return refreshed
         # If the number of retries have expired, the _send_request method
         # will throw an exception to the user as part of the status_code validation.
         return response
