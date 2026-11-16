@@ -110,8 +110,10 @@ is the whole dispatch:
    "(Recommended)": the next piece, a dashboard or an app over the result, or the whole ML system.
    A deployment, a schedule or an app the request did not name is offered unmarked.
 
-Ask only what the request leaves open, in one `AskUserQuestion` call. Every prompt ends with
-`where: <Hopsworks terminal | external client>`.
+Ask only what the request leaves open, in one `AskUserQuestion` call.
+
+Every builder prompt ends with `where: <Hopsworks terminal | external client>`; a question to
+the user never does.
 
 When **hops-deploy-builder** stops on an offline feature group, ask once whether to turn it
 online ("Copies its rows to the online store; the group stays as it is otherwise"), with no
