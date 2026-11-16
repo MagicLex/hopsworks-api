@@ -62,6 +62,7 @@ fv = fs.get_feature_view(name="my_fv", version=1)  # no FV yet? create one first
 #    whole into the program) keeps one entity's rows in one part, by a hash of its key: the
 #    same rows give the same parts on every read, so a notebook scores the same test rows later.
 X, y = fv.training_data(primary_key=True, statistics_config=False)
+y = y.squeeze("columns")  # the label comes back as a one-column frame
 td_version = fv.get_last_accessed_training_dataset()
 X_train, X_val, X_test, y_train, y_val, y_test = split_by_key(
     X, y, key="order_id", drop=[*fv.primary_keys, "order_ts"]  # every key and the event time leave X
