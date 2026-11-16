@@ -74,15 +74,40 @@ _VERIFY_HELP = (
 _NO_VALID_SCOPE = 320004
 # RESTCodes.SchematizedTagErrorCode: the tag's schema is not defined on the cluster.
 _TAG_SCHEMA_NOT_DEFINED = 370000
+# RESTCodes.ProjectErrorCode: the caller's project role does not allow the action.
+_PROJECT_ROLE_FORBIDDEN = 150068
 
 
-def _explain_rest_error(exc: BaseException | None) -> str | None:
+def _project_owner(ctx: click.Context) -> str | None:
+    """The project owner's full name, else their email; None when the project cannot be read.
+
+    The owner is an email in the project info; its member list carries the names.
+    """
+    from hopsworks.cli import session  # noqa: PLC0415 - loaded once a call was refused
+
+    try:
+        project = session.get_project(ctx)
+        email = project.owner
+        for member in project.project_team or []:
+            user = member.get("user") or {}
+            if user.get("email") == email:
+                name = f"{user.get('fname') or ''} {user.get('lname') or ''}".strip()
+                return name or email
+        return email or None
+    except Exception:  # noqa: BLE001 - the refusal is reported either way
+        return None
+
+
+def _explain_rest_error(
+    exc: BaseException | None, ctx: click.Context | None = None
+) -> str | None:
     """Reduce a REST failure to the one line a user can act on.
 
     Returns None for anything that is not the SDK's ``RestAPIError``, so callers
     can re-raise unrelated exceptions untouched. A missing API key scope names
-    the scope the endpoint wanted and how to grant it; every other REST error
-    keeps the status, the error code and the server's own user message and
+    the scope the endpoint wanted and how to grant it; a project role refusal
+    names the project owner to ask, read from ``ctx``'s project; every other REST
+    error keeps the status, the error code and the server's own user message and
     drops the URL and raw body that ``str(exc)`` carries.
     """
     from hopsworks_common.client import (
@@ -118,6 +143,11 @@ def _explain_rest_error(exc: BaseException | None) -> str | None:
             f"This command needs an API key with {need}. Add it under Account "
             "Settings > API keys, or run `hops setup --force` to create a key "
             "with every scope the CLI uses."
+        )
+    if code == _PROJECT_ROLE_FORBIDDEN:
+        owner = _project_owner(ctx) if ctx is not None else None
+        return "Only the project's Data owner can do this: ask " + (
+            owner or "the project's Data owner"
         )
     status = getattr(response, "status_code", None)
     where = f"HTTP {status}" + (f", error {code}" if code else "")
@@ -259,7 +289,7 @@ class LazyGroup(click.Group):
             return super().invoke(ctx)
         except click.ClickException as exc:
             cause = exc.__cause__ or exc.__context__
-            friendly = _explain_rest_error(cause)
+            friendly = _explain_rest_error(cause, ctx)
             if friendly:
                 raw = str(cause)
                 exc.message = (
@@ -269,7 +299,7 @@ class LazyGroup(click.Group):
                 )
             raise
         except Exception as exc:  # noqa: BLE001 - narrowed by _explain_rest_error
-            friendly = _explain_rest_error(exc)
+            friendly = _explain_rest_error(exc, ctx)
             if friendly is None:
                 raise
             raise click.ClickException(friendly) from exc
