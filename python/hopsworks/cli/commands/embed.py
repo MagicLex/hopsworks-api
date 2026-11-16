@@ -153,9 +153,11 @@ def fg_embed(
     """Embed a text column of SOURCE into a searchable feature group.
 
     This command makes the embedding group and its Python job GROUP_embed,
-    starts one execution, prints its id and returns; it does not wait. Read
-    the job's state with `hops job info GROUP_embed` and its log with
-    `hops job logs`. A start the platform refuses for capacity exits non-zero
+    starts one execution, prints its id and returns; it does not wait. Before
+    a step that searches the group, run `hops job wait GROUP_embed --execution
+    ID --timeout 600` once: it returns when the build ends and exits 1 with the
+    log tail if it failed (`hops job history GROUP_embed` reads the state once).
+    A start the platform refuses for capacity exits non-zero
     and starts nothing: run it again after the time it names.
 
     Each row's text is cut into chunks of --chunk-chars characters that
