@@ -29,7 +29,7 @@ Already known, no need to look again before the first question:
 `/hops-ml` runs the interview on a fast model; `/hops status` prints the phase table; menus, dashboards and apps are `/hops`.
 
 Load **hops-reqs** first: its `SKILL.md` and `references/` are the knowledge this factory runs on
-(the schema and rules in `references/system-yaml.md`, the data-source routes, the system
+(the rules in `references/system-yaml.md`, the schema in `references/system-yaml-schema.md`, the data-source routes, the system
 template, bundles, tests, the repository contract). Read a skill with `hops skills info <name>`, one
 skill per command, and a file it names with `hops skills info <name> references/<file>`. The second
 line it prints is the skill's `SKILL.md` path: `<hops-reqs>` below is the directory of hops-reqs.
