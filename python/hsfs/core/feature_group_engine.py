@@ -319,6 +319,7 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
                 self._columns_for_user_schema(feature_group),
                 dataframe_features,
                 decimals_cast=decimals_cast,
+                timestamp_ntz_converts=feature_group.time_travel_format == "DELTA",
             )
 
         # ge validation on python and non stream feature groups on spark
@@ -1072,6 +1073,7 @@ class FeatureGroupEngine(feature_group_base_engine.FeatureGroupBaseEngine):
                 self._columns_for_user_schema(feature_group),
                 dataframe_features,
                 decimals_cast=self._delta_rs_casts_decimals(feature_group),
+                timestamp_ntz_converts=feature_group.time_travel_format == "DELTA",
             )
 
         # set primary, foreign and partition key columns
