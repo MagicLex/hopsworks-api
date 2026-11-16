@@ -37,6 +37,13 @@ installs package.json `dependencies`, at package-lock.json's versions, into
 `python-agent-pipeline`, an agent environment: it runs apps, and Hopsworks
 refuses a job on it (error 300021).
 
+`hops app deploy` puts the app in `Resources/apps/<name>/`, so any member of the
+project can start it, and records a hash of the folder in the app; a start runs
+a copy of the folder only when it matches, so a file someone else writes there
+fails the next start until a redeploy. An app runs as whoever starts it, like a
+job. It reads its folder once at start: keep data in the project's datasets or
+the feature store, never in the app's folder.
+
 ## Contract
 
 - **Input:** an app (Streamlit, Flask, Gradio, Node.js or custom) + environment + memory.
