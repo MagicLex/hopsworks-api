@@ -241,9 +241,22 @@ def test_deployment_create_sets_the_cores_and_memory_it_is_given(mock_project):
     result = CliRunner().invoke(cli, ["deployment", "create", "fraud", "--cores", "2"])
     assert result.exit_code == 0, result.output
     resources = model.deploy.call_args.kwargs["resources"]
-    assert (resources.limits.cores, resources.limits.memory) == (2, 1024)
-    assert (resources.requests.cores, resources.requests.memory) == (1, 1024)
+    assert resources.to_dict()["predictorResources"] == {
+        "requests": {"cores": 1.0, "gpus": 0},
+        "limits": {"cores": 2.0, "gpus": 0},
+    }
     assert resources.num_instances == 1
+
+    model.deploy.reset_mock()
+    result = CliRunner().invoke(
+        cli, ["deployment", "create", "fraud", "--memory", "2048"]
+    )
+    assert result.exit_code == 0, result.output
+    resources = model.deploy.call_args.kwargs["resources"]
+    assert resources.to_dict()["predictorResources"] == {
+        "requests": {"memory": 2048, "gpus": 0},
+        "limits": {"memory": 2048, "gpus": 0},
+    }
 
     model.deploy.reset_mock()
     result = CliRunner().invoke(cli, ["deployment", "create", "fraud"])

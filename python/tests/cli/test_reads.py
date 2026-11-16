@@ -574,6 +574,40 @@ def test_deployment_list_falls_back_when_state_errors(mock_project):
     assert "Stopped" in result.output
 
 
+def _deployment_without_resources(monkeypatch):
+    # A real deployment read back with no resources: requests and limits are None.
+    from hsml import deployment, predictor
+
+    for name, value in {
+        "_get_serving_num_instances_limits": [-1, -1],
+        "_is_scale_to_zero_required": False,
+        "_is_saas_connection": False,
+        "_is_kserve_installed": True,
+    }.items():
+        monkeypatch.setattr(f"hopsworks_common.client.{name}", lambda *_, v=value: v)
+    pred = predictor.Predictor(
+        name="bare", model_name="m", model_path="p", model_server="PYTHON"
+    )
+    d = deployment.Deployment(pred)
+    d.get_state = mock.MagicMock(return_value=mock.MagicMock(status="Running"))
+    return d
+
+
+def test_deployment_list_and_info_without_resources(mock_project, monkeypatch):
+    d = _deployment_without_resources(monkeypatch)
+    assert d.resources.requests is None and d.resources.limits is None
+    d.describe()
+    repr(d.resources)
+    ms = mock.MagicMock()
+    ms.get_deployments.return_value = [d]
+    ms.get_deployment.return_value = d
+    mock_project.get_model_serving.return_value = ms
+    for args in (["deployment", "list"], ["deployment", "info", "bare"]):
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, result.output
+        assert "bare" in result.output
+
+
 def test_deployment_info_not_found(mock_project):
     ms = mock.MagicMock()
     ms.get_deployment.return_value = None
