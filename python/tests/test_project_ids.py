@@ -29,6 +29,7 @@ from hopsworks_common.client.exceptions import (
 )
 from hopsworks_common.client.external import Client as ExternalClient
 from hopsworks_common.core import project_api, secret_api
+from hopsworks_common.core.costs_api import CostsApi
 from hopsworks_common.core.dataset_api import DatasetApi
 from hopsworks_common.core.project_api import ProjectApi
 from hopsworks_common.project import Project
@@ -281,7 +282,7 @@ class TestShareByProject:
         }
 
 
-class TestIdForSecrets:
+class TestIdForSecretsAndCosts:
     def test_secret_scope_takes_a_project_id(self, mocker):
         client_instance = MagicMock()
         mocker.patch(
@@ -297,6 +298,24 @@ class TestIdForSecrets:
         api._project_api._get_project.assert_not_called()
         body = json.loads(client_instance._send_request.call_args.kwargs["data"])
         assert body["scope"] == 9
+
+    def test_costs_take_a_project_id(self, mocker):
+        client_instance = MagicMock()
+        mocker.patch(
+            "hopsworks_common.core.costs_api.client._get_instance",
+            return_value=client_instance,
+        )
+        lookup = mocker.patch(
+            "hopsworks_common.core.costs_api.project_api.ProjectApi._get_project"
+        )
+        mocker.patch(
+            "hopsworks_common.core.costs_api.NamespaceCosts.from_response_json"
+        )
+
+        CostsApi().get_project_costs("week", project=9)
+
+        lookup.assert_not_called()
+        assert client_instance._send_request.call_args.args[1][:2] == ["project", 9]
 
 
 class TestLoginEnvProjectId:
