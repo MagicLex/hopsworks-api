@@ -135,8 +135,6 @@ def test_app_create_drops_unsupported_kwargs(mock_project):
         name,
         app_path=None,
         environment="python-app-pipeline",
-        memory=2048,
-        cores=1.0,
         env_vars=None,
     ):
         return created
@@ -382,6 +380,18 @@ def test_app_create_forwards_args(mock_project):
     )
 
 
+def test_app_create_leaves_out_unset_memory_and_cores(mock_project):
+    apps = mock_project.get_app_api.return_value
+    apps.create_app.return_value = _fake_app(name="dash")
+    result = CliRunner().invoke(
+        cli, ["app", "create", "dash", "--path", "Resources/dash.py"]
+    )
+    assert result.exit_code == 0, result.output
+    kwargs = apps.create_app.call_args.kwargs
+    assert "memory" not in kwargs
+    assert "cores" not in kwargs
+
+
 def test_app_create_no_db_access(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
@@ -583,8 +593,6 @@ def test_app_create_flask_git_forwards_entrypoint_script(mock_project):
         name="web",
         app_kind="FLASK",
         environment="python-app-pipeline",
-        memory=2048,
-        cores=1.0,
         app_port=5000,
         git_url="https://github.com/gibchikafa/appshopsworkstests.git",
         git_provider="GitHub",
@@ -640,8 +648,6 @@ def test_app_create_streamlit_git_forwards_args(mock_project):
         name="dash",
         app_kind="STREAMLIT",
         environment="custom-env",
-        memory=2048,
-        cores=1.0,
         git_url="https://github.com/gibchikafa/appshopsworkstests.git",
         git_provider="GitHub",
         git_branch="main",
@@ -681,8 +687,6 @@ def test_app_create_custom_git_forwards_args(mock_project):
         name="dash",
         app_kind="CUSTOM",
         environment="python-app-pipeline",
-        memory=2048,
-        cores=1.0,
         entrypoint_command='python -m uvicorn dash:app --host 0.0.0.0 --port "$APP_PORT"',
         app_port=8080,
         git_url="https://github.com/gibchikafa/appshopsworkstests.git",

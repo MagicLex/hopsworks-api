@@ -352,9 +352,17 @@ def _report_running(name: str, a: Any) -> None:
     help="Python environment name backing the app.",
 )
 @click.option(
-    "--memory", type=int, default=2048, show_default=True, help="Memory in MB."
+    "--memory",
+    type=int,
+    default=None,
+    help="Memory in MB. Unset means the cluster default.",
 )
-@click.option("--cores", type=float, default=1.0, show_default=True, help="CPU cores.")
+@click.option(
+    "--cores",
+    type=float,
+    default=None,
+    help="CPU cores. Unset means the cluster default.",
+)
 @click.option(
     "--start",
     is_flag=True,
@@ -381,8 +389,8 @@ def app_create(
     cold_start_timeout_seconds: int | None,
     description: str | None,
     environment: str,
-    memory: int,
-    cores: float,
+    memory: int | None,
+    cores: float | None,
     start: bool,
 ) -> None:
     """Create a new app.
@@ -413,8 +421,8 @@ def app_create(
         cold_start_timeout_seconds: Seconds the first request waits for the app to wake.
         description: Optional app description.
         environment: Python environment name.
-        memory: Memory in MB.
-        cores: CPU cores.
+        memory: Memory in MB; None leaves the choice to the cluster.
+        cores: CPU cores; None leaves the choice to the cluster.
         start: When True, start the app and wait for serving.
     """
     app_kind = app_kind.upper()
@@ -454,9 +462,11 @@ def app_create(
         "name": name,
         "app_kind": app_kind,
         "environment": environment,
-        "memory": memory,
-        "cores": cores,
     }
+    if memory is not None:
+        create_kwargs["memory"] = memory
+    if cores is not None:
+        create_kwargs["cores"] = cores
     if description is not None:
         create_kwargs["description"] = description
     if app_path is not None:
