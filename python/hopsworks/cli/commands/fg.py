@@ -116,11 +116,20 @@ def fg_info(
         featurestore: Pin lookup to this feature store by name.
     """
     fg = _get_fg(ctx, name, version, featurestore)
-    size = _offline_size(session.get_project(ctx).get_dataset_api(), fg)
+    size_error = None
+    try:
+        size = _offline_size(session.get_project(ctx).get_dataset_api(), fg)
+        size_label = f"{_human_bytes(size[0])} ({size[1]} files)" if size else "-"
+    except click.ClickException as exc:
+        size, size_label, size_error = None, exc.message, exc.message
     if output.JSON_MODE:
+        error = {"offline_size_error": size_error} if size_error else {}
         output.print_json(
-            {**_fg_to_dict(fg), "offline_size_bytes": size[0] if size else None}
+            {**_fg_to_dict(fg), "offline_size_bytes": size[0] if size else None, **error}
         )
+        if size_error:
+            # The rest was printed; the exit code says a read failed.
+            ctx.exit(1)
         return
     rows = [
         ["ID", getattr(fg, "id", "?")],
@@ -131,7 +140,7 @@ def fg_info(
         ["Table format", getattr(fg, "time_travel_format", None) or "-"],
         [
             "Offline size",
-            f"{_human_bytes(size[0])} ({size[1]} files)" if size else "-",
+            size_label,
         ],
         ["Primary key", ", ".join(getattr(fg, "primary_key", []) or []) or "-"],
         ["Event time", getattr(fg, "event_time", None) or "-"],
@@ -143,6 +152,8 @@ def fg_info(
         rows += [[_SOURCE_LABELS[k], v or "-"] for k, v in source.items()]
         rows.append(["Access", _access_label(fg)])
     output.print_table(["FIELD", "VALUE"], rows)
+    if size_error:
+        raise click.ClickException(size_error)
 
 
 @fg_group.command("test-access")
@@ -439,8 +450,10 @@ def _offline_size(dataset_api: Any, fg: Any) -> tuple[int, int] | None:
                 offset += len(entries)
                 if not entries or offset >= count:
                     break
-    except Exception:  # noqa: BLE001
-        return None  # no offline table yet (online only, or nothing inserted)
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):
+            return None  # no offline table yet (online only, or nothing inserted)
+        raise click.ClickException(f"Offline size could not be read: {exc}") from exc
     return total, files
 
 
