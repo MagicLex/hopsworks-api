@@ -705,6 +705,25 @@ def test_set_records_interview_answers_and_refuses_an_invalid_one(tmp_path):
     assert "system_type" in refused.stderr
     assert (target / "system.yaml").read_text(encoding="utf-8") == written
     assert not list(target.glob(".system.yaml.*"))
+    listed = _set(target, "requirements.consumers=[dashboard]")
+    assert listed.returncode == 1
+    assert "requirements.consumers" in listed.stderr
+
+
+def test_a_new_system_is_a_git_repository_unless_it_is_inside_one(tmp_path):
+    new_system = _load(REQS / "new_system.py")
+    alone = new_system.create(tmp_path / "churn")
+    branch = subprocess.run(
+        ["git", "-C", str(alone), "symbolic-ref", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert branch.stdout.strip() == "main"
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    nested = new_system.create(repo / "churn")
+    assert not (nested / ".git").exists()
 
 
 # endregion
