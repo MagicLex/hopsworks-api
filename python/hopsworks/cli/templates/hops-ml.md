@@ -39,6 +39,8 @@ When a system is listed above, read its `system.yaml`. With `requirements.status
 interview is over: reply with one line, run `/hops-build`, and stop. Otherwise continue from the
 first question below whose answer is not yet recorded.
 
+**Defaults, not questions.** Ask only what the request leaves open and no default below covers, and record each default in `decisions` with `by: claude`: system type batch (unless the problem needs real time); cadence daily; the data the request names (synthetic: batch tables, the story written from the problem); predictions used through the API (`consumers=api`, `app={wanted: false, status: skipped}`); code kept in Hopsworks (`system.repo` url `local`) unless the repository line shows an origin or `gh auth status` is logged in. Then ask one question: proceed with these, listing them in a line each, with no option marked "(Recommended)": the daily schedule holds cluster resources, so the user picks it here.
+
 ## The interview
 
 **1. What do you want to build?** Use the arguments when they say what to predict. Otherwise ask
@@ -73,7 +75,7 @@ In a Hopsworks terminal (`$HOPSFS_USER_HOME_DIR` set), also list it in the proje
 (`<slug>/` is not under `/Projects/<project>`, even when a Hopsable sandbox mounts the project, and
 there is no repository until *Where the code goes*), so `/hops-build` registers it.
 
-**2. What type of system?** Recommend from the problem: **batch** when predictions are used on a
+**2. What type of system?** Skipped when the default applies. Recommend from the problem: **batch** when predictions are used on a
 schedule (lists, reports, dashboards); **real-time** when each prediction answers a request as it
 happens (a transaction, a page view); **agentic** when an LLM should reason over data and tools.
 Record `requirements.system_type` (`batch`, `realtime` or `agent`).
@@ -83,11 +85,11 @@ independent.
 
 ### Batch
 
-- **How often are predictions made, or the dashboard updated?** Hourly, daily, weekly, or the
+- **How often are predictions made, or the dashboard updated?** Skipped when the default applies. Hourly, daily, weekly, or the
   user's own, none marked "(Recommended)": a schedule holds cluster resources, so the user picks
   it. Record `requirements.sla.batch.cadence`.
 - **Data.** See *Data sources* below.
-- **How are the predictions used?** A dashboard (recommended for a list people read), an app, or
+- **How are the predictions used?** Skipped when the default applies. A dashboard (recommended for a list people read), an app, or
   neither (another system reads the prediction feature group); ask the user to describe how they
   are consumed. Record `requirements.consumers`, one word: `ui` for a dashboard or an app, `api`
   when another system reads them, `both` when both do. Record also
@@ -133,7 +135,7 @@ source**, **upload files**, or **generate synthetic data** (when there is no dat
 - file: ask the path; put it in `Resources/<slug>/data/` as the **hops** skill's *Project files* rule (in a Hopsable sandbox, `$HOPS_TEMPLATES/SKILL.md`) says
   (a copy in the mount, else `hops files upload <path> Resources/<slug>/data/`); record
   `{name, kind: file, location, status: present}`;
-- synthetic: ask the shape (batch tables or a stream of events) and the story in one sentence;
+- synthetic: shape batch tables, story written from the problem; ask only when the problem gives none (the shape, batch tables or a stream of events, and the story in one sentence);
   record `{name, kind: synthetic, shape, status: needs_generation}`, then
   `data.<name>.generator.story=<the story>` and `data.status=pending`;
 - **new data source**: ask which system holds the data, proposing connector types from the table in
@@ -182,7 +184,7 @@ nothing else. Then ask *Where the code goes* and *Finish*.
 
 ## Where the code goes
 
-Ask once, at the end: the current GitHub repository (recommended when the repository line above
+Skipped when the default applies. Ask once, at the end: the current GitHub repository (recommended when the repository line above
 shows one), a new private repository to create at the start of `/hops-build`, or, without a
 GitHub login, keeping the code in Hopsworks only. Record
 `system.repo={url: <url, "new" or "local">}`.
