@@ -69,16 +69,19 @@ def environment(saved: dict) -> str:
     return (saved.get("environment") or {}).get("name", "?")
 
 
-def start(project_id: int, env: str | None = None) -> dict:
+def start(project_id: int, env: str | None = None, shutdown_hours: int = 1) -> dict:
     """Start the caller's Jupyter server with their saved Jupyter settings.
 
     With ``env``, in that Python environment, which the settings then keep.
+    Hopsworks stops the server ``shutdown_hours`` after its start; a level missing from the
+    cluster's ``jupyter_hour_shutdown_options`` becomes the first of them.
     """
     _client = client._get_instance()
     saved = settings(project_id)
     if env is not None:
         # Hopsworks resolves the environment by its name.
         saved["environment"] = {"name": env}
+    saved["shutdownLevel"] = shutdown_hours
     return _client._send_request(
         "POST",
         ["project", project_id, "jupyter", "start"],
@@ -172,8 +175,12 @@ def _ready(running: dict | None) -> bool:
     )
 
 
-def connect(project_id: int, timeout: float, env: str | None = None) -> Jupyter:
+def connect(
+    project_id: int, timeout: float, env: str | None = None, shutdown_hours: int = 1
+) -> Jupyter:
     """A client for the caller's Jupyter server, started first when it is not running.
+
+    A server started here stops ``shutdown_hours`` after its start.
 
     A server that is not ready yet is waited for, printing each status it goes through. With
     ``env``, the server must run in that environment: a running one in another is left alone,
@@ -190,7 +197,7 @@ def connect(project_id: int, timeout: float, env: str | None = None) -> Jupyter:
             )
     # A server that is up has no status changes to report, so `hops notebook run` stays quiet.
     quiet = _ready(running)
-    running = running or start(project_id, env)
+    running = running or start(project_id, env, shutdown_hours)
     while not _ready(running):
         status = (running or {}).get("status") or "starting"
         watch.see(status, waits.kube_reason(monitor(project_id)))
