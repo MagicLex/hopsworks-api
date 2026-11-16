@@ -308,10 +308,6 @@ def _deployment_to_dict(d: Any) -> dict[str, Any]:
 
 # region Write commands
 
-# The backend's default limits for a predictor instance.
-DEFAULT_CORES = 1.0
-DEFAULT_MEMORY_MB = 1024
-
 
 @deployment_group.command("create")
 @click.argument("model_name")
@@ -360,12 +356,12 @@ DEFAULT_MEMORY_MB = 1024
     "--cores",
     type=click.FloatRange(min=0, min_open=True),
     help="CPU cores each instance may use; half of them are requested. "
-    f"Default {DEFAULT_CORES:g}.",
+    "Unset means the backend default.",
 )
 @click.option(
     "--memory",
     type=click.IntRange(min=1),
-    help=f"Memory in MB each instance may use, all of it requested. Default {DEFAULT_MEMORY_MB}.",
+    help="Memory in MB each instance may use, all of it requested. Unset means the backend default.",
 )
 @click.pass_context
 def deployment_create(
@@ -484,17 +480,17 @@ def _serves_by_default(model: Any, serving_tool: str | None) -> bool:
 def _resources(cores: float | None, memory: int | None) -> Any:
     """One instance with `cores` and `memory` as its limits, or None for the backend's defaults.
 
-    Requests follow the defaults' shape: half the cores, all the memory.
+    Requests are half the cores and all the memory. A value left unset is not sent.
     """
     if cores is None and memory is None:
         return None
     from hsml.resources import PredictorResources, Resources
 
-    cores = DEFAULT_CORES if cores is None else cores
-    memory = DEFAULT_MEMORY_MB if memory is None else memory
     return PredictorResources(
         num_instances=1,
-        requests=Resources(cores=cores / 2, memory=memory, gpus=0),
+        requests=Resources(
+            cores=None if cores is None else cores / 2, memory=memory, gpus=0
+        ),
         limits=Resources(cores=cores, memory=memory, gpus=0),
     )
 

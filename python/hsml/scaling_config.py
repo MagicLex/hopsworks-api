@@ -227,7 +227,7 @@ class ComponentScalingConfig(ABC):
                 Unset means the cluster default (300 s).
             scale_up_stabilization_window_seconds: KEDA only.
                 How long (0-3600 s) the metric must stay above target before instances are added.
-                Unset means the cluster default (0 s).
+                Unset means the backend default.
             additional_scale_metrics: KEDA only.
                 Further metrics to scale on next to `scale_metric`, each a `{"scale_metric": ..., "target": ...}` dict or a `(scale_metric, target)` tuple; the most demanding metric decides the instance count.
                 A missing target takes the metric's default.
