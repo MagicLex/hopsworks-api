@@ -2408,7 +2408,7 @@ class FeatureView:
             lookback=Lookback.from_user_input(lookback),
         )
         warnings.warn(
-            f"Incremented version to `{td.version}`.",
+            f"Created training dataset version `{td.version}`.",
             util.VersionWarning,
             stacklevel=1,
         )
@@ -2734,7 +2734,7 @@ class FeatureView:
             lookback=Lookback.from_user_input(lookback),
         )
         warnings.warn(
-            f"Incremented version to `{td.version}`.",
+            f"Created training dataset version `{td.version}`.",
             util.VersionWarning,
             stacklevel=1,
         )
@@ -3055,7 +3055,7 @@ class FeatureView:
             lookback=Lookback.from_user_input(lookback),
         )
         warnings.warn(
-            f"Incremented version to `{td.version}`.",
+            f"Created training dataset version `{td.version}`.",
             util.VersionWarning,
             stacklevel=1,
         )
@@ -3352,7 +3352,7 @@ class FeatureView:
             n_processes=n_processes,
         )
         warnings.warn(
-            f"Incremented version to `{td.version}`.",
+            f"Created training dataset version `{td.version}`.",
             util.VersionWarning,
             stacklevel=1,
         )
@@ -3573,7 +3573,7 @@ class FeatureView:
             n_processes=n_processes,
         )
         warnings.warn(
-            f"Incremented version to `{td.version}`.",
+            f"Created training dataset version `{td.version}`.",
             util.VersionWarning,
             stacklevel=1,
         )
@@ -3837,7 +3837,7 @@ class FeatureView:
             n_processes=n_processes,
         )
         warnings.warn(
-            f"Incremented version to `{td.version}`.",
+            f"Created training dataset version `{td.version}`.",
             util.VersionWarning,
             stacklevel=1,
         )
