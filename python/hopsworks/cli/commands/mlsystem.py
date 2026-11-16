@@ -642,6 +642,19 @@ def _require_path(slug_or_dir: str) -> Path:
     return found
 
 
+def _lease_path(slug_or_dir: str) -> Path:
+    """The directory of a system for its build lease: SLUG_OR_DIR, ./SLUG or the current directory when it is SLUG, with or without a system.yaml yet, else an analytics layer's."""
+    cwd = Path.cwd()
+    here = [cwd] if cwd.name == slug_or_dir else []
+    for candidate in (Path(slug_or_dir), cwd / slug_or_dir, *here):
+        if candidate.is_dir():
+            return candidate
+    found = _system_path(slug_or_dir)
+    if found is None:
+        raise click.ClickException(f"No system {slug_or_dir!r} under {cwd}")
+    return found
+
+
 @system_group.command("dir")
 @click.argument("slug")
 def system_dir(slug: str) -> None:
@@ -717,7 +730,7 @@ def lease_show(slug_or_dir: str) -> None:
     """
     from hopsworks.cli import system_doc
 
-    held = system_doc.lease(_require_path(slug_or_dir))
+    held = system_doc.lease(_lease_path(slug_or_dir))
     if held is None:
         raise click.ClickException("No build lease")
     held = {**held, "expired": system_doc.expired(held)}
@@ -765,7 +778,7 @@ def lease_acquire(slug_or_dir: str, token: str | None, ttl_minutes: int) -> None
     """
     from hopsworks.cli import system_doc
 
-    held = system_doc.acquire(_require_path(slug_or_dir), token, _ttl(ttl_minutes))
+    held = system_doc.acquire(_lease_path(slug_or_dir), token, _ttl(ttl_minutes))
     if output.JSON_MODE:
         output.print_json(held)
         return
@@ -791,7 +804,7 @@ def lease_renew(slug_or_dir: str, token: str | None, ttl_minutes: int) -> None:
 
     if not token:
         raise click.UsageError("no --token and no HOPS_LEASE_TOKEN")
-    held = system_doc.renew(_require_path(slug_or_dir), token, _ttl(ttl_minutes))
+    held = system_doc.renew(_lease_path(slug_or_dir), token, _ttl(ttl_minutes))
     output.success(f"Lease renewed until {held['expires']}")
 
 
@@ -812,7 +825,7 @@ def lease_release(slug_or_dir: str, token: str | None) -> None:
 
     if not token:
         raise click.UsageError("no --token and no HOPS_LEASE_TOKEN")
-    directory = _require_path(slug_or_dir)
+    directory = _lease_path(slug_or_dir)
     if not system_doc.release(directory, token):
         raise system_doc.LeaseHeld(
             f"no build lease of {directory.name} is held with that token"
