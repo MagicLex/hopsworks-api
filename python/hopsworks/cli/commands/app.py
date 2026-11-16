@@ -51,7 +51,7 @@ def app_list(ctx: click.Context) -> None:
     for a in items or []:
         rows.append(
             [
-                getattr(a, "id", "?"),
+                a.job_id,
                 getattr(a, "name", "?"),
                 getattr(a, "state", "-"),
                 "yes" if getattr(a, "serving", False) else "no",
@@ -78,7 +78,7 @@ def app_info(ctx: click.Context, name: str) -> None:
         return
 
     rows = [
-        ["ID", getattr(a, "id", "?")],
+        ["ID", a.job_id],
         ["Name", getattr(a, "name", "?")],
         ["Type", getattr(a, "app_kind", "-")],
         ["Source", _app_source(a)],
@@ -1136,7 +1136,7 @@ def _app_to_dict(a: Any) -> dict[str, Any]:
     source = _app_source(a)
     routes = _monitoring_routes(a)
     return {
-        "id": getattr(a, "id", None),
+        "id": a.job_id,
         "name": getattr(a, "name", None),
         "app_kind": getattr(a, "app_kind", None),
         "source": source,
