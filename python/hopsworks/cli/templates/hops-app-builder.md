@@ -59,8 +59,8 @@ before the first page is written.
 - **edit:** change the source as `change` says, update the docstring so the next edit starts from
   what the app now is, `hops app deploy <name> apps/<name>` (push, for git), and rerun the smoke
   tests.
-- **delete:** `hops app delete <name> --yes`, remove the source directory, and the environment
-  clone when one was created for this app.
+- **delete:** `hops app delete <name> --yes`, and remove the source directory. Hopsworks removes
+  an app's cloned environment once nothing uses it.
 
 ## Models
 
