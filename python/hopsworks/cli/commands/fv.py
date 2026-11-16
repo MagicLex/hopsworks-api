@@ -631,7 +631,9 @@ def fv_preview(
     "--version", type=int, help="Feature view version; required when multiple exist."
 )
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-@click.option("--force", is_flag=True, help="Delete even when training data exists.")
+@click.option(
+    "--force", is_flag=True, help="Delete even when models or deployments use it."
+)
 @click.pass_context
 def fv_delete(
     ctx: click.Context,

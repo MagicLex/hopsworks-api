@@ -1162,7 +1162,7 @@ def job_unschedule(ctx: click.Context, name: str, yes: bool) -> None:
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def job_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Delete a job definition; execution logs are kept.
+    """Delete a job with its executions and their logs.
 
     \f
     Args:

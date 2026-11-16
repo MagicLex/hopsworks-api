@@ -892,13 +892,14 @@ def test_app_delete_yes_skips_prompt(mock_project):
     a.stop.assert_not_called()
 
 
-def test_app_delete_force_stops_first(mock_project):
+def test_app_delete_force_is_accepted_and_does_nothing_more(mock_project):
+    # The backend delete stops a running app; --force only keeps old scripts parsing.
     apps = mock_project.get_app_api.return_value
     a = _fake_app()
     apps.get_app.return_value = a
     result = CliRunner().invoke(cli, ["app", "delete", "dash", "--yes", "--force"])
     assert result.exit_code == 0, result.output
-    a.stop.assert_called_once()
+    a.stop.assert_not_called()
     a.delete.assert_called_once()
 
 
