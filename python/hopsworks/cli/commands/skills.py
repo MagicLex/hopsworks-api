@@ -233,7 +233,8 @@ def skills_show(name: str, file: str | None) -> None:
         output.print_json({**match, "path": str(path), "body": path.read_text("utf-8")})
         return
 
-    output.info("# %s  (%s)\n# %s\n", match["name"], match["bucket"], path)
+    # On stdout: a pipe reads the skill's path from the second line.
+    click.echo(f"# {match['name']}  ({match['bucket']})\n# {path}\n")
     click.echo(path.read_text("utf-8"))
 
 
