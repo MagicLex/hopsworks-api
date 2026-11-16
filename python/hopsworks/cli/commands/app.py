@@ -25,6 +25,7 @@ from typing import Any
 
 import click
 from hopsworks.cli import output, session, waits
+from hopsworks.cli.commands import env as env_commands
 
 
 @click.group("app")
@@ -565,6 +566,9 @@ def app_redeploy(ctx: click.Context, name: str, wait: bool) -> None:
 
 _DEPLOY_BASE_ENV = "python-agent-pipeline"
 _DEPLOY_REQUIREMENTS = "app-requirements.txt"
+# Next to the app's files: the environment the requirements last went into, then their text.
+# A dotfile, so the upload of the app's files never overwrites it.
+_DEPLOY_INSTALLED = ".app-requirements.installed"
 _DEPLOY_PORT = 8080
 _POLL_SECONDS = 3.0
 
@@ -581,7 +585,8 @@ _POLL_SECONDS = 3.0
     help=(
         f"Python environment of the app. Default: <name>-app-env cloned from "
         f"{_DEPLOY_BASE_ENV} when LOCAL_DIR has {_DEPLOY_REQUIREMENTS}, "
-        f"else {_DEPLOY_BASE_ENV}."
+        f"else {_DEPLOY_BASE_ENV}. Your own copy <name>-app-env-<user> instead "
+        f"when only the creator of <name>-app-env or a Data owner can change it."
     ),
 )
 @click.option(
@@ -635,29 +640,47 @@ def app_deploy(
     import os
     from pathlib import Path
 
-    import hopsworks
     from hopsworks.cli.commands.files import makedirs
 
     if not os.path.isfile(os.path.join(local_dir, "app.py")):
         raise click.UsageError(f"{local_dir} has no app.py.")
     files = _deploy_files(local_dir)
     project = session.get_project(ctx)
-    try:
-        username = hopsworks.get_users_api()._get_current_user().username
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Could not resolve your username: {exc}") from exc
+    username = env_commands.current_username()
     remote_dir = f"Users/{username}/apps/{name}"
     app_path = f"/Projects/{project.name}/{remote_dir}/app.py"
     has_requirements = _DEPLOY_REQUIREMENTS in files
     env_name = environment or (
         f"{name}-app-env" if has_requirements else _DEPLOY_BASE_ENV
     )
+    own_env = environment is None and has_requirements
+    copy = env_commands.copy_name(env_name, username)
+    dataset_api = project.get_dataset_api()
+    installed_remote = f"{remote_dir}/{_DEPLOY_INSTALLED}"
+    installed = None
+    if own_env:
+        try:
+            record = _remote_text(dataset_api, installed_remote)
+        except Exception as exc:  # noqa: BLE001
+            raise click.ClickException(
+                f"Could not read {installed_remote}: {exc}"
+            ) from exc
+        if record is not None:
+            installed_env, _, installed_text = record.partition("\n")
+            installed = (installed_env, installed_text)
 
     apps = project.get_app_api()
     try:
         existing = apps.get_app(name)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not find app '{name}': {exc}") from exc
+    # The copy is this user's app environment once the app runs on it or an
+    # install into it finished.
+    if own_env and copy in (
+        getattr(existing, "environment_name", None),
+        installed and installed[0],
+    ):
+        env_name = copy
     if existing is not None:
         # The SDK cannot change an app's file or environment, so a mismatch
         # would keep serving something else than what was uploaded.
@@ -668,23 +691,18 @@ def app_deploy(
                 f"App '{name}' runs {existing.app_path}, not {app_path}. "
                 f"Pick another name, or `hops app delete {name} --yes --force` first."
             )
-        if getattr(existing, "environment_name", None) != env_name:
+        # An app on the shared environment is told where its requirements went, below.
+        if getattr(existing, "environment_name", None) not in (
+            env_name,
+            f"{name}-app-env" if own_env else env_name,
+        ):
             raise click.ClickException(
                 f"App '{name}' runs in environment '{existing.environment_name}', "
                 f"not '{env_name}'. Pass --env {existing.environment_name}, or "
                 f"`hops app delete {name} --yes --force` first."
             )
 
-    dataset_api = project.get_dataset_api()
     requirements_remote = f"{remote_dir}/{_DEPLOY_REQUIREMENTS}"
-    try:
-        requirements_changed = has_requirements and _remote_text(
-            dataset_api, requirements_remote
-        ) != _local_text(os.path.join(local_dir, _DEPLOY_REQUIREMENTS))
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(
-            f"Could not read {requirements_remote}: {exc}"
-        ) from exc
 
     try:
         for relative in sorted({os.path.dirname(f) for f in files}):
@@ -702,13 +720,23 @@ def app_deploy(
         ) from exc
     output.success("✓ Uploaded %d files to %s", len(files), remote_dir)
 
-    if environment is None and has_requirements:
-        _deploy_environment(
+    if own_env:
+        wanted = _local_text(os.path.join(local_dir, _DEPLOY_REQUIREMENTS))
+        used = _deploy_environment(
             project.get_environment_api(),
             env_name,
             f"/Projects/{project.name}/{requirements_remote}",
-            requirements_changed,
+            installed != (env_name, wanted),
+            copy,
+            wanted,
         )
+        if (used, wanted) != installed:
+            _write_installed(dataset_api, remote_dir, f"{used}\n{wanted}")
+        if existing is not None and existing.environment_name != used:
+            raise click.ClickException(
+                _shared_env_message(name, existing.environment_name, used)
+            )
+        env_name = used
 
     if (
         existing is not None
@@ -870,10 +898,70 @@ def _remote_text(dataset_api: Any, path: str) -> str | None:
     return content.content.decode("utf-8") if content is not None else None
 
 
+def _shared_env_message(name: str, shared: str, copy: str) -> str:
+    return (
+        f"App '{name}' runs in environment '{shared}', which only its creator or a "
+        f"Data owner can change, so it does not get {_DEPLOY_REQUIREMENTS}; they are "
+        f"in your copy '{copy}'. The SDK cannot move an app to another environment: "
+        f"a Data owner installs them into '{shared}', or the app is deleted and "
+        "deployed again, which runs it on the copy. Both change what others use: "
+        "ask before doing either."
+    )
+
+
+def _write_installed(dataset_api: Any, remote_dir: str, record: str) -> None:
+    """Record the environment and requirements of the install that finished."""
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, _DEPLOY_INSTALLED)
+        with open(local, "w", encoding="utf-8") as f:
+            f.write(record)
+        try:
+            dataset_api.upload(local_path=local, upload_path=remote_dir, overwrite=True)
+        except Exception as exc:  # noqa: BLE001
+            raise click.ClickException(
+                f"Could not write {remote_dir}/{_DEPLOY_INSTALLED}: {exc}"
+            ) from exc
+
+
+def _missing_libraries(env: Any, requirements_text: str) -> list[str]:
+    """The packages `requirements_text` names that the environment does not list; empty when it lists none."""
+    import re
+
+    def norm(name: str) -> str:
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    listed = env.library_names
+    if not listed:
+        return []
+    have = {norm(n) for n in listed if n}
+    missing = []
+    for line in requirements_text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        # Options, paths and URLs name no package to look for.
+        if not line or line[0] in "-./" or "://" in line:
+            continue
+        name = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line)
+        if name and norm(name.group(0)) not in have:
+            missing.append(norm(name.group(0)))
+    return missing
+
+
 def _deploy_environment(
-    env_api: Any, env_name: str, requirements: str, requirements_changed: bool
-) -> None:
-    """Clone `env_name` from the base environment once; install on a new clone or new requirements."""
+    env_api: Any,
+    env_name: str,
+    requirements: str,
+    install: bool,
+    copy: str,
+    requirements_text: str,
+) -> str:
+    """Clone `env_name` from the base environment once; install on a new clone or new requirements.
+
+    Returns the environment installed into: `copy`, cloned from `env_name`, when
+    Hopsworks refuses to change `env_name` for this user.
+    """
     try:
         env = env_api.get_environment(env_name)
     except Exception as exc:  # noqa: BLE001
@@ -892,17 +980,32 @@ def _deploy_environment(
             raise click.ClickException(
                 f"Could not clone environment '{_DEPLOY_BASE_ENV}' to '{env_name}': {exc}"
             ) from exc
-    elif not requirements_changed:
+    elif not install and not (missing := _missing_libraries(env, requirements_text)):
         output.info("Environment %s is up to date.", env_name)
-        return
+        return env_name
+    elif not install:
+        output.info(
+            "Environment %s lacks %s: installing again.", env_name, ", ".join(missing)
+        )
     output.info("Installing %s into %s.", _DEPLOY_REQUIREMENTS, env_name)
     try:
         env.install_requirements(requirements, await_installation=True)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(
-            f"Could not install into environment '{env_name}': {exc}"
-        ) from exc
+        if not env_commands.change_forbidden(exc):
+            raise click.ClickException(
+                f"Could not install into environment '{env_name}': {exc}"
+            ) from exc
+        env = env_commands.own_copy(env_api, env_name, copy)
+        env_name = copy
+        output.info("Installing %s into %s.", _DEPLOY_REQUIREMENTS, env_name)
+        try:
+            env.install_requirements(requirements, await_installation=True)
+        except Exception as copy_exc:  # noqa: BLE001
+            raise click.ClickException(
+                f"Could not install into environment '{env_name}': {copy_exc}"
+            ) from copy_exc
     output.success("✓ Environment %s ready", env_name)
+    return env_name
 
 
 def _app_json(name: str) -> dict:
@@ -986,6 +1089,9 @@ def app_stop(ctx: click.Context, name: str) -> None:
 def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete an app. A running app is stopped first.
 
+    Its environment goes too when it is your own copy, `<name>-app-env-<user>`,
+    that you created and no other app runs on.
+
     \f
     Args:
         ctx: Click context.
@@ -996,11 +1102,42 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     a = _get_app(ctx, name)
     if not yes:
         output.confirm(f"Delete app '{name}'?")
+    env_name = getattr(a, "environment_name", None) or ""
+    username = None
+    if env_name.startswith(f"{name}-app-env-"):
+        username = env_commands.current_username()
     try:
         a.delete()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not delete app '{name}': {exc}") from exc
     output.success("✓ Deleted app %s", name)
+    if username is None or env_name != env_commands.copy_name(name, username):
+        return
+    project = session.get_project(ctx)
+    try:
+        # `hops env install <name>` makes a copy of the same name, which other apps may run on.
+        users = [
+            other.name
+            for other in project.get_app_api().get_apps() or []
+            if getattr(other, "environment_name", None) == env_name
+            and other.name != name
+        ]
+        env = project.get_environment_api().get_environment(env_name)
+        if users:
+            output.info(
+                "Kept environment %s: app %s runs on it.", env_name, ", ".join(users)
+            )
+        elif env is not None and env.creator != username:
+            output.info(
+                "Kept environment %s: %s created it, not you.",
+                env_name,
+                env.creator or "someone else",
+            )
+        elif env is not None:
+            env.delete()
+            output.success("✓ Deleted environment %s", env_name)
+    except Exception as exc:  # noqa: BLE001
+        output.warn("Kept environment %s: could not delete it: %s", env_name, exc)
 
 
 def _accepted_kwargs(fn: Any, kwargs: dict[str, Any]) -> dict[str, Any]:

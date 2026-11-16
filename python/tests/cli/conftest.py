@@ -73,6 +73,64 @@ def execution(key: str) -> dict:
     return copy.deepcopy(backend_fixtures_json["execution"][key]["response"])
 
 
+def environment_refused(code: int = 300029) -> Exception:
+    """The 403 Hopsworks answers a change to an environment the caller did not create (code 300029)."""
+    import requests
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = requests.Response()
+    response.status_code = 403
+    response.reason = "Forbidden"
+    response._content = json.dumps(
+        {
+            "errorCode": code,
+            "errorMsg": "Only the creator of the environment or a Data owner can change it.",
+            "usrMsg": "Only the creator of environment shop-app-env or a Data owner can change it.",
+        }
+    ).encode()
+    return RestAPIError(
+        "https://h/hopsworks-api/api/project/119/python/environments/shop-app-env/libraries/r.txt",
+        response,
+    )
+
+
+def environment_missing(name: str) -> Exception:
+    """The 404 Hopsworks answers for an environment that is gone."""
+    import requests
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = requests.Response()
+    response.status_code = 404
+    response.reason = "Not Found"
+    response._content = json.dumps({"errorMsg": "Environment not found."}).encode()
+    return RestAPIError(
+        f"https://h/hopsworks-api/api/project/119/python/environments/{name}",
+        response,
+    )
+
+
+class Environments:
+    """The project's environments by name, as `get_environment_api()` serves them; a clone or create adds one."""
+
+    def __init__(self, mock_project, *names):
+        self.api = mock_project.get_environment_api.return_value
+        self.envs = {}
+        for name in names:
+            self.add(name)
+        self.api.get_environment.side_effect = self.envs.get
+        self.api.create_environment.side_effect = lambda name, **kwargs: self.add(name)
+
+    def add(self, name):
+        env = mock.MagicMock(name=f"env {name}")
+        env.name = name
+        # A copy `<env>-app-env-<user>` was created by its user.
+        env.creator = name.rsplit("-app-env-", 1)[1] if "-app-env-" in name else None
+        env.commands = None
+        env.library_names = None
+        self.envs[name] = env
+        return env
+
+
 class HopsFS:
     """The Logs dataset: each path's content, and the existence check it shows up at (1 = the first)."""
 

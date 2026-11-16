@@ -60,6 +60,8 @@ class Asset:
     def __str__(self) -> str:
         if self.kind == "job" and self.name.endswith("-*"):
             return f"jobs {self.name} (any not named above)"
+        if self.kind == "environment" and self.name.endswith("-*"):
+            return f"environments {self.name} (each user's copy)"
         if self.owned_by and self.kind == "feature group" and self.version is None:
             return f"{self.kind} {self.name} (every other version {self.owned_by} made)"
         shown = f"{self.kind} {self.name}" + (
@@ -196,6 +198,14 @@ def inventory(doc: dict, slug: str) -> list[Asset]:
         # as this system's only when its description names the system.
         if versions:
             groups.append(Asset("feature group", group, owned_by=slug))
+    # A Data scientist's own copies of the app's and the system's environments
+    # (`hops app deploy`, `hops env install`): `<env>-app-env-<user>`.
+    for asset in list(found):
+        if asset.kind == "app":
+            add(Asset("environment", f"{asset.name}-app-env-*"))
+        elif asset.kind == "environment" and not asset.name.endswith("-*"):
+            base = asset.name.removesuffix("-app-env")
+            add(Asset("environment", f"{base}-app-env-*"))
     # Jobs follow the <slug>-<purpose> naming; some are named only in prose.
     add(Asset("job", f"{slug}-*"))
     add(Asset("directory", f"Resources/{slug}"))
@@ -463,6 +473,39 @@ class Deleter:
                 return "gone"
             raise
         return "deleted"
+
+    def expand(self, assets: list[Asset]) -> list[Asset]:
+        """Replace each `<env>-app-env-*` environment with the copies the project has, so the confirmation names them.
+
+        A copy goes only where the system made it: under `owned_by`, its description names the system.
+
+        Args:
+            assets: The planned assets.
+
+        Returns:
+            The assets, each copy by its name.
+        """
+        if not any(a.kind == "environment" and a.name.endswith("-*") for a in assets):
+            return assets
+        envs = self.project.get_environment_api().get_environments() or []
+        out: list[Asset] = []
+        for asset in assets:
+            if not (asset.kind == "environment" and asset.name.endswith("-*")):
+                out.append(asset)
+                continue
+            owner = _names(asset.owned_by) if asset.owned_by else None
+            # A Hopsworks username is 8 lowercase letters and digits, so
+            # `<env>-app-env-backup` is someone's own environment, not a copy.
+            copy = re.compile(re.escape(asset.name[:-1]) + r"[a-z0-9]{8}")
+            out.extend(
+                Asset("environment", e.name)
+                for e in envs
+                if copy.fullmatch(e.name)
+                and (
+                    owner is None or owner.search(getattr(e, "description", None) or "")
+                )
+            )
+        return out
 
     def _environment(self, asset: Asset) -> str:
         env = self.project.get_environment_api().get_environment(asset.name)
