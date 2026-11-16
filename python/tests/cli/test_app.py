@@ -17,7 +17,7 @@ def _fast_waits(clock):
 
 def _fake_app(**overrides):
     a = mock.MagicMock(name="App")
-    a.id = overrides.get("id", 42)
+    a.job_id = overrides.get("job_id", 42)
     a.name = overrides.get("name", "my_app")
     a.app_kind = overrides.get("app_kind", "STREAMLIT")
     a.state = overrides.get("state", "CREATED")
@@ -51,13 +51,26 @@ def test_app_list_renders_rows(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.get_apps.return_value = [
         _fake_app(name="a1", state="RUNNING", serving=True),
-        _fake_app(id=43, name="a2", state="KILLED"),
+        _fake_app(job_id=43, name="a2", state="KILLED"),
     ]
     result = CliRunner().invoke(cli, ["app", "list"])
     assert result.exit_code == 0, result.output
     assert "a1" in result.output
     assert "a2" in result.output
     assert "RUNNING" in result.output
+
+
+def test_app_list_shows_the_job_id_the_backend_sends(mock_project):
+    from hopsworks_common.app import App
+
+    apps = mock_project.get_app_api.return_value
+    apps.get_apps.return_value = App.from_response_json_list(
+        {"items": [{"jobId": 7321, "name": "dash", "state": "RUNNING"}]}
+    )
+    result = CliRunner().invoke(cli, ["app", "list"])
+    assert result.exit_code == 0, result.output
+    assert "7321" in result.output
+    assert "?" not in result.output
 
 
 def test_app_logs_prints_streams(mock_project):
