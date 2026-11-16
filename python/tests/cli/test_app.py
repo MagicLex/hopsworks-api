@@ -2050,3 +2050,29 @@ def test_app_delete_fails_after_600_s_beside_a_running_prepare_env(mock_project)
         result.output
     )
     a.delete.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("status", "uses_mount"),
+    [
+        ({"state": "mounted", "mountpoint": "/Projects/blah"}, True),
+        ({"state": "mounted", "mountpoint": "/Projects/other"}, False),
+        ({"state": "starting", "mountpoint": "/Projects/blah"}, False),
+        ("not json", False),
+        (None, False),
+    ],
+)
+def test_deploy_writes_through_the_mount_only_when_it_serves_the_project(
+    tmp_path, monkeypatch, status, uses_mount
+):
+    path = tmp_path / "status.json"
+    if isinstance(status, dict):
+        path.write_text(json.dumps(status))
+    elif status is not None:
+        path.write_text(status)
+    monkeypatch.setattr(app_commands, "_MOUNT_STATUS", str(path))
+    project = type("Project", (), {"backing_name": "blah"})()
+
+    assert app_commands._project_mount(project) == (
+        "/Projects/blah" if uses_mount else None
+    )
