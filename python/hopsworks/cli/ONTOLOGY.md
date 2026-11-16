@@ -14,6 +14,7 @@ hops <noun> [<owned noun>] <verb> [ARGS] [OPTIONS]
 - A leaf is a verb, or a read-only view of its parent named by a noun (`hops fg lineage`, `hops job logs`).
 - A view that gains a write action becomes a group with verbs: `hops fg stats info` and `hops fg stats compute`.
 - `hops datasource create <type>` takes the data source type as its leaf.
+- `hops fg embed SOURCE` makes the group (fenced, written only by its job) and its Python job `GROUP_embed`, starts one execution and returns its id (the build runs in the job, one at a time per group); `hops fg embed delete GROUP` runs the job's deletion execution, waits for it and deletes the job: `embed` is the one group that runs when its first word is not a subcommand.
 - The first argument is the entity name; versions of other entities are options (`--fv-version`).
 
 ## Vocabulary
@@ -25,8 +26,8 @@ Leaves:
 - Lifecycle: `start`, `stop`, `run`, `deploy`, `redeploy`, `extend`, `reset`, `enable`, `disable`, `wait`, `pause`, `resume`, `retry`, `schedule`.
 - Data: `insert`, `read`, `preview`, `lookup`, `query`, `predict`, `search`, `derive`, `compute`, `backfill`.
 - Transfer: `upload`, `download`, `import`, `export`, `clone`, `push`, `pull`, `mirror`, `share`, `unshare`, `install`, `register`.
-- Domain: `init`, `create-external`, `ingest`, `infer-metadata`, `test-access`, `validate`, `trigger`, `use`, `mkdir`, `acquire`, `release`, `renew`, `write-doc`, `delete-assets`, `plan`, `filter`.
-- Views: `lineage`, `logs`, `history`, `runs`, `schema`, `columns`, `tables`, `databases`, `catalogs`, `schemas`, `triggered`, `url`, `dir`, `status`.
+- Domain: `init`, `create-external`, `ingest`, `infer-metadata`, `test-access`, `validate`, `trigger`, `use`, `mkdir`, `acquire`, `release`, `renew`, `write-doc`, `delete-assets`, `plan`, `filter`, `sync`, `resync`, `copy`, `index`, `set-folder`, `reset-script`.
+- Views: `lineage`, `logs`, `history`, `runs`, `schema`, `columns`, `tables`, `databases`, `catalogs`, `schemas`, `triggered`, `url`, `dir`, `status`, `costs`, `labels`, `drives`, `folders`, `sync-jobs`, `audit`.
 - Top level: `setup`, `login`, `logout`, `context`, `sql`, `score`, `update`.
 
 ## Not used
