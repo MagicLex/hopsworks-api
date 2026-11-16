@@ -450,3 +450,29 @@ def test_env_install_keeps_a_copy_still_building_after_a_timeout(mock_project):
     assert "The copy is kept: it may still be building" in result.output
     envs.envs["fraud-app-env-scott"].delete.assert_not_called()
     envs.envs["fraud-app-env-scott"].install_requirements.assert_not_called()
+
+
+def test_env_info_lists_the_libraries_with_their_versions(mock_project):
+    _, env = _env_api(mock_project)
+    env.python_version = "3.12"
+    env.library_versions = {"xgboost": "2.1.0", "pandas": "2.2.3"}
+
+    result = CliRunner().invoke(cli, ["env", "info", "my_env"])
+    assert result.exit_code == 0, result.output
+    assert "xgboost" in result.output and "2.1.0" in result.output
+
+    result = CliRunner().invoke(cli, ["--json", "env", "info", "my_env"])
+    assert json.loads(result.output)["libraries"] == {"xgboost": "2.1.0", "pandas": "2.2.3"}
+
+
+def test_env_info_tells_a_missing_environment_from_a_failed_read(mock_project):
+    api, _ = _env_api(mock_project)
+    api.get_environment.return_value = None
+    result = CliRunner().invoke(cli, ["env", "info", "nope"])
+    assert result.exit_code != 0
+    assert "No environment 'nope'" in result.output
+
+    api.get_environment.side_effect = RuntimeError("HTTP 500: backend down")
+    result = CliRunner().invoke(cli, ["env", "info", "my_env"])
+    assert result.exit_code != 0
+    assert "No environment" not in result.output
