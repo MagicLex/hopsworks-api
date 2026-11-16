@@ -89,7 +89,7 @@ by the live rate: five events a second over three months is 40 million rows.
 ```bash
 hops job deploy telco-churn-data-backfill telco-churn/src/telco_churn/synthetic_data.py --env python-feature-pipeline \
   --args "--bundle Resources/telco-churn/runs/data-backfill-1/bundle.tar.gz --mode backfill --from 2026-06-01 --to 2026-09-22" --run --wait --overwrite
-hops sql --catalog delta --schema <project>_featurestore "SELECT count(*), max(ts) FROM usage_events_1"   # offline rows, after materialization
+hops sql --catalog delta --schema <backing name>_featurestore "SELECT count(*), max(ts) FROM usage_events_1"   # offline rows, after materialization
 hops job deploy telco-churn-events telco-churn/src/telco_churn/synthetic_data.py --env python-feature-pipeline \
   --args "--bundle Resources/telco-churn/runs/data-live-1/bundle.tar.gz --mode live" --run --overwrite
 ```
