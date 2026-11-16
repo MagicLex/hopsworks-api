@@ -449,9 +449,11 @@ model.deploy(name="telcochurnrt", script_file="src/telco_churn/predictor.py", de
 
 The predictor container defaults to a 1 GiB limit, which the default predictor
 outgrows even for a small scikit-learn model: an `OOMKilled` restart shows up
-as 502 `connection refused` from `predict`. Raise
-`deployment.resources.limits.memory` within `budget.inference.max_memory_mb`,
-`deployment.save(await_update=...)`, and measure again.
+as 502 `connection refused` from `predict`. Raise the memory limit within
+`budget.inference.max_memory_mb`: `limits` is None before the first save and
+memory -1 (no limit set) after it; set `deployment.resources.limits =
+Resources(memory=<MB>)` in either case (`from hsml.resources import Resources`).
+Then `deployment.save(await_update=...)`, and measure again.
 
 The SLA benchmark, its load protocol and its pass rule: [references/benchmark.md](references/benchmark.md).
 
