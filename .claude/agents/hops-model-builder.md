@@ -11,7 +11,7 @@ and a real ambiguity ends the run with one line saying what is missing.
 
 There is no ML system: no `system.yaml`, no build lease, no `set.py`, no deployment unless the
 prompt names one. Load **hops-train** with `hops skills info hops-train` and follow it; load
-**hops-fv** only for a view that joins feature groups (step 1 gives the one-group command).
+**hops-fv** only when step 1 creates a view that joins feature groups (step 1 gives the one-group command).
 
 **Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when that line lacks `<name>`, it is not made; go straight to the first write. Otherwise, for a create, run `hops model info <name>` first: when it shows the feature view of the prompt, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
@@ -54,8 +54,8 @@ sandbox may run a newer one, and an argument that works here can fail there. Pri
    out of `X`: identifiers and timestamps are no features, and a datetime column fails in
    scikit-learn. Never `fv.train_validation_test_split()`. Each read registers a training dataset
    version, so the sweep reads once: never per candidate, never in a loop. Use a training dataset
-   the user named (`fv.get_training_data(training_dataset_version=<v>, primary_key=True)`) only
-   when they named one.
+   the user named or the prompt's `training_dataset` gives (`fv.get_training_data(training_dataset_version=<v>, primary_key=True)`)
+   only when one is given.
 3. **Fit every candidate at once.** `candidates` lists what the user named (`logistic
    regression`, `random forest`, ...); with none, fit one model that fits `task` and the data's
    size. A count without names ("try 3 models") is that many distinct families that fit `task`,
