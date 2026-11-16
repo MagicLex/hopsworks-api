@@ -8,6 +8,9 @@ allowed-tools: Bash(hops *)
 
 You have access to the `hops` CLI to interact with the user's Hopsworks cluster.
 Run read-only commands directly and confirm before destructive actions.
+Every group and command takes `-h` (or `--help`): `hops -h` lists the groups, `hops fg -h` the commands of a group, `hops fg create -h` the options of one command.
+Read the help of a command before guessing its flags.
+For SDK and concept questions, search the docs through the `hopsworks-docs` MCP server (`https://mcp.hopsworks.ai/mcp`); `hops setup` registers it in `.mcp.json`.
 
 ## Current Context
 
@@ -45,7 +48,7 @@ hops project info                         # Current project details
 
 ```bash
 hops fg list                              # List all feature groups
-hops fg info <name> [--version N]         # Show details + schema
+hops fg info <name> [--version N]         # Show details + schema + tags
 hops fg preview <name> [--limit 10]           # Preview data rows
 hops fg feature list <name>                   # List features with types
 hops fg stats compute <name>            # Trigger statistics computation
@@ -53,8 +56,14 @@ hops fg search <name> --vector "0.1,..."  # KNN similarity search
 hops fg keyword list <name>                   # List keywords (plain labels)
 hops fg keyword add <name> <kw>           # Attach a keyword
 hops fg keyword remove <name> <kw>        # Remove a keyword
-hops fg delete <name> --version N --yes   # Delete
+hops fg lineage <name> [--version N]      # Upstream/downstream lineage
+hops fg delete <name> --version N --yes                  # Delete
+hops fg delete <name> --version N --force                # Delete even if feature views depend on it (leaves them in place)
+hops fg delete <name> --version N --delete-feature-views # Delete + also delete dependent feature views
 ```
+
+`lineage` shows parent feature groups, the storage connector, and the data
+source upstream, plus generated feature views and feature groups downstream.
 
 ### Create
 
@@ -64,7 +73,7 @@ hops fg create <name> --primary-key <cols> [flags]
 
 Flags:
 - `--primary-key <cols>` — comma-separated primary-key columns (required)
-- `--features "name:type,..."` — schema (bigint, double, boolean, timestamp, string, `array<float>`)
+- `--features "name:type[:description],..."`: the schema (bigint, double, boolean, timestamp, string, `array<float>`); the optional third field is a per-column description
 - `--partition-key <cols>` — comma-separated partition columns
 - `--online` — enable online storage (Kafka + RonDB + Spark materialization)
 - `--event-time <col>` — event-time column for time-travel queries
@@ -74,13 +83,24 @@ Flags:
 
 ### External Feature Groups
 
+An external feature group reads from a data source in place; Hopsworks stores only its metadata.
+Give one source spec:
+
 ```bash
-hops fg create-external <name> \
-  --connector <connector-name> \
-  --query "SELECT ... FROM ..." \
-  --primary-key <cols> \
-  [--event-time <col>] [--description <text>]
+# SQL / warehouse sources (Snowflake, BigQuery, Redshift, JDBC, ...)
+hops fg create-external <name> --connector <ds> --query "SELECT ... FROM ..." --primary-key <cols>
+# Object storage (S3, ADLS, GCS): a file or a prefix
+hops fg create-external <name> --connector <ds> --path sales/ --data-format parquet --primary-key <cols>
+# MongoDB collection
+hops fg create-external <name> --connector <ds> --database <db> --table <collection> --primary-key <cols>
 ```
+
+- Outside Spark, give the schema with `--features "id:bigint,city:string,..."`.
+- `--online` enables the online store; rows then go in with `hops fg insert`, offline data stays in the source.
+- `hops fg list` shows every type in its TYPE column (`managed`, `stream`, `external`, `spine`); `--type external` lists only external groups.
+- `hops fg info <name>` shows the connector, query or path, and the access state.
+- `hops fg test-access <name>` checks that the stored credentials can read the source.
+- `hops fg delete` on an external group removes its metadata only; the source table is untouched.
 
 ### Insert
 
@@ -110,9 +130,10 @@ Join spec: `"<fg>[:<ver>] <INNER|LEFT|RIGHT|FULL> <on>[=<right_on>] [prefix]"`.
 hops fv list
 hops fv info <name> [--version N]
 hops fv preview <name> [--limit 10] [--td-version N]   # First rows, keys and event time, untransformed
-hops fv create <name> --feature-group <fg> [--join <spec>] [--transform <fn:col>]
+hops fv create <name> --feature-group <fg> [--except <cols>] [--join <spec>] [--transform <fn:col>]
 hops fv lookup <name> --entry "id=42,region=eu"       # Online vector lookup
 hops fv read <name> [--limit 100] [--output data.parquet]
+hops fv lineage <name> [--version N]               # Parent FGs + generated models
 hops fv delete <name> --version N --yes
 ```
 
@@ -123,6 +144,7 @@ hops td list <fv> [--fv-version N]
 hops td compute <fv> [--fv-version N]                   # Materialize
 hops td compute <fv> [--fv-version N] --split "train:0.8,test:0.2"
 hops td read <fv> [--fv-version N] --td-version N [--split train] [--output train.parquet]
+hops td lineage <fv> [--fv-version N] [--td-version N]   # Parent FGs + trained models
 hops td delete <fv> [--fv-version N] [--td-version N] --yes
 ```
 
@@ -143,6 +165,7 @@ hops model list
 hops model info <name> [--version N]
 hops model register <name> <path> [flags]
 hops model download <name> [--version N] [--output dir]
+hops model lineage <name> [--version N]   # Upstream feature view + training dataset
 hops model delete <name> --version N --yes
 ```
 
@@ -164,11 +187,12 @@ hops deployment start <name> [--no-wait] [--timeout 600]
 hops deployment stop <name>
 hops deployment predict <name> --data '{"instances": [[1,2,3]]}'
 hops deployment logs <name> [--component predictor] [--tail 50]
+hops deployment lineage <name>                  # Served model + its FV/TD lineage
 hops deployment delete <name> --yes
 ```
 
 **Tips**
-- sklearn serving image uses pinned versions — train with `scikit-learn==1.3.2` to match.
+- The serving and training images run scikit-learn 1.8.0 (pandas-training-pipeline pins it to match the KServe sklearn server; pandas-inference-pipeline is built on it): train with that version.
 - Deployment names must be alphanumeric only.
 - Artifact layout at inference time: predictor script at `/mnt/artifacts/`, model at `/mnt/models/`.
 
@@ -177,7 +201,7 @@ hops deployment delete <name> --yes
 ```bash
 hops job list
 hops job info <name>
-hops job create <name> --type python --app-path Resources/jobs/x.py
+hops job create <name> --type python --app-path Resources/jobs/x.py [--env <environment>]
 hops job run <name> [--wait] [--args "..."]
 hops job stop <name>
 hops job logs <name> [--execution ID]
@@ -237,6 +261,50 @@ hops files delete /Projects/<proj>/stale --yes
 hops files share Resources/my_dir --target other_project [--permission READ_ONLY|EDITABLE|EDITABLE_BY_OWNERS]
 hops files unshare Resources/my_dir --target other_project
 ```
+
+## Search
+
+```bash
+# Project-scoped search across feature groups, feature views, training datasets, features,
+# jobs, apps, models, deployments and agents
+hops search "transactions"
+
+# Global search across every project the caller can see
+hops search "transactions" --global
+
+# Restrict to one entity type: feature_group, feature_view, training_dataset, feature,
+# job, app, model, deployment, agent
+hops search "transactions" --type feature_group
+hops search "fraud" --type model
+
+# Filter by keyword and/or schematized tag (repeatable)
+hops search "transactions" --keyword fraud --keyword production
+hops search --tag "ownership:owner=jim" --tag "lifecycle:env=prod"
+```
+
+## Session (teleport)
+
+Move a coding agent session between this machine and a Hopsworks terminal pod (Claude Code is pre-installed in the pod image). `push` hands the session you are in to the pod, which lands it on its own; `pull` reclaims it; `new` starts a fresh one on the pod; `mirror` streams the live pod terminal to your laptop.
+
+```bash
+hops session push [SESSION_ID]     # Hand the current session to the pod (baton hand-off)
+hops session push --fork           # Copy instead of hand off (local stays canonical)
+hops session start [--prompt "..."]  # Start a fresh session on the pod
+hops session pull [SESSION_ID]     # Reclaim a session onto this machine
+hops session pull --force          # Steal the baton from a live pod
+hops session list [--all]          # Show sessions and where each lives
+hops session stop                  # Stop the pod terminal from the CLI
+hops session extend [--hours N]    # Give the pod terminal more time (CLI-started ones last 12h)
+hops session mirror [--write]      # Attach to the live pod terminal
+hops git provider list             # Git provider tokens registered with Hopsworks
+hops git provider set --provider github --username <you>   # Register a personal access token (prompted, hidden)
+```
+
+Notes:
+1. Push and new wait briefly for the pod's landing ack, then print `Landed on pod`. On a cold start (the push that boots the pod) it may print `Not landed yet`; it still lands via the pod boot shell.
+2. The watcher lands a pushed session only once a terminal is open (a tmux session exists). Open the terminal tab first, then run `hops session start`.
+3. Sessions stage per working directory (a slug of the cwd). `claude --resume` resolves only from a path that hashes to the same slug, which `pull` prints for you.
+4. `push` can sync your git checkout to the pod. It asks once how the pod should authenticate: an existing SSH key, a new passphrase-free key it generates for Hopsworks (`ssh-keygen`, then `gh ssh-key add` when the GitHub CLI is logged in; Linux/macOS/WSL only), or a provider personal access token registered with Hopsworks (the pod clones over HTTPS; the only option for an HTTPS remote). The answer is remembered in `~/.hops.toml`.
 
 ## Context and LLM Integration
 

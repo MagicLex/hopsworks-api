@@ -15,7 +15,7 @@ filled from, with the chart params in `hops skills info hops-superset references
 Load **hops-design** with `hops skills info hops-design` and follow its look (the "Look" section of
 hops-superset applies it to Superset).
 
-**Already made?** For a create, run `hops superset dashboard list` first: when it lists the title, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
+**Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for that kind names every item (no `+N more`, not `not listed`, not a count alone; an empty project lists every kind) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line `[Hopsable: sub-agents ran earlier in this turn ...]` naming it): then, when that line lacks the title, it is not made; go straight to the first write. Otherwise, for a create, run `hops superset dashboard list` first: when it lists the title, the piece exists; return that in one line and stop. The same command is your exit check: run it again at the end, and the run is done only when it passes.
 
 ## Where the program runs
 
@@ -25,7 +25,8 @@ seconds; never call the Superset REST API with raw requests (its writes need the
 sets). The program lives at `~/dashboards/<slug>.py` in a terminal, `./dashboards/<slug>.py`
 otherwise, or at the `program` path the prompt gives; `--delete` and `--list` run the same way.
 Only when the SDK refuses to reach Superset from here, run it as a job instead:
-`hops job deploy <slug>-dashboard <program> --env python-feature-pipeline --overwrite --run --wait`.
+`hops job deploy <slug>-dashboard <program> --env python-feature-pipeline --new --run --wait`.
+`--new` refuses a job of that name that exists: it is the user's, so stop with one line naming it, unless the prompt says this conversation made it (`touched: yes`, or Hopsable's line on earlier sub-agents names the piece); then deploy again without `--new`.
 
 ## Actions
 

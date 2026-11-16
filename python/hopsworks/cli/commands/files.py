@@ -156,16 +156,21 @@ def dataset_upload(
 
 @files_group.command("download")
 @click.argument("remote_path")
+@click.argument("destination", required=False, type=click.Path())
 @click.option(
     "--output",
     "local_path",
     type=click.Path(),
-    help="Local destination; defaults to the current directory.",
+    help="Local destination, the same as DESTINATION; defaults to the current directory.",
 )
 @click.option("--overwrite", is_flag=True, help="Overwrite an existing local file.")
 @click.pass_context
 def dataset_download(
-    ctx: click.Context, remote_path: str, local_path: str | None, overwrite: bool
+    ctx: click.Context,
+    remote_path: str,
+    destination: str | None,
+    local_path: str | None,
+    overwrite: bool,
 ) -> None:
     """Download a file from HopsFS to the local filesystem.
 
@@ -173,9 +178,13 @@ def dataset_download(
     Args:
         ctx: Click context.
         remote_path: HopsFS source path.
-        local_path: Local destination.
+        destination: Local destination, as `upload` takes it.
+        local_path: Local destination, from --output.
         overwrite: Pass-through to the SDK.
     """
+    if destination and local_path and destination != local_path:
+        raise click.UsageError("Give the destination once: DESTINATION or --output.")
+    local_path = destination or local_path
     project = session.get_project(ctx)
     try:
         path = project.get_dataset_api().download(
