@@ -399,3 +399,15 @@ class TestDatasetApiReadContent:
             "with_auth",
             expected,
         ]
+
+
+class TestShareFeatureStore:
+    @pytest.mark.parametrize("action", ["share", "unshare"])
+    def test_a_feature_store_path_points_to_the_feature_store_share(self, action):
+        with pytest.raises(
+            ValueError,
+            match=rf"project\.get_feature_store\(\)\.{action}\(target_project\)",
+        ):
+            getattr(DatasetApi(), action)(
+                "5cad0i9r254v_featurestore.db", target_project="blah"
+            )
