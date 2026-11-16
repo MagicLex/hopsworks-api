@@ -5288,9 +5288,10 @@ class FeatureGroup(FeatureGroupBase):
 
         A reader opening a Delta table replays every commit since the last checkpoint, so
         without one the cost of opening the table grows with the number of commits.
-        Spark writes checkpoints on its own every `delta.checkpointInterval` commits;
-        delta-rs writes none, so on a table only ever written from Python this is the only
-        thing that bounds the replay.
+        Spark and delta-rs both write a checkpoint on their own every `delta.checkpointInterval` commits.
+        Hopsworks sets that property from the cluster's `featurestore_delta_checkpoint_interval` variable
+        only when the variable is available and the table has no `delta.checkpointInterval` yet.
+        A reader replays at most the table's own interval of commits, so this call forces one early.
 
         Expiring the log entries a checkpoint covers is a separate call,
         [`delta_cleanup_metadata`][hsfs.feature_group.FeatureGroup.delta_cleanup_metadata].
