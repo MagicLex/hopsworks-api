@@ -538,6 +538,23 @@ class TestVectorDbClient:
             }
         }
 
+    @pytest.mark.parametrize("engine", ["faiss", "nmslib"])
+    def test_find_neighbors_of_a_fenced_group_leaves_out_tombstones(
+        self, mocker, engine
+    ):
+        mocker.patch.object(self.embedding_index, "_fenced", True)
+        self.mock_os_wrapper._get_field_mapping.return_value = self._field_mapping(
+            "f2", engine
+        )
+
+        self.target._find_neighbors([1.0, 2.0, 3.0], feature=self.f2, k=5)
+
+        query = self.mock_os_wrapper._search.call_args.kwargs["body"]["query"]
+        clause = (
+            query["knn"]["f2"]["filter"]["bool"] if engine == "faiss" else query["bool"]
+        )
+        assert clause["must_not"] == [{"term": {"_deleted": True}}]
+
     @staticmethod
     def _field_mapping(col_name, engine, index="2249__embedding_default_embedding"):
         # The response of GET <index>/_mapping/field/<col_name>
