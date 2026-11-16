@@ -108,5 +108,5 @@ yes, take `app.description` when recorded, add what `system.yaml` says it reads 
 feature group for batch, which has no deployment, so a what-if score embeds the registered model;
 the deployment for realtime; the entity, the consumers), and spawn **hops-dashboard-builder** (`action: create`,
 `program: <slug>/dashboards/<slug>.py`) or **hops-app-builder** (`action: create`, the source under
-`<slug>/app/`) with the prompt `/hops` gives them, so the program or source is committed with the
+`<slug>/app/`, `deploy: no`, then the deploy question of `/hops` App) with the prompt `/hops` gives them, so the program or source is committed with the
 system. Record `app`. On no, `app: {wanted: false, status: skipped}`.
