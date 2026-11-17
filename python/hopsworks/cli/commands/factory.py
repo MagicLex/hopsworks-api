@@ -35,10 +35,13 @@ CLUSTER_FREE = {"validate"}
 @click.group("factory")
 @click.pass_context
 def factory_group(ctx: click.Context) -> None:
-    """The software factories: the built-in ML system and analytics layer factories, and the project's own.
+    """Software factories: built-in and the project's own.
+
+    The software factories: the built-in ML system and analytics layer factories, and the project's own.
 
     Every subcommand but validate refuses to run unless the cluster's factory_enabled variable is true.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -76,8 +79,11 @@ factory_group.add_command(mlsystem.system_group)
 @factory_group.command("list")
 @click.pass_context
 def factory_list(ctx: click.Context) -> None:
-    """List the factories: the built-in ones and the project's own, with how many systems each built.
+    """List factories and how many systems each built.
 
+    List the factories: the built-in ones and the project's own, with how many systems each built.
+
+    \f
     Args:
         ctx: Click context.
     """
@@ -109,13 +115,14 @@ def factory_list(ctx: click.Context) -> None:
     )
 
 
-@factory_group.command("get")
+@factory_group.command("info")
 @click.argument("name")
 @click.option("--version", type=int, help="An earlier version of the definition.")
 @click.pass_context
 def factory_get(ctx: click.Context, name: str, version: int | None) -> None:
     """Print the YAML definition of factory NAME.
 
+    \f
     Args:
         ctx: Click context.
         name: The factory.
@@ -145,8 +152,11 @@ def factory_get(ctx: click.Context, name: str, version: int | None) -> None:
 def factory_export(
     ctx: click.Context, name: str, version: int | None, out: Path | None
 ) -> None:
-    """Write the YAML definition of factory NAME to a file, to import in another project or cluster.
+    """Write a factory definition to a YAML file.
 
+    Write the YAML definition of factory NAME to a file, to import in another project or cluster.
+
+    \f
     Args:
         ctx: Click context.
         name: The factory.
@@ -168,6 +178,7 @@ def factory_export(
 def factory_validate(file: Path) -> None:
     """Check the factory definition in FILE, without a cluster.
 
+    \f
     Args:
         file: The definition.
     """
@@ -190,11 +201,14 @@ def factory_validate(file: Path) -> None:
 def factory_import(
     ctx: click.Context, file: Path, name: str | None, update: bool, yes: bool
 ) -> None:
-    """Import the factory definition in FILE, written here or exported from another project.
+    """Import a factory definition from a YAML file.
+
+    Import the factory definition in FILE, written here or exported from another project.
 
     The review prints its questions, phases, skills and its build instructions in full:
     Claude Code follows those instructions in your Terminal, with your credentials.
 
+    \f
     Args:
         ctx: Click context.
         file: The definition.
@@ -211,7 +225,7 @@ def factory_import(
     doc = factory_spec.parse(text)
     if not yes:
         _review(doc)
-        click.confirm("Import this factory?", abort=True)
+        output.confirm("Import this factory?")
     session.get_project(ctx)
     if update:
         factory = factory_api._update(name or doc["name"], text)
@@ -230,8 +244,11 @@ def factory_import(
 def factory_clone(
     ctx: click.Context, source: str, name: str, title: str | None
 ) -> None:
-    """Clone factory SOURCE, built-in or the project's own, into a new project factory NAME.
+    """Clone a factory into a new project factory.
 
+    Clone factory SOURCE, built-in or the project's own, into a new project factory NAME.
+
+    \f
     Args:
         ctx: Click context.
         source: The factory to clone.
@@ -255,6 +272,7 @@ def factory_clone(
 def factory_enable(ctx: click.Context, name: str) -> None:
     """Show the project factory NAME in the Factory again.
 
+    \f
     Args:
         ctx: Click context.
         name: The factory.
@@ -266,8 +284,9 @@ def factory_enable(ctx: click.Context, name: str) -> None:
 @click.argument("name")
 @click.pass_context
 def factory_disable(ctx: click.Context, name: str) -> None:
-    """Hide the project factory NAME from the Factory; its systems are kept.
+    """Hide a project factory; its systems are kept.
 
+    \f
     Args:
         ctx: Click context.
         name: The factory.
@@ -280,8 +299,11 @@ def factory_disable(ctx: click.Context, name: str) -> None:
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
 def factory_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Delete the project factory NAME; refused while systems it built still exist.
+    """Delete a project factory.
 
+    Delete the project factory NAME; refused while systems it built still exist.
+
+    \f
     Args:
         ctx: Click context.
         name: The factory.
@@ -290,7 +312,7 @@ def factory_delete(ctx: click.Context, name: str, yes: bool) -> None:
     from hopsworks_common.core import factory_api
 
     if not yes:
-        click.confirm(f"Delete factory {name}?", abort=True)
+        output.confirm(f"Delete factory {name}?")
     session.get_project(ctx)
     factory_api._delete(name)
     output.success(f"Deleted factory {name}")
@@ -348,12 +370,12 @@ def _review(doc: dict) -> None:
 )
 @click.option(
     "--preset",
-    help="Start from one of the factory's examples (`hops factory get NAME` lists them under presets).",
+    help="Start from one of the factory's examples (`hops factory info NAME` lists them under presets).",
 )
 @click.option(
     "--change",
     "change_id",
-    help="Request this change of a recorded system (`hops factory get NAME` lists the factory's changes); its answers come from --answers or are asked here.",
+    help="Request this change of a recorded system (`hops factory info NAME` lists the factory's changes); its answers come from --answers or are asked here.",
 )
 @click.option(
     "--no-launch",
@@ -370,7 +392,9 @@ def factory_run(
     change_id: str | None,
     no_launch: bool,
 ) -> None:
-    """Build a system with the factory NAME, resume the system SLUG, or change it.
+    """Build, resume or change a system with a factory.
+
+    Build a system with the factory NAME, resume the system SLUG, or change it.
 
     A new system's answers come from --answers, or each of the factory's
     questions is asked in turn. The system is recorded in ./<slug>/system.yaml,
@@ -381,6 +405,7 @@ def factory_run(
     the change's answers are recorded in system.yaml as a pending request,
     which the build carries out when it resumes.
 
+    \f
     Args:
         ctx: Click context.
         name: The factory.
@@ -396,12 +421,12 @@ def factory_run(
     definition = factory_api._get(name)
     if not definition.get("enabled", True):
         raise click.ClickException(
-            f"the factory {name} is disabled; `hops factory enable {name}` turns it on"
+            f"The factory {name} is disabled; `hops factory enable {name}` turns it on"
         )
     existing = _recorded(slug)
     if change_id and existing is None:
         raise click.ClickException(
-            "a change is made to a recorded system: name its SLUG, or run this in its directory"
+            "A change is made to a recorded system: name its SLUG, or run this in its directory"
         )
     if existing is not None:
         if not factory_spec.SLUG.match(existing.name):
@@ -425,7 +450,7 @@ def factory_run(
         return
     if slug:
         raise click.ClickException(
-            f"no system {slug!r} under {Path.cwd()}; leave SLUG out to build a new one"
+            f"No system {slug!r} under {Path.cwd()}; leave SLUG out to build a new one"
         )
     spec = definition["spec"]
     chosen = _preset(spec, preset)
@@ -552,7 +577,7 @@ def _prompt(field: dict, default: Any, label: str) -> Any:
     kind = field["type"]
     options = [factory_spec._option_value(o) for o in field.get("options") or []]
     if kind == "boolean":
-        return click.confirm(label, default=bool(default))
+        return output.ask(label, default=bool(default))
     if kind == "choice":
         return click.prompt(
             label,
@@ -563,7 +588,7 @@ def _prompt(field: dict, default: Any, label: str) -> Any:
         return _ask_list(field, default if isinstance(default, list) else [], label)
     if kind == "repository":
         start = default if isinstance(default, dict) else {"create": True}
-        if click.confirm("Create new GitHub repo", default=start.get("create", True)):
+        if output.ask("Create new GitHub repo", default=start.get("create", True)):
             return {"create": True}
         url = click.prompt(
             "URL of the GitHub, GitLab, Bitbucket or other git repository to store the code,"
@@ -627,7 +652,7 @@ def _ask_list(field: dict, start: list, label: str) -> list:
     item_label = field.get("item_label") or "entry"
     while True:
         wanted = len(items) < len(start) or len(items) < field.get("min_items", 0)
-        if not click.confirm(f"{label}: add a {item_label}?", default=wanted):
+        if not output.ask(f"{label}: add a {item_label}?", default=wanted):
             return items
         preset = start[len(items)] if len(items) < len(start) else {}
         item: dict = {}

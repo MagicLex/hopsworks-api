@@ -42,7 +42,10 @@ SYSTEMS = [
 def logged_in(monkeypatch):
     from hopsworks.cli import teardown
 
-    monkeypatch.setattr(session, "get_project", lambda ctx: mock.Mock(name="churndemo"))
+    project = mock.Mock(name="churndemo")
+    # A project with no copies of the system's environments.
+    project.get_environment_api.return_value.get_environments.return_value = []
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
     monkeypatch.setattr(teardown, "require_data_owner", lambda project: None)
 
 
@@ -60,12 +63,18 @@ def test_remove_finds_a_system_by_name_or_id(monkeypatch, logged_in):
     monkeypatch.setattr(ml_system_api, "_list", lambda factory=None: SYSTEMS)
     monkeypatch.setattr(ml_system_api, "_remove", removed.append)
     assert (
-        CliRunner().invoke(cli, ["factory", "system", "remove", "Recs"]).exit_code == 0
+        CliRunner()
+        .invoke(cli, ["factory", "system", "remove", "Recs", "--yes"])
+        .exit_code
+        == 0
     )
-    assert CliRunner().invoke(cli, ["factory", "system", "remove", "7"]).exit_code == 0
+    assert (
+        CliRunner().invoke(cli, ["factory", "system", "remove", "7", "--yes"]).exit_code
+        == 0
+    )
     assert removed == [8, 7]
-    missing = CliRunner().invoke(cli, ["factory", "system", "remove", "nope"])
-    assert missing.exit_code != 0 and "no system" in missing.output
+    missing = CliRunner().invoke(cli, ["factory", "system", "remove", "nope", "--yes"])
+    assert missing.exit_code != 0 and "No system" in missing.output
 
 
 def test_register_sends_the_path_and_the_name(monkeypatch):
@@ -150,6 +159,8 @@ def test_the_inventory_takes_what_the_system_created_downstream_first():
         "feature group billing (every other version churn-example made)",
         "data source acme_snowflake",
         "environment churn-example-train-env",
+        "environments churn-example-app-app-env-* (each user's copy)",
+        "environments churn-example-train-env-app-env-* (each user's copy)",
         "directory Resources/churn-example",
     ]
     # Read, shared or pre-existing: never deleted.
@@ -386,6 +397,48 @@ def test_prefixed_jobs_leave_a_longer_slug_alone():
     assert deleted == ["churn-example-eda"]
 
 
+def test_each_users_copy_of_an_environment_goes_and_nothing_else():
+    from hopsworks.cli import teardown
+
+    deleted = []
+    envs = [
+        SimpleNamespace(name=n, delete=lambda n=n: deleted.append(n))
+        for n in (
+            "churn-example-app-app-env",
+            "churn-example-app-app-env-meb10000",
+            "churn-example-app-app-env-alice001",
+            "churn-example-app-app-env-backup",
+            "churn-example-app-app-env-meb10000-old",
+            "churn-example-v2-app-app-env-meb10000",
+        )
+    ]
+    by_name = {e.name: e for e in envs}
+    project = SimpleNamespace(
+        get_environment_api=lambda: SimpleNamespace(
+            get_environments=lambda: envs, get_environment=by_name.get
+        )
+    )
+    deleter = teardown.Deleter(project)
+    planned = deleter.expand(
+        [
+            teardown.Asset("app", "churn-example-app"),
+            teardown.Asset("environment", "churn-example-app-app-env-*"),
+            teardown.Asset("environment", "other-app-env-*"),
+        ]
+    )
+    assert [str(a) for a in planned] == [
+        "app churn-example-app",
+        "environment churn-example-app-app-env-meb10000",
+        "environment churn-example-app-app-env-alice001",
+    ]
+    for asset in planned[1:]:
+        assert deleter.delete(asset) == "deleted"
+    assert deleted == [
+        "churn-example-app-app-env-meb10000",
+        "churn-example-app-app-env-alice001",
+    ]
+
+
 def test_delete_removes_the_code_last_and_a_retry_after_it_finishes(
     monkeypatch, logged_in, system_dir
 ):
@@ -497,6 +550,7 @@ def test_only_a_data_owner_may_delete_a_systems_assets(monkeypatch, role, allowe
     )
     project = mock.Mock(id=5)
     project.name = "churndemo"
+    project.backing_name = "churndemo"
     if allowed:
         teardown.require_data_owner(project)
     else:
@@ -509,7 +563,10 @@ def test_a_data_scientist_is_refused_before_anything_is_deleted(
 ):
     from hopsworks.cli import teardown
 
-    monkeypatch.setattr(session, "get_project", lambda ctx: mock.Mock(name="churndemo"))
+    project = mock.Mock(name="churndemo")
+    # A project with no copies of the system's environments.
+    project.get_environment_api.return_value.get_environments.return_value = []
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
 
     def refuse(project):
         raise click.ClickException("only a Data owner can delete")
@@ -542,3 +599,29 @@ def test_a_path_that_is_not_the_systems_directory_is_refused(
     )
     assert done.exit_code != 0 and "not the directory of" in done.output
     assert removed == [] and other.exists()
+
+
+def test_register_takes_a_hopsfs_copy_for_code_outside_the_mount_and_git(
+    monkeypatch, logged_in, tmp_path
+):
+    from hopsworks.cli import session
+    from hopsworks.cli.commands import mlsystem
+
+    (tmp_path / "system.yaml").write_text("system: {slug: churn}\n")
+    project = mock.Mock()
+    project.name = "churndemo"
+    project.backing_name = "churndemo"
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
+    sent = mock.Mock(return_value={})
+    monkeypatch.setattr(ml_system_api, "_register", sent)
+    # A directory with no mount and no origin registers by the copy it names.
+    mlsystem.register(
+        mock.Mock(),
+        tmp_path,
+        "Churn",
+        None,
+        "/Projects/churndemo/Users/u/systems/churn",
+    )
+    assert sent.call_args.args[0] == "/Projects/churndemo/Users/u/systems/churn"
+    with pytest.raises(click.UsageError, match="folder of this project"):
+        mlsystem.register(mock.Mock(), tmp_path, "Churn", None, "/Projects/other/x")

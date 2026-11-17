@@ -558,9 +558,11 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
     slug = target.name
     request = request or f"/hops-silver {slug}"
     if not launch or not shutil.which("claude"):
-        click.echo(
-            f"\nBuild it with:  cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
-        )
+        build = f"cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
+        if output.JSON_MODE:
+            output.print_json({"path": str(target), "build": build})
+        else:
+            click.echo(f"\nBuild it with:  {build}")
         return
     token = system_doc.acquire(target)["token"]
     if os.environ.get("TMUX") and shutil.which("tmux"):
@@ -570,7 +572,7 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
             ["tmux", "new-window", "-n", slug, "-c", str(target), shlex.join(command)],
             check=True,
         )
-        click.echo(
+        output.info(
             f"\nBuilding in the tmux window '{slug}'; the Hopsworks UI shows its progress."
         )
         return
@@ -819,6 +821,7 @@ def delete_assets(
     job_names: list[str],
     tables: list[dict],
     check: Callable[[str, str], None] | None = None,
+    confirm: Callable[[list[str]], None] | None = None,
 ) -> None:
     """Delete some of what a system built: jobs, then feature groups; what is gone is skipped.
 
@@ -834,6 +837,8 @@ def delete_assets(
         tables: The feature groups to delete, each `{name, version}`.
         check: Called with each job's and feature group's kind and name before anything
             is deleted; raises to refuse one.
+        confirm: Called with what is left to delete, after every check and before anything
+            is deleted; raises to stop. Not called when nothing is left.
     """
     project = session.get_project(ctx)
     kind = (doc.get("layer") or {}).get("kind")
@@ -874,13 +879,25 @@ def delete_assets(
             check("job", job_name)
         for fg in found:
             check("feature group", fg.name)
+    jobs = []
     for job_name in job_names:
         job = project.get_job_api().get_job(job_name)
         if job is None:
             output.info(f"job {job_name}: gone")
         else:
-            job.delete()
-            output.success(f"✓ Deleted job {job_name}")
+            jobs.append((job_name, job))
+    if not jobs and not found:
+        return
+    if confirm is not None:
+        confirm(
+            [
+                *(f"job {job_name}" for job_name, _ in jobs),
+                *(f"feature group {fg.name} v{fg.version}" for fg in found),
+            ]
+        )
+    for job_name, job in jobs:
+        job.delete()
+        output.success(f"✓ Deleted job {job_name}")
     for fg in found:
         fg.delete()
         output.success(f"✓ Deleted feature group {fg.name} v{fg.version}")

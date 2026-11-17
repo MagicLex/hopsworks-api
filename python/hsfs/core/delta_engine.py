@@ -29,7 +29,12 @@ from hopsworks_common.core import project_api
 from hopsworks_common.core.constants import HAS_POLARS
 from hopsworks_common.core.type_systems import _convert_offline_type_to_pyarrow_type
 from hsfs import feature_group, feature_group_commit, util
-from hsfs.core import feature_group_api, partition_transforms, variable_api
+from hsfs.core import (
+    feature_group_api,
+    kafka_engine,
+    partition_transforms,
+    variable_api,
+)
 
 
 if TYPE_CHECKING:
@@ -42,6 +47,9 @@ if TYPE_CHECKING:
 # They are imported on-demand inside methods to provide friendly errors only
 # when the functionality is used.
 _logger = logging.getLogger(__name__)
+
+# Bit widths of the declared integer types a narrower input column is cast up to.
+_INTEGER_BIT_WIDTHS = {"smallint": 16, "int": 32, "bigint": 64}
 
 
 def _as_ingest_date(value: str | datetime.date | None) -> str | None:
@@ -94,6 +102,62 @@ def _is_delta_table_at(spark_session, path: str) -> bool:
     return DeltaTable.isDeltaTable(spark_session, path)
 
 
+def _with_table_timestamps(dataset, table_schema=None):
+    """Convert timestamp columns to the timestamp flavour of the Delta table.
+
+    A Spark TimestampType appended to a timestamp_ntz column fails with
+    DELTA_FAILED_TO_MERGE_FIELDS. Delta feature groups keep timestamp_ntz (the
+    backend and the Python client write it), so a new table (*table_schema* None)
+    gets timestamp_ntz too. The conversion is epoch based: it reads the instant
+    as UTC wall clock, whatever spark.sql.session.timeZone the job set.
+    Timestamps nested in struct or array columns are left as they are.
+    """
+    from pyspark.sql.types import TimestampNTZType, TimestampType
+
+    table_types = (
+        {f.name.lower(): f.dataType for f in table_schema.fields}
+        if table_schema is not None
+        else None
+    )
+    conversions = {}
+    for field in dataset.schema.fields:
+        quoted = "`" + field.name.replace("`", "``") + "`"
+        if table_types is None:
+            to_ntz = isinstance(field.dataType, TimestampType)
+            to_ltz = False
+        else:
+            target = table_types.get(field.name.lower())
+            to_ntz = isinstance(field.dataType, TimestampType) and isinstance(
+                target, TimestampNTZType
+            )
+            to_ltz = isinstance(field.dataType, TimestampNTZType) and isinstance(
+                target, TimestampType
+            )
+        if to_ntz:
+            conversions[field.name] = (
+                f"timestampadd(MICROSECOND, unix_micros({quoted}), "
+                "TIMESTAMP_NTZ '1970-01-01 00:00:00')"
+            )
+        elif to_ltz:
+            conversions[field.name] = (
+                "timestamp_micros(timestampdiff(MICROSECOND, "
+                f"TIMESTAMP_NTZ '1970-01-01 00:00:00', {quoted}))"
+            )
+    if not conversions:
+        return dataset
+
+    from pyspark.sql.functions import col, expr
+
+    return dataset.select(
+        *(
+            expr(conversions[f.name]).alias(f.name)
+            if f.name in conversions
+            else col("`" + f.name.replace("`", "``") + "`")
+            for f in dataset.schema.fields
+        )
+    )
+
+
 def _delta_table_for_path(spark_session, path: str):
     """Return a ``DeltaTable`` handle for *path*.
 
@@ -124,11 +188,29 @@ def _delta_table_for_path(spark_session, path: str):
     return DeltaTable.forPath(spark_session, path)
 
 
+class StaleWriterError(FeatureStoreException):
+    """A newer writer committed to the table: a fenced write of a lower epoch is refused before it commits."""
+
+
+def writer_epoch_refusal(table_epoch: int | None, epoch: int) -> str | None:
+    """Why a fenced commit at `epoch` must not go onto a table whose last writer epoch is `table_epoch`; None when it may.
+
+    An equal epoch is the same writer committing again. delta-rs itself only refuses a writer whose snapshot is
+    behind a commit carrying the same app id, so a fresh snapshot of a lower writer would commit without this check.
+    """
+    if table_epoch is not None and table_epoch > epoch:
+        return f"a newer writer (epoch {table_epoch}) committed to the table; this writer's epoch is {epoch}"
+    return None
+
+
 class DeltaEngine:
     DELTA_SPARK_FORMAT = "delta"
+    #: The Delta application id under which a fenced write records its writer epoch.
+    WRITER_APP_ID = "hops-writer"
     DELTA_QUERY_TIME_TRAVEL_AS_OF_INSTANT = "timestampAsOf"
     DELTA_QUERY_TIME_TRAVEL_AS_OF_VERSION = "versionAsOf"
     DELTA_ENABLE_CHANGE_DATA_FEED = "delta.enableChangeDataFeed"
+    DELTA_CHECKPOINT_INTERVAL = "delta.checkpointInterval"
     DELTA_DOT_PREFIX = "delta."
     DELTA_GLUE_CATALOG_IMPL = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
     APPEND = "append"
@@ -190,6 +272,10 @@ class DeltaEngine:
     ) -> feature_group_commit.FeatureGroupCommit:
         operation = operation.lower() if operation else "upsert"
         if self._spark_session is not None:
+            if kafka_engine._writer_epoch(write_options) is not None:
+                raise FeatureStoreException(
+                    "A fenced write (write option writer_epoch) runs on the Python engine only."
+                )
             _logger.debug(
                 f"Saving Delta dataset using spark to feature group {self._feature_group.name} v{self._feature_group.version}"
             )
@@ -361,7 +447,7 @@ class DeltaEngine:
                     delta_options[key] = read_options[key]
 
         _logger.debug(
-            f"Delta read options for feature group {self._feature_group.name} v{self._feature_group.version}: {delta_options}"
+            f"Delta read options for feature group {self._feature_group.name} v{self._feature_group.version}: {sorted(delta_options)}"
         )
 
         return delta_options
@@ -454,9 +540,14 @@ class DeltaEngine:
         commits = self._get_delta_commits(location)
         return commits[0] if commits else None
 
-    def _delete_record(self, delete_df):
+    def _delete_record(self, delete_df, write_options=None):
         partition_transforms._require_writable(self._feature_group)
         storage_options = None
+        epoch = kafka_engine._writer_epoch(write_options)
+        if epoch is not None and self._spark_session is not None:
+            raise FeatureStoreException(
+                "A fenced delete (write option writer_epoch) runs on the Python engine only."
+            )
         if self._spark_session is not None:
             location = self._feature_group.prepare_spark_location()
             is_delta_table = _is_delta_table_at(self._spark_session, location)
@@ -499,15 +590,21 @@ class DeltaEngine:
         merge_query_str = self._generate_merge_query(source_alias, updates_alias)
 
         if self._spark_session is not None:
+            self._ensure_checkpoint_interval_spark(location)
             fg_source_table.alias(source_alias).merge(
                 delete_df.alias(updates_alias), merge_query_str
             ).whenMatchedDelete().execute()
         else:
+            if epoch is None:
+                self._set_table_properties_rs(fg_source_table, {})
+            else:
+                self._check_writer_epoch(fg_source_table, epoch)
             fg_source_table.merge(
                 source=delete_df,
                 predicate=merge_query_str,
                 source_alias=updates_alias,
                 target_alias=source_alias,
+                commit_properties=self._commit_properties(write_options),
             ).when_matched_delete().execute()
         fg_commit = self._get_last_commit_metadata(
             self._spark_session, location, storage_options=storage_options
@@ -641,6 +738,9 @@ class DeltaEngine:
             builder = builder.property(
                 self.DELTA_NUM_INDEXED_COLS_PROPERTY, str(target)
             )
+        if self.DELTA_CHECKPOINT_INTERVAL not in write_options:
+            for key, value in self._checkpoint_interval_property().items():
+                builder = builder.property(key, value)
         builder.execute()
         actual = list(
             self._spark_session.sql(f"DESCRIBE DETAIL delta.`{location}`")
@@ -658,19 +758,59 @@ class DeltaEngine:
                 "the feature group."
             )
 
+    def _checkpoint_interval_property(self) -> dict[str, str]:
+        """The `delta.checkpointInterval` property to set on a table, or {} when the cluster defines none."""
+        interval = self._variable_api._get_featurestore_delta_checkpoint_interval()
+        if interval is None:
+            return {}
+        return {self.DELTA_CHECKPOINT_INTERVAL: str(interval)}
+
+    def _ensure_checkpoint_interval_spark(self, location: str) -> None:
+        """Set `delta.checkpointInterval` on an existing table that has none, once."""
+        properties = self._checkpoint_interval_property()
+        if not properties:
+            return
+        existing = (
+            self._spark_session.sql(f"DESCRIBE DETAIL delta.`{location}`")
+            .select("properties")
+            .collect()[0][0]
+            or {}
+        )
+        if self.DELTA_CHECKPOINT_INTERVAL in existing:
+            return
+        self._spark_session.sql(
+            f"ALTER TABLE delta.`{location}` SET TBLPROPERTIES "
+            f"('{self.DELTA_CHECKPOINT_INTERVAL}' = '{properties[self.DELTA_CHECKPOINT_INTERVAL]}')"
+        )
+
+    def _set_table_properties_rs(self, table, properties: dict[str, str]) -> None:
+        """Set `properties` on a delta-rs table in one commit, adding `delta.checkpointInterval` when the table has none."""
+        if self.DELTA_CHECKPOINT_INTERVAL not in table.metadata().configuration:
+            properties = {**self._checkpoint_interval_property(), **properties}
+        if properties:
+            table.alter.set_table_properties(properties)
+
     def _write_delta_dataset(self, dataset, write_options, operation="upsert"):
         partition_transforms._require_writable(self._feature_group)
         location = self._feature_group.prepare_spark_location()
         if write_options is None:
             write_options = {}
+        if self.DELTA_ENABLE_CHANGE_DATA_FEED in write_options:
+            write_options = {
+                **write_options,
+                self.DELTA_ENABLE_CHANGE_DATA_FEED: self.change_data_feed_value(
+                    write_options[self.DELTA_ENABLE_CHANGE_DATA_FEED]
+                ),
+            }
 
         if not _is_delta_table_at(self._spark_session, location):
+            dataset = _with_table_timestamps(dataset)
             cluster_columns = self._cluster_columns()
             if cluster_columns:
                 self._create_clustered_delta_table(dataset, location, write_options)
             (
                 dataset.write.format(DeltaEngine.DELTA_SPARK_FORMAT)
-                .options(**write_options)
+                .options(**{**self._checkpoint_interval_property(), **write_options})
                 .partitionBy(
                     self._feature_group.partition_key
                     if self._feature_group.partition_key and not cluster_columns
@@ -683,6 +823,13 @@ class DeltaEngine:
             _logger.debug(
                 f"Insert operation requested for {location}. Using append mode, skipping merge."
             )
+            self._ensure_checkpoint_interval_spark(location)
+            dataset = _with_table_timestamps(
+                dataset,
+                self._spark_session.read.format(DeltaEngine.DELTA_SPARK_FORMAT)
+                .load(location)
+                .schema,
+            )
             (
                 dataset.write.format(DeltaEngine.DELTA_SPARK_FORMAT)
                 .options(**write_options)
@@ -690,7 +837,9 @@ class DeltaEngine:
                 .save(location)
             )
         else:
+            self._ensure_checkpoint_interval_spark(location)
             fg_source_table = _delta_table_for_path(self._spark_session, location)
+            dataset = _with_table_timestamps(dataset, fg_source_table.toDF().schema)
 
             source_alias = (
                 f"{self._feature_group.name}_{self._feature_group.version}_source"
@@ -769,7 +918,7 @@ class DeltaEngine:
                 raise FeatureStoreException(
                     "Failed to write to delta table in external cluster. Cannot get user name for project."
                 )
-            project_username = f"{_client.project_name}__{user_name}"
+            project_username = f"{_client._project_backing_name}__{user_name}"
             _logger.debug(f"Setting LIBHDFS_DEFAULT_USER to {project_username}")
             os.environ["LIBHDFS_DEFAULT_USER"] = project_username
 
@@ -906,13 +1055,19 @@ class DeltaEngine:
         """The Delta application transactions a writer records with its commit.
 
         `write_options["commit_properties"]` names either one `app_id` and `version` or a list of them under `transactions`; a reader checks `DeltaTable.transaction_version(app_id)` to see whether a retried write already landed.
+        A fenced write (`write_options["writer_epoch"]`) also records `Transaction("hops-writer", epoch)`.
         """
         properties = (write_options or {}).get("commit_properties")
-        if not properties:
+        transactions = (
+            list(properties.get("transactions", [properties])) if properties else []
+        )
+        epoch = kafka_engine._writer_epoch(write_options)
+        if epoch is not None:
+            transactions.append({"app_id": DeltaEngine.WRITER_APP_ID, "version": epoch})
+        if not transactions:
             return None
         from deltalake import CommitProperties, Transaction
 
-        transactions = properties.get("transactions", [properties])
         return CommitProperties(
             app_transactions=[
                 Transaction(
@@ -921,6 +1076,41 @@ class DeltaEngine:
                 )
                 for transaction in transactions
             ]
+        )
+
+    @classmethod
+    def _check_writer_epoch(cls, table, epoch: int | None) -> None:
+        """Refuse a fenced commit from `table`'s snapshot when a newer writer already committed to it."""
+        if epoch is None:
+            return
+        refusal = writer_epoch_refusal(
+            table.transaction_version(cls.WRITER_APP_ID), epoch
+        )
+        if refusal is not None:
+            raise StaleWriterError(refusal)
+
+    def _fence(self, epoch: int) -> None:
+        """Commit an empty transaction recording `Transaction("hops-writer", epoch)`: from it on, lower writers are refused.
+
+        A fenced writer makes it once per table at claim time, so a writer that writes nothing still advances the
+        table's fence. The table must exist: a fenced group's table is created with its properties at group create.
+        """
+        import pyarrow as pa
+        from deltalake import DeltaTable as DeltaRsTable
+        from deltalake import write_deltalake as deltars_write
+
+        table = DeltaRsTable(
+            self._get_delta_rs_location(),
+            storage_options=self._get_delta_rs_storage_options(),
+        )
+        self._check_writer_epoch(table, epoch)
+        deltars_write(
+            table,
+            pa.schema(table.schema().to_arrow()).empty_table(),
+            mode=self.APPEND,
+            commit_properties=self._commit_properties(
+                {kafka_engine.WRITER_EPOCH_OPTION: epoch}
+            ),
         )
 
     def _write_delta_rs_dataset(
@@ -963,6 +1153,7 @@ class DeltaEngine:
             and str(write_options.get("mode", "")).lower() == self.APPEND
         )
         commit_properties = self._commit_properties(write_options)
+        epoch = kafka_engine._writer_epoch(write_options)
 
         try:
             fg_source_table = DeltaRsTable(location, storage_options=storage_options)
@@ -977,11 +1168,19 @@ class DeltaEngine:
             is_delta_table = False
 
         if not is_delta_table:
+            dataset = self._cast_to_declared_types(dataset, self._feature_group)
             configuration = {
-                self.DELTA_ENABLE_CHANGE_DATA_FEED: (write_options or {}).get(
-                    self.DELTA_ENABLE_CHANGE_DATA_FEED, "true"
-                )
+                **self._checkpoint_interval_property(),
+                self.DELTA_ENABLE_CHANGE_DATA_FEED: self.change_data_feed_value(
+                    (write_options or {}).get(
+                        self.DELTA_ENABLE_CHANGE_DATA_FEED, "true"
+                    )
+                ),
             }
+            if self.DELTA_CHECKPOINT_INTERVAL in (write_options or {}):
+                configuration[self.DELTA_CHECKPOINT_INTERVAL] = str(
+                    write_options[self.DELTA_CHECKPOINT_INTERVAL]
+                )
             deltars_write(
                 location,
                 dataset,
@@ -991,30 +1190,34 @@ class DeltaEngine:
                 commit_properties=commit_properties,
             )
         else:
-            if (
-                isinstance(write_options, dict)
-                and self.DELTA_ENABLE_CHANGE_DATA_FEED in write_options
-            ):
-                fg_source_table.alter.set_table_properties(
-                    {
-                        self.DELTA_ENABLE_CHANGE_DATA_FEED: write_options.get(
-                            self.DELTA_ENABLE_CHANGE_DATA_FEED
+            dataset = self._cast_to_schema(dataset, fg_source_table.schema().to_arrow())
+            if epoch is None:
+                properties = {}
+                if (
+                    isinstance(write_options, dict)
+                    and self.DELTA_ENABLE_CHANGE_DATA_FEED in write_options
+                ):
+                    properties[self.DELTA_ENABLE_CHANGE_DATA_FEED] = (
+                        self.change_data_feed_value(
+                            write_options.get(self.DELTA_ENABLE_CHANGE_DATA_FEED)
                         )
-                    }
-                )
+                    )
+                self._set_table_properties_rs(fg_source_table, properties)
+            else:
+                # A fenced table's properties were set at create; a commit of its own here would carry no epoch.
+                self._check_writer_epoch(fg_source_table, epoch)
             if append_requested:
                 deltars_write(
-                    location,
+                    fg_source_table,
                     dataset,
                     mode=self.APPEND,
-                    storage_options=storage_options or None,
                     commit_properties=commit_properties,
                 )
                 _logger.debug(
                     f"Explicit append mode requested for {location}. Skipping merge operation."
                 )
                 return self._get_last_commit_metadata(
-                    self._spark_session, location, storage_options=storage_options
+                    self._spark_session, location, delta_rs_table=fg_source_table
                 )
             # Optimisation: if the feature group is partitioned and none of the
             # incoming partition values already exist in the table, a plain append
@@ -1023,11 +1226,10 @@ class DeltaEngine:
             use_append = self._can_use_append(fg_source_table, dataset)
             if use_append:
                 deltars_write(
-                    location,
+                    fg_source_table,
                     dataset,
                     mode="append",
-                    partition_by=self._feature_group.partition_key,
-                    storage_options=storage_options or None,
+                    commit_properties=commit_properties,
                 )
             else:
                 source_alias = (
@@ -1056,6 +1258,7 @@ class DeltaEngine:
                         predicate=merge_query_str,
                         source_alias=updates_alias,
                         target_alias=source_alias,
+                        commit_properties=commit_properties,
                     )
                     .when_matched_update_all()
                     .when_not_matched_insert_all()
@@ -1065,8 +1268,144 @@ class DeltaEngine:
             f"Executed delta-rs write. Retrieving commit metadata for Delta table at {location}"
         )
         return self._get_last_commit_metadata(
-            self._spark_session, location, storage_options=storage_options
+            self._spark_session,
+            location,
+            storage_options=storage_options,
+            delta_rs_table=fg_source_table if is_delta_table else None,
         )
+
+    @staticmethod
+    def change_data_feed_value(value):
+        """Return the `delta.enableChangeDataFeed` option as Delta's string.
+
+        Unset means true. Otherwise the value must read as true or false, in
+        any case or type.
+
+        Raises:
+            FeatureStoreException: The value is neither true nor false.
+        """
+        if value is None:
+            return "true"
+        cdf = str(value).lower()
+        if cdf not in ("true", "false"):
+            raise FeatureStoreException(
+                f"Invalid value {value!r} for write option "
+                f"'{DeltaEngine.DELTA_ENABLE_CHANGE_DATA_FEED}': use true or false."
+            )
+        return cdf
+
+    @staticmethod
+    def _reconcile_type(source, target):
+        """Return *source* with its decimals and timestamps set to the types of *target*.
+
+        Only decimal to decimal and timestamp to timestamp take the table's
+        type (unit and time zone), at the top level and inside lists and
+        structs. Every other pair, and every extra or missing struct field,
+        keeps the batch type so delta-rs reports it as before. delta-rs
+        reports every list as `list` and accepts `large_list` and
+        `fixed_size_list` batches, so a list keeps the batch's container type.
+        """
+        import pyarrow as pa
+
+        def is_any_list(t):
+            return (
+                pa.types.is_list(t)
+                or pa.types.is_large_list(t)
+                or pa.types.is_fixed_size_list(t)
+            )
+
+        if pa.types.is_decimal(source) and pa.types.is_decimal(target):
+            return target
+        if pa.types.is_timestamp(source) and pa.types.is_timestamp(target):
+            return target
+        if is_any_list(source) and is_any_list(target):
+            value_field = source.value_field.with_type(
+                DeltaEngine._reconcile_type(source.value_type, target.value_type)
+            )
+            if pa.types.is_large_list(source):
+                return pa.large_list(value_field)
+            if pa.types.is_fixed_size_list(source):
+                return pa.list_(value_field, source.list_size)
+            return pa.list_(value_field)
+        if pa.types.is_struct(source) and pa.types.is_struct(target):
+            fields = []
+            for field in source:
+                index = target.get_field_index(field.name)
+                if index >= 0:
+                    field = field.with_type(
+                        DeltaEngine._reconcile_type(
+                            field.type, target.field(index).type
+                        )
+                    )
+                fields.append(field)
+            return pa.struct(fields)
+        return source
+
+    @staticmethod
+    def _cast_to_declared_types(dataset, feature_group):
+        """Safe-cast the decimal, null-typed and narrower integer or float columns of *dataset* to the feature group's declared types.
+
+        A new Delta table takes the batch's types, which follow the values: a
+        decimal(7) feature would otherwise land as decimal(2,1) for 1.5, an
+        int32 column as int for a bigint feature, and an all-None column is
+        typed null, which delta-rs refuses.
+        """
+        import pyarrow as pa
+
+        if not isinstance(dataset, pa.Table):
+            return dataset
+        declared = {f.name: f.type for f in feature_group.columns if f.type}
+        columns = []
+        for name, column in zip(dataset.column_names, dataset.columns, strict=True):
+            offline_type = declared.get(name)
+            if offline_type and (
+                pa.types.is_null(column.type)
+                or (
+                    pa.types.is_decimal(column.type)
+                    and offline_type.lower().startswith("decimal")
+                )
+                or (
+                    pa.types.is_signed_integer(column.type)
+                    and column.type.bit_width
+                    < _INTEGER_BIT_WIDTHS.get(offline_type.lower(), 0)
+                )
+                or (
+                    pa.types.is_float32(column.type)
+                    and offline_type.lower() == "double"
+                )
+            ):
+                column = column.cast(
+                    _convert_offline_type_to_pyarrow_type(offline_type), safe=True
+                )
+            columns.append(column)
+        return pa.Table.from_arrays(columns, names=dataset.column_names)
+
+    @staticmethod
+    def _cast_to_schema(dataset, table_schema):
+        """Safe-cast the decimals and timestamps of *dataset* to the types of *table_schema*.
+
+        Decimal precision of the batch follows its values, and naive timestamps
+        are UTC after `_prepare_df_for_delta`. A table written by the backend
+        holds decimal(p,0) and may hold UTC timestamps, which delta-rs does not
+        cast to. The cast is safe, so an out-of-range or fractional decimal
+        raises `ArrowInvalid` instead of being truncated.
+        """
+        import pyarrow as pa
+
+        if not isinstance(dataset, pa.Table):
+            return dataset
+        table_schema = pa.schema(table_schema)
+        columns = []
+        for name, column in zip(dataset.column_names, dataset.columns, strict=True):
+            index = table_schema.get_field_index(name)
+            if index >= 0:
+                target = DeltaEngine._reconcile_type(
+                    column.type, table_schema.field(index).type
+                )
+                if target != column.type:
+                    column = column.cast(target, safe=True)
+            columns.append(column)
+        return pa.Table.from_arrays(columns, names=dataset.column_names)
 
     @staticmethod
     def _prepare_df_for_delta(df, timestamp_precision="us"):
@@ -1388,9 +1727,10 @@ class DeltaEngine:
         """Write a Delta checkpoint, so readers stop replaying the log from commit zero.
 
         A reader opening the table replays every commit since the last checkpoint.
-        On Spark, Delta writes one itself every `delta.checkpointInterval` commits, so
-        this forces one early; delta-rs writes none at all, so on that engine it is the
-        only thing that bounds the replay.
+        Spark and delta-rs both write one themselves every `delta.checkpointInterval`
+        commits. This engine sets that property from the cluster's
+        `featurestore_delta_checkpoint_interval` variable when the variable is available
+        and the table has none, so this forces one early.
 
         Expiring the log entries a checkpoint covers is a separate operation,
         `_cleanup_metadata`, which needs a checkpoint to already exist.
@@ -1712,11 +2052,17 @@ class DeltaEngine:
 
     @staticmethod
     def _get_last_commit_metadata(
-        spark_context, base_path, storage_options: dict | None = None
+        spark_context,
+        base_path,
+        storage_options: dict | None = None,
+        delta_rs_table=None,
     ):
         """Retrieve oldest and last data-changing commits (MERGE/WRITE) from a Delta table.
 
-        Uses shared filtering logic for both Spark and delta-rs.
+        Uses shared filtering logic for both Spark and delta-rs. A delta-rs
+        `delta_rs_table` the caller just wrote through is read for the new commit
+        only, without opening the table again; its `last_active_commit_time` is
+        None unless that commit is a checkpoint version.
         """
         data_ops = ["MERGE", "WRITE"]
         _logger.debug(f"Retrieving last commit metadata for Delta table at {base_path}")
@@ -1801,10 +2147,40 @@ class DeltaEngine:
                     "Install 'hops-deltalake' to enable Delta RS features."
                 ) from e
             # delta-rs DeltaTable (returns list[dict])
-            fg_source_table = DeltaRsTable(
+            if delta_rs_table is not None:
+                # The write already advanced this object to its own commit. Another
+                # writer may have landed on top since, so the entry is picked by
+                # the write's version from a bounded range.
+                write_version = delta_rs_table.version()
+                history_records = delta_rs_table.history(limit=1)
+                if history_records and (
+                    history_records[0]["version"] != write_version
+                    or history_records[0].get("operation") not in data_ops
+                ):
+                    head_version = history_records[0]["version"]
+                    history_records = delta_rs_table.history(
+                        limit=head_version - write_version + 1
+                    )
+                own_commit = next(
+                    (
+                        r
+                        for r in history_records
+                        if r["version"] == write_version
+                        and r.get("operation") in data_ops
+                    ),
+                    None,
+                )
+                if own_commit is None:
+                    return None
+                return DeltaEngine._get_delta_feature_group_commit(
+                    own_commit,
+                    DeltaEngine._oldest_commit_on_checkpoint(
+                        delta_rs_table, write_version
+                    ),
+                )
+            history_records = DeltaRsTable(
                 base_path, storage_options=storage_options or {}
-            )
-            history_records = fg_source_table.history()
+            ).history()
             _logger.debug(f"history_records for {base_path}: {history_records}")
 
         if not history_records:
@@ -1829,6 +2205,43 @@ class DeltaEngine:
         return DeltaEngine._get_delta_feature_group_commit(last_commit, oldest_commit)
 
     @staticmethod
+    def _oldest_commit_on_checkpoint(table, version):
+        """Return the oldest readable commit when `version` wrote a checkpoint, else None.
+
+        delta-rs removes expired log files only while writing a checkpoint, which
+        it does when `version + 1` is a multiple of `delta.checkpointInterval`
+        (default 100). Between checkpoints the oldest commit does not change.
+        """
+        import json  # noqa: PLC0415
+
+        from deltalake.fs import DeltaStorageHandler  # noqa: PLC0415
+        from pyarrow.fs import FileSelector  # noqa: PLC0415
+
+        interval = int(
+            table.metadata().configuration.get("delta.checkpointInterval", 100)
+        )
+        if (version + 1) % interval != 0:
+            return None
+        handler = DeltaStorageHandler.from_table(table._table)
+        commit_files = {}
+        for info in handler.get_file_info_selector(FileSelector("_delta_log")):
+            name = info.path.rsplit("/", 1)[-1]
+            stem, _, ext = name.partition(".")
+            if ext == "json" and stem.isdigit():
+                commit_files[int(stem)] = info.path
+        oldest_version = min(commit_files)
+        for line in (
+            handler.open_input_file(commit_files[oldest_version]).read().splitlines()
+        ):
+            commit_info = json.loads(line).get("commitInfo")
+            if commit_info is not None:
+                return {
+                    "version": oldest_version,
+                    "timestamp": commit_info["timestamp"],
+                }
+        return None
+
+    @staticmethod
     def _get_delta_feature_group_commit(last_commit, oldest_commit):
         _logger.debug(f"Extract info about the latest commit {last_commit}")
         operation = last_commit["operation"]
@@ -1839,8 +2252,10 @@ class DeltaEngine:
         operation_metrics = last_commit["operationMetrics"]
 
         # Extract info about the oldest remaining commit
-        oldest_commit_timestamp = util._convert_event_time_to_timestamp(
-            oldest_commit["timestamp"]
+        oldest_commit_timestamp = (
+            util._convert_event_time_to_timestamp(oldest_commit["timestamp"])
+            if oldest_commit is not None
+            else None
         )
 
         # Default all to zero

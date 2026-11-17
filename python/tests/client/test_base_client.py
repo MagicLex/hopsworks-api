@@ -23,6 +23,7 @@ import threading
 import pytest
 import requests
 from hopsworks_common import constants
+from hopsworks_common.client import auth, base
 from hsfs.client.base import Client
 from hsfs.client.exceptions import RestAPIError
 
@@ -158,6 +159,8 @@ class TestBaseClient:
         mocker.patch("requests.sessions.Session.prepare_request")
         unauthorized_response = requests.Response()
         unauthorized_response.status_code = 401
+        unauthorized_response.raw = io.BytesIO()
+        unauthorized_response._content = b""
         mocker.patch(
             "requests.sessions.Session.send", return_value=unauthorized_response
         )
@@ -172,6 +175,34 @@ class TestBaseClient:
 
         # Assert
         assert spy_retry_token_expired.call_count == 10
+
+    @staticmethod
+    def _response(status):
+        response = requests.Response()
+        response.status_code = status
+        response.raw = io.BytesIO()
+        response._content = b""
+        return response
+
+    @changes_environ
+    @pytest.mark.parametrize("unauthorized_count", [1, 2])
+    def test_token_refresh_closes_each_replaced_401(self, mocker, unauthorized_count):
+        # Arrange
+        mocker.patch.dict(os.environ, {Client.REST_ENDPOINT: "True"})
+        client = self._init_test_client()
+        mocker.patch("requests.sessions.Session.prepare_request")
+        unauthorized = [self._response(401) for _ in range(unauthorized_count)]
+        ok = self._response(200)
+        mocker.patch("requests.sessions.Session.send", side_effect=[*unauthorized, ok])
+        mocker.patch("hopsworks_common.client.base.Client._read_jwt")
+        mocker.patch("time.sleep")
+
+        # Act
+        client._send_request("GET", ["variables", "versions"])
+
+        # Assert
+        assert all(r.raw.closed for r in unauthorized)
+        assert not ok.raw.closed
 
     @changes_environ
     def test_invalid_token_retires_backoff_break(self, mocker):
@@ -189,6 +220,8 @@ class TestBaseClient:
         # setup unauthorized response
         unauthorized_response = requests.Response()
         unauthorized_response.status_code = 401
+        unauthorized_response.raw = io.BytesIO()
+        unauthorized_response._content = b""
 
         # setup ok response
         ok_response = requests.Response()
@@ -223,6 +256,7 @@ class TestBaseClient:
         response = requests.Response()
         response.status_code = 200
         response._content = b""
+        response.raw = io.BytesIO()
         return response
 
     def _mock_clock(self, mocker, monotonic=1000.0):
@@ -296,6 +330,7 @@ class TestBaseClient:
         client = self._init_test_client()
         unauthorized = requests.Response()
         unauthorized.status_code = 401
+        unauthorized.raw = io.BytesIO()
         mocker.patch("requests.sessions.Session.prepare_request")
         send = mocker.patch(
             "requests.sessions.Session.send",
@@ -317,12 +352,11 @@ class TestBaseClient:
     def test_token_refresh_after_a_rate_limit_stops_at_the_deadline(self, mocker):
         mocker.patch.dict(os.environ, {Client.REST_ENDPOINT: "True"})
         client = self._init_test_client()
-        unauthorized = requests.Response()
-        unauthorized.status_code = 401
         mocker.patch("requests.sessions.Session.prepare_request")
         mocker.patch(
             "requests.sessions.Session.send",
-            side_effect=[self._rate_limited_response(mocker)] + [unauthorized] * 20,
+            side_effect=[self._rate_limited_response(mocker)]
+            + [self._unauthorized_response() for _ in range(20)],
         )
         mocker.patch("hopsworks_common.client.base.Client._read_jwt")
         clock = [1000.0]
@@ -374,6 +408,7 @@ class TestBaseClient:
     def _unauthorized_response(self):
         response = requests.Response()
         response.status_code = 401
+        response.raw = io.BytesIO()
         return response
 
     @changes_environ
@@ -462,11 +497,41 @@ class TestBaseClient:
 
         assert send.call_count == 2
 
+    @changes_environ
+    def test_api_key_unauthorized_raises_without_token_retry(self, mocker):
+        # Arrange
+        os.environ[Client.REST_ENDPOINT] = "True"
+        client = self._init_test_client()
+        client._auth = auth.ApiKeyAuth("prefix.secret")
+
+        mocker.patch("requests.sessions.Session.prepare_request")
+        unauthorized_response = requests.Response()
+        unauthorized_response.status_code = 401
+        unauthorized_response._content = (
+            b'{"errorCode": 320013, "errorMsg": "API key not found in the database"}'
+        )
+        mocker.patch(
+            "requests.sessions.Session.send", return_value=unauthorized_response
+        )
+        read_jwt = mocker.patch("hopsworks_common.client.base.Client._read_jwt")
+        spy_retry_token_expired = mocker.spy(client, "_retry_token_expired")
+
+        # Act
+        with pytest.raises(RestAPIError) as e:
+            client._send_request("GET", ["project", 119, "credentials"])
+
+        # Assert
+        assert spy_retry_token_expired.call_count == 0
+        read_jwt.assert_not_called()
+        assert e.value.response.status_code == 401
+        assert e.value.error_code == 320013
+        assert "API key not found in the database" in str(e.value)
+
     def _init_test_client(self):
         client = Client()
         client._connected = True
         client._base_url = ""
-        client._auth = None
+        client._auth = auth.BearerAuth("token")
         client._verify = False
         client._session = requests.session()
         client.TOKEN_EXPIRED_RETRY_INTERVAL = 0  # Disable wait for tests
@@ -568,3 +633,27 @@ class TestBaseClient:
             for name in ("ca_chain", "client_cert", "client_key")
         )
         assert all(os.path.isdir(os.path.dirname(path)) for path in paths)
+
+
+class TestRetryWindow:
+    @changes_environ
+    @pytest.mark.parametrize("seconds", ["0", "-5", "2m", "inf", "nan"])
+    def test_a_bad_window_names_the_variable_and_the_value(self, seconds):
+        os.environ[Client.RETRY_SECONDS_ENV] = seconds
+
+        with pytest.raises(
+            ValueError, match=f"HOPSWORKS_REQUEST_RETRY_SECONDS.*{seconds!r}"
+        ):
+            base._retry_window()
+
+    @changes_environ
+    def test_the_environment_sets_the_window_and_the_switch(self):
+        os.environ[Client.RETRY_SECONDS_ENV] = "150"
+        assert base._retry_window() == 150
+
+        os.environ[Client.RETRY_ENV] = "off"
+        assert base._retry_window() is None
+
+        os.environ[Client.RETRY_ENV] = "maybe"
+        with pytest.raises(ValueError, match="HOPSWORKS_REQUEST_RETRY must be"):
+            base._retry_window()

@@ -35,6 +35,25 @@ def get_config(ctx: click.Context) -> config.HopsConfig:
     return cfg
 
 
+def trino_verify(ctx: click.Context | None = None) -> bool:
+    """Whether a Trino connection verifies the coordinator's TLS certificate.
+
+    Trino verifies by default, unlike the REST login. An explicit `--verify/--no-verify`,
+    `HOPSWORKS_HOSTNAME_VERIFICATION` or saved setting wins, so a cluster whose Trino load
+    balancer serves a certificate for another name (an IP outside its SAN) stays reachable.
+    The SDK never forwards the login's setting to Trino on its own.
+
+    Args:
+        ctx: Click context; the current one when omitted.
+
+    Returns:
+        The verify value for `project.get_trino_api().connect`.
+    """
+    ctx = ctx or click.get_current_context(silent=True)
+    cfg = get_config(ctx) if ctx else config.load()
+    return cfg.hostname_verification if cfg.hostname_verification_explicit else True
+
+
 def require_auth(ctx: click.Context) -> config.HopsConfig:
     """Return the resolved config or raise a clear error if unauthenticated.
 
@@ -76,11 +95,17 @@ def get_project(ctx: click.Context) -> Project:
             host=cfg.host or "",
             api_key_value=cfg.api_key,
             project=cfg.project,
+            project_id=cfg.project_id,
             internal=cfg.internal,
             hostname_verification=cfg.hostname_verification,
         )
     except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
-        raise click.ClickException(f"Login failed: {exc}") from exc
+        if cfg.project_id and "Could not find project with id" in str(exc):
+            raise click.ClickException(
+                f"Could not log in: the saved project id {cfg.project_id} is not found "
+                f"(deleted, or no longer a member). Run `hops project use <name>`."
+            ) from exc
+        auth.login_failed(exc, cfg.api_key_source)
     obj["project"] = project
     return project
 
@@ -123,7 +148,7 @@ def get_accessible_feature_stores(ctx: click.Context) -> list[Any]:
     from hsfs.core.feature_store_api import FeatureStoreApi
 
     try:
-        stores = FeatureStoreApi().get_all()
+        stores = FeatureStoreApi()._get_all()
     except Exception:  # noqa: BLE001 - degrade to just the project store
         stores = [own]
     own_id = getattr(own, "id", None)
