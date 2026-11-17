@@ -436,6 +436,30 @@ def test_a_failed_execution_without_the_backend_summary_names_only_its_state(
     assert "etl: execution #7 FAILED. Full logs" in result.output
 
 
+def test_a_failed_execution_gives_the_egress_line_as_its_reason(
+    mock_project, hopsfs, clock
+):
+    # The dlt job prints the line last, after the vendor's traceback.
+    line = (
+        "Egress from project demo to port 5432/TCP is closed. Ask for it: https://h/x."
+    )
+    hopsfs.files[STDERR] = (
+        f"Traceback\npsycopg2.OperationalError: Connection refused\nhopsworks egress: {line}\n",
+        1,
+    )
+    result, _, _ = _wait(mock_project, ["RUNNING", "FAILED"])
+    assert result.exit_code == 1
+    assert f"etl: execution #7 FAILED: {line[:-1]}. Full logs" in result.output
+
+
+def test_a_failed_execution_ignores_text_that_only_holds_the_egress_prefix(
+    mock_project, hopsfs, clock
+):
+    hopsfs.files[STDERR] = ("log: hopsworks egress: not at the start\n", 1)
+    result, _, _ = _wait(mock_project, ["RUNNING", "FAILED"])
+    assert "etl: execution #7 FAILED. Full logs" in result.output
+
+
 def test_execution_json_falls_back_when_the_backend_has_no_kube_monitor():
     fake = mock.MagicMock(_project_id=7)
     fake._send_request.side_effect = [
