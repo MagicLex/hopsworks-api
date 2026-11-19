@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from hopsworks.cli import health
+from hopsworks.cli import health, session
 
 
 SCANNER = (
@@ -108,7 +108,7 @@ def _freshness(doc: dict, table: dict) -> float | None:
 
 def _table(project: Any, conn: Any, table: dict, doc: dict, now: datetime) -> dict:
     name, version, kind = table["name"], int(table.get("version", 1)), table["kind"]
-    path = _table_dir(getattr(project, "name", ""), name, version)
+    path = _table_dir(getattr(project, "backing_name", ""), name, version)
     fact: dict[str, Any] = {"name": name, "version": version, "kind": kind}
     if table.get("mart"):
         fact["mart"] = table["mart"]
@@ -181,7 +181,8 @@ def collect(project: Any, doc: dict, slug: str, hours: int = 24) -> dict:
     try:
         conn = project.get_trino_api().connect(
             catalog="delta",
-            schema=f"{getattr(project, 'name', '').lower()}_featurestore",
+            schema=f"{getattr(project, 'backing_name', '').lower()}_featurestore",
+            verify=session.trino_verify(),
         )
     except Exception:  # noqa: BLE001 - row counts are left out without Trino
         conn = None
