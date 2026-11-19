@@ -59,12 +59,9 @@ def live(tmp_path_factory):
     host_value = _required_env("HOPSWORKS_LIVE_HOST").strip()
     host = urllib.parse.urlparse(host_value).hostname or host_value
     key_file = _required_env("HOPSWORKS_LIVE_KEY_FILE")
-    with open(key_file) as f:
-        key = f.read().strip()
     urllib3.disable_warnings()
     return {
         "host": host,
-        "key": key,
         "key_file": key_file,
         "existing": int(_required_env("HOPSWORKS_LIVE_PROJECT_ID")),
         "cache": str(tmp_path_factory.mktemp("session")),
@@ -72,10 +69,13 @@ def live(tmp_path_factory):
 
 
 def _rest(live, method, path, **kwargs):
+    # The key is read here and never kept: pytest prints fixture values on a failure.
+    with open(live["key_file"]) as f:
+        key = f.read().strip()
     return requests.request(
         method,
         f"https://{live['host']}/hopsworks-api/api{path}",
-        headers={"Authorization": f"ApiKey {live['key']}"},
+        headers={"Authorization": f"ApiKey {key}"},
         verify=False,
         timeout=120,
         **kwargs,
@@ -93,7 +93,8 @@ def _in_fresh_process(live, code, project_id):
     script = (
         "import json, hopsworks\n"
         f"project = hopsworks.login(host={live['host']!r}, api_key_file={live['key_file']!r}, "
-        f"project_id={project_id}, hostname_verification=False, engine=\"python\")\n" + code
+        f'project_id={project_id}, hostname_verification=False, engine="python")\n'
+        + code
     )
     return subprocess.run(
         [sys.executable, "-c", script],
