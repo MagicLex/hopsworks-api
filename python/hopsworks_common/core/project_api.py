@@ -136,7 +136,13 @@ class ProjectApi:
             hopsworks.client.exceptions.RestAPIError: If unable to get the project.
         """
         _client = client._get_instance()
-        project_json = _client._send_request("GET", ["project", project_id])
+        # Kept only in the session of this project: listing projects reads others by id.
+        own = getattr(_client, "_session_project", None) == str(project_id)
+        project_json = session_cache.get(f"project:{project_id}") if own else None
+        if project_json is None:
+            project_json = _client._send_request("GET", ["project", project_id])
+            if own:
+                session_cache.put(f"project:{project_id}", project_json)
         return project.Project.from_response_json(project_json)
 
     def _create_project(

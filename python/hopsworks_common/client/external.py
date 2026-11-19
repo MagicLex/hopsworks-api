@@ -123,8 +123,9 @@ class Client(base.Client):
             backing_name = project_info.get("backingName")
         self._project_name = project
         _logger.debug("Project name: %s", self._project_name)
-        self._bind_session(project)
         self._project_id = str(project_id)
+        # By id: several projects may share a display name.
+        self._bind_session(self._project_id)
         # Older backends return no backingName; there the backing name is the project name.
         self._project_backing_name = backing_name or project
         _logger.debug("Setting Project ID: %s", self._project_id)
