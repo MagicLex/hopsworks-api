@@ -619,12 +619,8 @@ class TestTrinoApi:
         mocker.patch(
             "hopsworks_common.core.trino_api.client._is_external", return_value=False
         )
-        mock_client = Mock()
+        mock_client = trino_api._mock_client
         mock_client._get_ca_chain_path.return_value = "/tmp/ca.pem"
-        mocker.patch(
-            "hopsworks_common.core.trino_api.client._get_instance",
-            return_value=mock_client,
-        )
         mock_trino_connect = mocker.patch(
             "hopsworks_common.core.trino_api._trino_connect"
         )
@@ -632,7 +628,9 @@ class TestTrinoApi:
         trino_api.connect(catalog="iceberg")
         trino_api.connect(extra_credential=[("custom", "x")])
 
-        mock_client._send_request.assert_not_called()
+        assert [c.args for c in mock_client._send_request.call_args_list] == [
+            ("GET", ["project", trino_api._project_id, "trino", "credentials"])
+        ] * 2
         assert "extra_credential" not in mock_trino_connect.call_args_list[0].kwargs
         assert mock_trino_connect.call_args_list[1].kwargs["extra_credential"] == [
             ("custom", "x")
