@@ -321,3 +321,17 @@ class PlatformIntelligenceException(Exception):
 @also_available_as("hsml.client.exceptions.TrinoException")
 class TrinoException(Exception):
     """Generic Trino exception."""
+
+
+@public("hopsworks.client.exceptions.TrinoAccountPendingError")
+class TrinoAccountPendingError(TrinoException):
+    """The project member's Trino account is still being set up.
+
+    Retry after `retry_after` seconds.
+    """
+
+    def __init__(self, retry_after: int = 2) -> None:
+        self.retry_after = retry_after
+        super().__init__(
+            f"Trino access for this project is still being set up; retry in {retry_after} s"
+        )
