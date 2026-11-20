@@ -23,6 +23,7 @@ import threading
 import pytest
 import requests
 from hopsworks_common import constants
+from hopsworks_common.client import auth, base
 from hsfs.client.base import Client
 from hsfs.client.exceptions import RestAPIError
 
@@ -158,6 +159,8 @@ class TestBaseClient:
         mocker.patch("requests.sessions.Session.prepare_request")
         unauthorized_response = requests.Response()
         unauthorized_response.status_code = 401
+        unauthorized_response.raw = io.BytesIO()
+        unauthorized_response._content = b""
         mocker.patch(
             "requests.sessions.Session.send", return_value=unauthorized_response
         )
@@ -172,6 +175,34 @@ class TestBaseClient:
 
         # Assert
         assert spy_retry_token_expired.call_count == 10
+
+    @staticmethod
+    def _response(status):
+        response = requests.Response()
+        response.status_code = status
+        response.raw = io.BytesIO()
+        response._content = b""
+        return response
+
+    @changes_environ
+    @pytest.mark.parametrize("unauthorized_count", [1, 2])
+    def test_token_refresh_closes_each_replaced_401(self, mocker, unauthorized_count):
+        # Arrange
+        mocker.patch.dict(os.environ, {Client.REST_ENDPOINT: "True"})
+        client = self._init_test_client()
+        mocker.patch("requests.sessions.Session.prepare_request")
+        unauthorized = [self._response(401) for _ in range(unauthorized_count)]
+        ok = self._response(200)
+        mocker.patch("requests.sessions.Session.send", side_effect=[*unauthorized, ok])
+        mocker.patch("hopsworks_common.client.base.Client._read_jwt")
+        mocker.patch("time.sleep")
+
+        # Act
+        client._send_request("GET", ["variables", "versions"])
+
+        # Assert
+        assert all(r.raw.closed for r in unauthorized)
+        assert not ok.raw.closed
 
     @changes_environ
     def test_invalid_token_retires_backoff_break(self, mocker):
@@ -189,6 +220,8 @@ class TestBaseClient:
         # setup unauthorized response
         unauthorized_response = requests.Response()
         unauthorized_response.status_code = 401
+        unauthorized_response.raw = io.BytesIO()
+        unauthorized_response._content = b""
 
         # setup ok response
         ok_response = requests.Response()
@@ -223,6 +256,7 @@ class TestBaseClient:
         response = requests.Response()
         response.status_code = 200
         response._content = b""
+        response.raw = io.BytesIO()
         return response
 
     def _mock_clock(self, mocker, monotonic=1000.0):
@@ -247,6 +281,63 @@ class TestBaseClient:
         assert send.call_count == 2
         sleep.assert_called_once_with(3)
         refused.close.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "error_code", [150138, 130106, 100087, 240080, 510032], ids=lambda c: str(c)
+    )
+    def test_compute_busy_request_waits_and_retries(self, mocker, error_code):
+        client = self._init_test_client()
+        refused = self._rate_limited_response(
+            mocker, retry_after="7", error_code=error_code
+        )
+        mocker.patch("requests.sessions.Session.prepare_request")
+        send = mocker.patch(
+            "requests.sessions.Session.send",
+            side_effect=[refused, self._ok_response()],
+        )
+        sleep = self._mock_clock(mocker)
+
+        client._send_request("POST", ["project", 1, "jobs", "j", "executions"])
+
+        assert send.call_count == 2
+        sleep.assert_called_once_with(7)
+        refused.close.assert_called_once()
+
+    def test_compute_busy_wait_beyond_budget_raises_with_the_server_message(
+        self, mocker
+    ):
+        client = self._init_test_client()
+        refused = self._rate_limited_response(
+            mocker, retry_after="61", error_code=130106
+        )
+        refused._content = json.dumps(
+            {"errorCode": 130106, "errorMsg": "needs 4.1 CPU, only 4.05 free"}
+        ).encode()
+        mocker.patch("requests.sessions.Session.prepare_request")
+        send = mocker.patch("requests.sessions.Session.send", return_value=refused)
+        sleep = self._mock_clock(mocker)
+
+        with pytest.raises(RestAPIError) as error:
+            client._send_request("POST", ["project", 1, "jobs", "j", "executions"])
+
+        assert error.value.response is refused
+        assert error.value.response.json()["errorMsg"].startswith("needs 4.1 CPU")
+        assert send.call_count == 1
+        sleep.assert_not_called()
+
+    def test_compute_busy_without_retry_after_is_not_retried(self, mocker):
+        client = self._init_test_client()
+        refused = self._rate_limited_response(mocker, error_code=130106)
+        del refused.headers["Retry-After"]
+        mocker.patch("requests.sessions.Session.prepare_request")
+        send = mocker.patch("requests.sessions.Session.send", return_value=refused)
+        sleep = self._mock_clock(mocker)
+
+        with pytest.raises(RestAPIError):
+            client._send_request("POST", ["project", 1, "jobs", "j", "executions"])
+
+        assert send.call_count == 1
+        sleep.assert_not_called()
 
     def test_other_too_many_requests_is_not_retried(self, mocker):
         client = self._init_test_client()
@@ -296,6 +387,7 @@ class TestBaseClient:
         client = self._init_test_client()
         unauthorized = requests.Response()
         unauthorized.status_code = 401
+        unauthorized.raw = io.BytesIO()
         mocker.patch("requests.sessions.Session.prepare_request")
         send = mocker.patch(
             "requests.sessions.Session.send",
@@ -317,12 +409,11 @@ class TestBaseClient:
     def test_token_refresh_after_a_rate_limit_stops_at_the_deadline(self, mocker):
         mocker.patch.dict(os.environ, {Client.REST_ENDPOINT: "True"})
         client = self._init_test_client()
-        unauthorized = requests.Response()
-        unauthorized.status_code = 401
         mocker.patch("requests.sessions.Session.prepare_request")
         mocker.patch(
             "requests.sessions.Session.send",
-            side_effect=[self._rate_limited_response(mocker)] + [unauthorized] * 20,
+            side_effect=[self._rate_limited_response(mocker)]
+            + [self._unauthorized_response() for _ in range(20)],
         )
         mocker.patch("hopsworks_common.client.base.Client._read_jwt")
         clock = [1000.0]
@@ -374,6 +465,7 @@ class TestBaseClient:
     def _unauthorized_response(self):
         response = requests.Response()
         response.status_code = 401
+        response.raw = io.BytesIO()
         return response
 
     @changes_environ
@@ -462,11 +554,157 @@ class TestBaseClient:
 
         assert send.call_count == 2
 
+    @changes_environ
+    def test_api_key_unauthorized_raises_without_token_retry(self, mocker):
+        # Arrange
+        os.environ[Client.REST_ENDPOINT] = "True"
+        client = self._init_test_client()
+        client._auth = auth.ApiKeyAuth("prefix.secret")
+
+        mocker.patch("requests.sessions.Session.prepare_request")
+        unauthorized_response = requests.Response()
+        unauthorized_response.status_code = 401
+        unauthorized_response._content = (
+            b'{"errorCode": 320013, "errorMsg": "API key not found in the database"}'
+        )
+        mocker.patch(
+            "requests.sessions.Session.send", return_value=unauthorized_response
+        )
+        read_jwt = mocker.patch("hopsworks_common.client.base.Client._read_jwt")
+        spy_retry_token_expired = mocker.spy(client, "_retry_token_expired")
+
+        # Act
+        with pytest.raises(RestAPIError) as e:
+            client._send_request("GET", ["project", 119, "credentials"])
+
+        # Assert
+        assert spy_retry_token_expired.call_count == 0
+        read_jwt.assert_not_called()
+        assert e.value.response.status_code == 401
+        assert e.value.error_code == 320013
+        assert "API key not found in the database" in str(e.value)
+
+    def test_request_deadline_cuts_off_a_stalled_server(self):
+        """A server that accepts the connection and never answers: the block's deadline ends the wait."""
+        import socket
+        import time
+
+        from hopsworks_common.client.base import request_deadline
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        accepted = []
+        threading.Thread(
+            target=lambda: accepted.append(listener.accept()), daemon=True
+        ).start()
+        client = self._init_test_client()
+        client._session.trust_env = False
+        client._base_url = f"https://127.0.0.1:{listener.getsockname()[1]}"
+        try:
+            started = time.monotonic()
+            with request_deadline(started + 5), request_deadline(started + 1):
+                with pytest.raises(requests.exceptions.RequestException):
+                    client._send_request("GET", ["variables", "versions"])
+                assert accepted
+                assert time.monotonic() - started < 3
+                started = time.monotonic()
+                with pytest.raises(requests.exceptions.Timeout):
+                    client._send_request("GET", ["variables", "versions"])
+                assert time.monotonic() - started < 0.5
+        finally:
+            listener.close()
+            for connection, _ in accepted:
+                connection.close()
+
+    def test_request_deadline_cuts_off_a_trickling_body(self, tmp_path):
+        """Headers and the first body bytes at once, then one byte a second: the deadline still ends the read."""
+        import socket
+        import ssl
+        import time
+
+        from hopsworks_common.client.base import request_deadline
+
+        from tests.cli.serving_server import tls_context
+
+        context = tls_context(tmp_path)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        stop = threading.Event()
+
+        def serve():
+            raw, _ = listener.accept()
+            with context.wrap_socket(raw, server_side=True) as conn:
+                conn.recv(65536)
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    b"Content-Length: 1000\r\n\r\n[1,"
+                )
+                while not stop.wait(1):
+                    try:
+                        conn.sendall(b" ")
+                    except (OSError, ssl.SSLError):
+                        return
+
+        threading.Thread(target=serve, daemon=True).start()
+        client = self._init_test_client()
+        client._session.trust_env = False
+        client._base_url = f"https://127.0.0.1:{listener.getsockname()[1]}"
+        try:
+            started = time.monotonic()
+            with (
+                request_deadline(started + 2),
+                pytest.raises(
+                    requests.exceptions.Timeout, match="still running at its deadline"
+                ),
+            ):
+                client._send_request("GET", ["variables", "versions"])
+            assert time.monotonic() - started < 3
+        finally:
+            stop.set()
+            listener.close()
+
+    def test_request_deadline_leaves_a_streamed_body_to_the_caller(self, tmp_path):
+        """With stream=True the deadline's cut ends with the headers: the caller reads the body after it, each socket wait still clipped."""
+        import socket
+        import time
+
+        from hopsworks_common.client.base import request_deadline
+
+        from tests.cli.serving_server import tls_context
+
+        context = tls_context(tmp_path)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+
+        def serve():
+            raw, _ = listener.accept()
+            with context.wrap_socket(raw, server_side=True) as conn:
+                conn.recv(65536)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")
+                for byte in b"hello":  # the last bytes after the deadline
+                    time.sleep(0.4)
+                    conn.sendall(bytes([byte]))
+                time.sleep(0.5)
+
+        threading.Thread(target=serve, daemon=True).start()
+        client = self._init_test_client()
+        client._session.trust_env = False
+        client._base_url = f"https://127.0.0.1:{listener.getsockname()[1]}"
+        try:
+            with request_deadline(time.monotonic() + 1):
+                response = client._send_request("GET", ["x"], stream=True)
+            assert response.content == b"hello"
+        finally:
+            listener.close()
+
     def _init_test_client(self):
         client = Client()
         client._connected = True
         client._base_url = ""
-        client._auth = None
+        client._auth = auth.BearerAuth("token")
         client._verify = False
         client._session = requests.session()
         client.TOKEN_EXPIRED_RETRY_INTERVAL = 0  # Disable wait for tests
@@ -568,3 +806,27 @@ class TestBaseClient:
             for name in ("ca_chain", "client_cert", "client_key")
         )
         assert all(os.path.isdir(os.path.dirname(path)) for path in paths)
+
+
+class TestRetryWindow:
+    @changes_environ
+    @pytest.mark.parametrize("seconds", ["0", "-5", "2m", "inf", "nan"])
+    def test_a_bad_window_names_the_variable_and_the_value(self, seconds):
+        os.environ[Client.RETRY_SECONDS_ENV] = seconds
+
+        with pytest.raises(
+            ValueError, match=f"HOPSWORKS_REQUEST_RETRY_SECONDS.*{seconds!r}"
+        ):
+            base._retry_window()
+
+    @changes_environ
+    def test_the_environment_sets_the_window_and_the_switch(self):
+        os.environ[Client.RETRY_SECONDS_ENV] = "150"
+        assert base._retry_window() == 150
+
+        os.environ[Client.RETRY_ENV] = "off"
+        assert base._retry_window() is None
+
+        os.environ[Client.RETRY_ENV] = "maybe"
+        with pytest.raises(ValueError, match="HOPSWORKS_REQUEST_RETRY must be"):
+            base._retry_window()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import click
-from hopsworks.cli import auth, config, output, session
+from hopsworks.cli import auth, config, egress, output, session
 
 
 @click.group("project")
@@ -18,11 +18,17 @@ def project_group() -> None:
 def project_list(ctx: click.Context) -> None:
     """Show every project the current user is a member of.
 
+    \f
     Args:
-        ctx: Click context carrying the resolved ``HopsConfig``.
+        ctx: Click context carrying the resolved `HopsConfig`.
     """
     cfg = _require_auth(ctx)
-    auth.login(host=cfg.host or "", api_key_value=cfg.api_key, project=cfg.project)
+    auth.login(
+        host=cfg.host or "",
+        api_key_value=cfg.api_key,
+        project=cfg.project,
+        project_id=cfg.project_id,
+    )
     from hopsworks_common.core import project_api  # noqa: PLC0415
 
     # One request: the team list already carries each project's id and name,
@@ -33,7 +39,15 @@ def project_list(ctx: click.Context) -> None:
         teams, key=lambda t: t.get("project", {}).get("name", "").lower()
     ):
         project = team.get("project", {})
-        active = "*" if project.get("name") == cfg.project else ""
+        active = (
+            "*"
+            if (
+                project.get("id") == cfg.project_id
+                if cfg.project_id
+                else project.get("name") == cfg.project
+            )
+            else ""
+        )
         rows.append(
             [
                 project.get("id", "?"),
@@ -49,16 +63,25 @@ def project_list(ctx: click.Context) -> None:
 @click.argument("name")
 @click.pass_context
 def project_use(ctx: click.Context, name: str) -> None:
-    """Switch the default project to ``name`` and cache its identifiers.
+    """Switch the default project.
 
+    Switch the default project to `name` and cache its identifiers.
+    A project name starts with a letter, so a numeric `name` is a project id.
+    Use it when several projects share a name.
+
+    \f
     Args:
-        ctx: Click context carrying the resolved ``HopsConfig``.
-        name: Project name to activate.
+        ctx: Click context carrying the resolved `HopsConfig`.
+        name: Project name or id to activate.
     """
     cfg = _require_auth(ctx)
+    by_id = name.isdigit()
     try:
         project = auth.login(
-            host=cfg.host or "", api_key_value=cfg.api_key, project=name
+            host=cfg.host or "",
+            api_key_value=cfg.api_key,
+            project=None if by_id else name,
+            project_id=int(name) if by_id else None,
         )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
@@ -86,7 +109,9 @@ def _feature_store_id(project: Any) -> int | None:
     )
 
     _client = client._get_instance()
-    store = util._append_feature_store_suffix(getattr(project, "name", "") or "")
+    store = util._append_feature_store_suffix(
+        getattr(project, "backing_name", "") or ""
+    )
     try:
         raw = _client._send_request(
             "GET", ["project", _client._project_id, "featurestores", store]
@@ -101,12 +126,16 @@ def _feature_store_id(project: Any) -> int | None:
 def project_info(ctx: click.Context) -> None:
     """Print details about the currently active project.
 
+    \f
     Args:
-        ctx: Click context carrying the resolved ``HopsConfig``.
+        ctx: Click context carrying the resolved `HopsConfig`.
     """
     cfg = _require_auth(ctx)
     project = auth.login(
-        host=cfg.host or "", api_key_value=cfg.api_key, project=cfg.project
+        host=cfg.host or "",
+        api_key_value=cfg.api_key,
+        project=cfg.project,
+        project_id=cfg.project_id,
     )
     rows = [
         ["Host", cfg.host or "?"],
@@ -115,7 +144,42 @@ def project_info(ctx: click.Context) -> None:
         ["Feature store ID", str(cfg.feature_store_id or "?")],
         ["Mode", cfg.mode()],
     ]
+    rows.extend(_compute_quota_rows())
+    rows.append(egress.row())
     output.print_table(["FIELD", "VALUE"], rows)
+
+
+def _compute_quota_rows() -> list[list[str]]:
+    """Rows for the compute the project may use: used and limit per resource.
+
+    A quota Hopsworks could not read is shown as unavailable, never as a value.
+    """
+    from hopsworks_common.core import rest  # noqa: PLC0415
+
+    try:
+        quota = rest._send_request("GET", rest._project_path("kube", "quota"))
+    except Exception:  # noqa: BLE001 - the rest of the info still prints
+        return [["Compute quota", "unavailable"]]
+    method = quota.get("method") or "NONE"
+    if method == "NONE":
+        return [["Compute quota", "none"]]
+    source = quota.get("source")
+    rows = [["Compute quota", f"{method} ({source})" if source else method]]
+    for label, key, scale, unit in (
+        ("CPU", "cpu", 1, " cores"),
+        ("Memory", "memory", 1024**3, " GiB"),
+        ("GPU", "gpu", 1, ""),
+    ):
+        limit = quota.get(key)
+        if limit and limit.get("limit") is not None:
+            used = (limit.get("used") or 0) / scale
+            text = f"{used:g} of {limit['limit'] / scale:g}{unit} used"
+            if limit.get("canBorrow"):
+                text += f", {limit['canBorrow'] / scale:g} more can be borrowed"
+            rows.append([label, text])
+    for warning in quota.get("warnings") or []:
+        rows.append(["Warning", str(warning)])
+    return rows
 
 
 @project_group.command("costs")
@@ -141,6 +205,7 @@ def project_costs(ctx: click.Context, window: str, project_name: str | None) -> 
     When some buckets of the window have no data, a coverage line says how
     many do; missing buckets are unknown cost, not zero.
 
+    \f
     Args:
         ctx: Click context.
         window: One of hour, day, week, month, year.

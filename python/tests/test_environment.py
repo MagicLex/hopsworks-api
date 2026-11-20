@@ -161,3 +161,48 @@ class TestEnvironment:
         # Assert
         mock_await_env.assert_called_once_with("myenv", 42)
         mock_await_lib.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("body", "preinstalled"),
+        [
+            (
+                {"name": "python-feature-pipeline", "isPreinstalledDockerImage": True},
+                True,
+            ),
+            ({"name": "fraud", "isPreinstalledDockerImage": False}, False),
+            ({"name": "fraud"}, None),
+        ],
+    )
+    def test_preinstalled_reads_whether_the_environment_is_built_in(
+        self, body, preinstalled
+    ):
+        assert (
+            environment.Environment.from_response_json(body).preinstalled
+            is preinstalled
+        )
+
+    @pytest.mark.parametrize(
+        ("body", "creator"),
+        [({"name": "fraud", "creator": "scott"}, "scott"), ({"name": "fraud"}, None)],
+    )
+    def test_creator_reads_who_created_the_environment(self, body, creator):
+        assert environment.Environment.from_response_json(body).creator == creator
+
+    @pytest.mark.parametrize(
+        ("body", "names"),
+        [
+            (
+                {
+                    "name": "fraud",
+                    "libraries": {
+                        "count": 2,
+                        "items": [{"library": "polars"}, {"library": "pandas"}],
+                    },
+                },
+                ["polars", "pandas"],
+            ),
+            ({"name": "fraud"}, None),
+        ],
+    )
+    def test_library_names_lists_what_the_environment_has(self, body, names):
+        assert environment.Environment.from_response_json(body).library_names == names
