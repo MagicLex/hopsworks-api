@@ -271,7 +271,7 @@ class TrinoApi:
         Only a backend without the endpoint fails quietly; any other failure is a warning, since the member's next read from such a catalog is otherwise an unexplained authentication error.
         """
         _client = client._get_instance()
-        path_params = ["project", _client._project_id, "trino", "extra-credentials"]
+        path_params = ["project", self._project_id, "trino", "extra-credentials"]
         try:
             items = _client._send_request("GET", path_params).get("items") or []
             return [(item["name"], item["value"]) for item in items]

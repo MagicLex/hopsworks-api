@@ -651,7 +651,7 @@ class TestTrinoApi:
         trino_api.connect(catalog="oracle_sales")
 
         mock_client._send_request.assert_any_call(
-            "GET", ["project", 119, "trino", "extra-credentials"]
+            "GET", ["project", 7, "trino", "extra-credentials"]
         )
         assert mock_trino_connect.call_args.kwargs["extra_credential"] == [
             ("hops_ds_42_user", "SCOTT"),
