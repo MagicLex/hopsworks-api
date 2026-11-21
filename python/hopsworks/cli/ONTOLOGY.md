@@ -22,7 +22,7 @@ hops <noun> [<owned noun>] <verb> [ARGS] [OPTIONS]
 Leaves:
 
 - Core: `list`, `info`, `create`, `update`, `delete`.
-- Membership: `add`, `remove`, `set`, `leave`.
+- Membership: `add`, `invite`, `remove`, `set`, `leave`.
 - Lifecycle: `start`, `stop`, `run`, `deploy`, `redeploy`, `extend`, `reset`, `enable`, `disable`, `wait`, `pause`, `resume`, `retry`, `schedule`.
 - Data: `insert`, `read`, `preview`, `lookup`, `query`, `predict`, `search`, `derive`, `compute`, `backfill`.
 - Transfer: `transfer`, `upload`, `download`, `import`, `export`, `clone`, `push`, `pull`, `mirror`, `share`, `unshare`, `install`, `register`.
