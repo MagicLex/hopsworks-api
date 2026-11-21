@@ -161,3 +161,44 @@ def test_pending_account_is_one_clear_error_line():
     assert exc_info.value.message == (
         "Trino access for this project is still being set up; retry in 5 s"
     )
+
+
+def _pending_from_server():
+    import requests
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    response = requests.Response()
+    response.status_code = 409
+    response._content = b'{"errorCode": 540025, "errorMsg": "x", "usrMsg": "The Trino login is being set up"}'
+    try:
+        raise RestAPIError("http://x", response)
+    except RestAPIError as cause:
+        try:
+            raise TrinoAccountPendingError(2) from cause
+        except TrinoAccountPendingError as pending:
+            return pending
+
+
+def test_trino_info_through_the_cli_prints_the_pending_message(mock_project):
+    api = mock.MagicMock()
+    api.get_basic_auth.side_effect = _pending_from_server()
+    with mock.patch.object(trino, "_api", return_value=api):
+        result = CliRunner().invoke(cli, ["trino", "info"])
+    assert result.exit_code == 1
+    assert result.output.strip() == (
+        "Error: Trino access for this project is still being set up; retry in 2 s"
+    )
+
+
+def test_sql_through_the_cli_prints_the_pending_message(mock_project):
+    api = mock.MagicMock()
+    api.connect.side_effect = _pending_from_server()
+    with (
+        mock.patch.object(trino, "_api", return_value=api),
+        mock.patch.object(trino, "_featurestore_schema", return_value="p_featurestore"),
+    ):
+        result = CliRunner().invoke(cli, ["sql", "SELECT 1"])
+    assert result.exit_code == 1
+    assert result.output.strip() == (
+        "Error: Trino access for this project is still being set up; retry in 2 s"
+    )
