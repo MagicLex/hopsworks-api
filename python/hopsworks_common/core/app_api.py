@@ -126,7 +126,7 @@ class AppApi:
         memory: int | None = None,
         cores: float | None = None,
         env_vars: dict[str, str] | None = None,
-        app_kind: str = "STREAMLIT",
+        app_kind: str = "CUSTOM",
         entrypoint_command: str | None = None,
         app_port: int | None = None,
         description: str | None = None,
@@ -224,7 +224,7 @@ class AppApi:
         """
         _client = client._get_instance()
 
-        app_kind_name = str(getattr(app_kind, "name", app_kind) or "STREAMLIT").upper()
+        app_kind_name = str(getattr(app_kind, "name", app_kind) or "CUSTOM").upper()
         app_path = self._trim_to_none(app_path)
         entrypoint_command = self._trim_to_none(entrypoint_command)
         git_url = self._trim_to_none(git_url)

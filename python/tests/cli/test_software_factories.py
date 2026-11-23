@@ -2448,3 +2448,12 @@ def test_every_piece_has_an_exit_check_the_cli_can_run():
                     break
                 cmd = cmd.get_command(ctx, word) or cmd
             assert not isinstance(cmd, click.Group), (row, command)
+
+
+def test_no_next_step_offer_holds_an_app():
+    text = " ".join((TEMPLATES / "hops.md").read_text(encoding="utf-8").split())
+    rules = text.split("## Rules", 1)[1].split(" ## ", 1)[0]
+    assert "an app over it" not in rules
+    assert "an app or an ML system over it" not in text
+    assert "a dashboard or an app over it, or the whole ML system" not in text
+    assert "or an app the request did not name is offered" not in text
