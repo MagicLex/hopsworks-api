@@ -20,12 +20,18 @@ app settings UI once the app code no longer needs the legacy prefix behavior.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 import click
 from hopsworks.cli import output, session, waits
 from hopsworks.cli.commands import env as env_commands
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @click.group("app")
@@ -646,61 +652,27 @@ def app_deploy(
         raise click.UsageError(f"{local_dir} has no app.py.")
     files = _deploy_files(local_dir)
     project = session.get_project(ctx)
-    username = env_commands.current_username()
-    remote_dir = f"Users/{username}/apps/{name}"
-    app_path = f"/Projects/{project.name}/{remote_dir}/app.py"
     has_requirements = _DEPLOY_REQUIREMENTS in files
-    env_name = environment or (
-        f"{name}-app-env" if has_requirements else _DEPLOY_BASE_ENV
-    )
-    own_env = environment is None and has_requirements
-    copy = env_commands.copy_name(env_name, username)
-    dataset_api = project.get_dataset_api()
-    installed_remote = f"{remote_dir}/{_DEPLOY_INSTALLED}"
-    installed = None
-    if own_env:
-        try:
-            record = _remote_text(dataset_api, installed_remote)
-        except Exception as exc:  # noqa: BLE001
+    if environment is None and has_requirements:
+        waited = ctx.with_resource(_env_lock(project.name, name, _PREPARE_WAIT_SECONDS))
+        if waited is None:
             raise click.ClickException(
-                f"Could not read {installed_remote}: {exc}"
-            ) from exc
-        if record is not None:
-            installed_env, _, installed_text = record.partition("\n")
-            installed = (installed_env, installed_text)
-
-    apps = project.get_app_api()
-    try:
-        existing = apps.get_app(name)
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Could not find app '{name}': {exc}") from exc
-    # The copy is this user's app environment once the app runs on it or an
-    # install into it finished.
-    if own_env and copy in (
-        getattr(existing, "environment_name", None),
-        installed and installed[0],
-    ):
-        env_name = copy
-    if existing is not None:
-        # The SDK cannot change an app's file or environment, so a mismatch
-        # would keep serving something else than what was uploaded.
-        if not (getattr(existing, "app_path", None) or "").endswith(
-            f"{remote_dir}/app.py"
-        ):
-            raise click.ClickException(
-                f"App '{name}' runs {existing.app_path}, not {app_path}. "
-                f"Pick another name, or `hops app delete {name} --yes --force` first."
+                f"A prepare-env or deploy of app '{name}' still holds its environment "
+                f"after {_PREPARE_WAIT_SECONDS} s: run this deploy again."
             )
-        # An app on the shared environment is told where its requirements went, below.
-        if getattr(existing, "environment_name", None) not in (
-            env_name,
-            f"{name}-app-env" if own_env else env_name,
-        ):
-            raise click.ClickException(
-                f"App '{name}' runs in environment '{existing.environment_name}', "
-                f"not '{env_name}'. Pass --env {existing.environment_name}, or "
-                f"`hops app delete {name} --yes --force` first."
-            )
+        if waited >= 1:
+            output.info("Waited %d s for the environment of app %s.", waited, name)
+    (
+        remote_dir,
+        app_path,
+        env_name,
+        own_env,
+        copy,
+        dataset_api,
+        installed,
+        apps,
+        existing,
+    ) = _deploy_target(project, name, environment, has_requirements)
 
     requirements_remote = f"{remote_dir}/{_DEPLOY_REQUIREMENTS}"
 
@@ -808,6 +780,177 @@ def app_deploy(
         )
     else:
         click.echo(url)
+
+
+def _deploy_target(
+    project: Any, name: str, environment: str | None, has_requirements: bool
+) -> tuple[str, str, str, bool, str, Any, tuple[str, str] | None, Any, Any]:
+    """Where `hops app deploy` puts the app and the environment it runs in; prepare-env resolves through here too."""
+    username = env_commands.current_username()
+    remote_dir = f"Users/{username}/apps/{name}"
+    app_path = f"/Projects/{project.name}/{remote_dir}/app.py"
+    env_name = environment or (
+        f"{name}-app-env" if has_requirements else _DEPLOY_BASE_ENV
+    )
+    own_env = environment is None and has_requirements
+    copy = env_commands.copy_name(env_name, username)
+    dataset_api = project.get_dataset_api()
+    installed_remote = f"{remote_dir}/{_DEPLOY_INSTALLED}"
+    installed = None
+    if own_env:
+        try:
+            record = _remote_text(dataset_api, installed_remote)
+        except Exception as exc:  # noqa: BLE001
+            raise click.ClickException(
+                f"Could not read {installed_remote}: {exc}"
+            ) from exc
+        if record is not None:
+            installed_env, _, installed_text = record.partition("\n")
+            installed = (installed_env, installed_text)
+
+    apps = project.get_app_api()
+    try:
+        existing = apps.get_app(name)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not find app '{name}': {exc}") from exc
+    # The copy is this user's app environment once the app runs on it or an
+    # install into it finished.
+    if own_env and copy in (
+        getattr(existing, "environment_name", None),
+        installed and installed[0],
+    ):
+        env_name = copy
+    if existing is not None:
+        # The SDK cannot change an app's file or environment, so a mismatch
+        # would keep serving something else than what was uploaded.
+        if not (getattr(existing, "app_path", None) or "").endswith(
+            f"{remote_dir}/app.py"
+        ):
+            raise click.ClickException(
+                f"App '{name}' runs {existing.app_path}, not {app_path}. "
+                f"Pick another name, or `hops app delete {name} --yes --force` first."
+            )
+        # An app on the shared environment is told where its requirements went, below.
+        if getattr(existing, "environment_name", None) not in (
+            env_name,
+            f"{name}-app-env" if own_env else env_name,
+        ):
+            raise click.ClickException(
+                f"App '{name}' runs in environment '{existing.environment_name}', "
+                f"not '{env_name}'. Pass --env {existing.environment_name}, or "
+                f"`hops app delete {name} --yes --force` first."
+            )
+    return (
+        remote_dir,
+        app_path,
+        env_name,
+        own_env,
+        copy,
+        dataset_api,
+        installed,
+        apps,
+        existing,
+    )
+
+
+# How long a deploy waits for a running `hops app prepare-env` of the same app.
+_PREPARE_WAIT_SECONDS = 600
+
+
+@contextlib.contextmanager
+def _env_lock(
+    project_name: str, name: str, wait_seconds: float
+) -> Iterator[float | None]:
+    """Hold the app's environment lock on this machine, shared by deploy and prepare-env.
+
+    Yields the seconds waited, or None when another holder kept it past `wait_seconds`.
+    """
+    import os
+    import tempfile
+
+    try:
+        import fcntl
+    except ImportError:  # Windows: prepare-env runs only in Hopsable's Linux sandbox.
+        yield 0.0
+        return
+    path = os.path.join(
+        tempfile.gettempdir(), f"hops-app-env-{project_name}-{name}.lock"
+    )
+    with open(path, "a") as f:
+        started = time.monotonic()
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() - started >= wait_seconds:
+                    yield None
+                    return
+                time.sleep(1)
+        yield time.monotonic() - started
+
+
+@app_group.command("prepare-env", hidden=True)
+@click.argument("name")
+@click.argument("local_dir", type=click.Path(file_okay=False, dir_okay=True))
+@click.pass_context
+def app_prepare_env(ctx: click.Context, name: str, local_dir: str) -> None:
+    """Clone and install the environment `hops app deploy NAME LOCAL_DIR` would, ahead of it.
+
+    Hopsable runs it detached at an app's first live run. It only logs and
+    always exits 0: on a failure the deploy does the work itself.
+
+    \f
+    Args:
+        ctx: Click context.
+        name: App name.
+        local_dir: The app's directory.
+    """
+    started = time.monotonic()
+    try:
+        _prepare_env(ctx, name, local_dir)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        output.warn("Could not prepare the environment of app %s: %s", name, exc)
+    output.info("prepare-env %s ended after %.1f s.", name, time.monotonic() - started)
+
+
+def _prepare_env(ctx: click.Context, name: str, local_dir: str) -> None:
+    import os
+    import tempfile
+
+    from hopsworks.cli.commands.files import makedirs
+
+    requirements = os.path.join(local_dir, _DEPLOY_REQUIREMENTS)
+    if not os.path.isfile(requirements):
+        output.info(
+            "%s has no %s: nothing to prepare.", local_dir, _DEPLOY_REQUIREMENTS
+        )
+        return
+    project = session.get_project(ctx)
+    if ctx.with_resource(_env_lock(project.name, name, 0)) is None:
+        output.info("Another prepare-env or deploy of %s holds its environment.", name)
+        return
+    remote_dir, _, env_name, _, copy, dataset_api, installed, _, _ = _deploy_target(
+        project, name, None, True
+    )
+    wanted = _local_text(requirements)
+    # The text read above is what gets installed and recorded, whatever the folder holds by then.
+    makedirs(dataset_api, remote_dir)
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, _DEPLOY_REQUIREMENTS)
+        with open(local, "w", encoding="utf-8") as f:
+            f.write(wanted)
+        dataset_api.upload(local_path=local, upload_path=remote_dir, overwrite=True)
+    used = _deploy_environment(
+        project.get_environment_api(),
+        env_name,
+        f"/Projects/{project.name}/{remote_dir}/{_DEPLOY_REQUIREMENTS}",
+        installed != (env_name, wanted),
+        copy,
+        wanted,
+    )
+    if (used, wanted) != installed:
+        _write_installed(dataset_api, remote_dir, f"{used}\n{wanted}")
 
 
 # A 502 or 503 from a fresh app is usually the model deployment behind it still
@@ -1102,6 +1245,16 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     a = _get_app(ctx, name)
     if not yes:
         output.confirm(f"Delete app '{name}'?")
+    project = session.get_project(ctx)
+    # A running prepare-env may be installing into the copy this delete removes.
+    waited = ctx.with_resource(_env_lock(project.name, name, _PREPARE_WAIT_SECONDS))
+    if waited is None:
+        raise click.ClickException(
+            f"A prepare-env or deploy of app '{name}' still holds its environment "
+            f"after {_PREPARE_WAIT_SECONDS} s: run this delete again."
+        )
+    if waited >= 1:
+        output.info("Waited %d s for the environment of app %s.", waited, name)
     env_name = getattr(a, "environment_name", None) or ""
     username = None
     if env_name.startswith(f"{name}-app-env-"):
@@ -1113,7 +1266,6 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     output.success("✓ Deleted app %s", name)
     if username is None or env_name != env_commands.copy_name(name, username):
         return
-    project = session.get_project(ctx)
     try:
         # `hops env install <name>` makes a copy of the same name, which other apps may run on.
         users = [
