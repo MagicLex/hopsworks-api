@@ -1693,6 +1693,30 @@ class TestPredictor:
         assert serialized["vllmVariant"] == PREDICTOR.VLLM_VARIANT_VLLM
         assert serialized["vllmImageTag"] is None
 
+    def test_to_dict_omits_unset_resources(self, mocker):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+
+        serialized = predictor.Predictor(
+            name="n", model_name="m", model_path="p", model_server="PYTHON"
+        ).to_dict()
+
+        assert serialized["predictorResources"] == {}
+
+    def test_to_dict_sends_explicit_resources(self, mocker):
+        self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
+
+        serialized = predictor.Predictor(
+            name="n",
+            model_name="m",
+            model_path="p",
+            model_server="PYTHON",
+            resources={"limits": {"cores": 2, "memory": 1024, "gpus": 0}},
+        ).to_dict()
+
+        assert serialized["predictorResources"] == {
+            "limits": {"cores": 2, "memory": 1024, "gpus": 0}
+        }
+
     def test_non_vllm_to_dict_does_not_emit_vllm_keys(self, mocker):
         # Arrange
         self._mock_serving_variables(mocker, SERVING_NUM_INSTANCES_NO_LIMIT)
