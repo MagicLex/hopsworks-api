@@ -23,6 +23,7 @@ import logging
 import os
 import random
 import re
+import socket
 import struct
 import tempfile
 import time
@@ -38,6 +39,36 @@ from hopsworks_common.decorators import _connected
 
 
 _logger = logging.getLogger(__name__)
+
+# A Hopsable sandbox's HopsFS mount uploads files behind close. Every request drains it first, so
+# a job, an app or a model the request points at reads what the sandbox wrote.
+MOUNT_CONTROL = "/run/hopsfs/control.sock"
+MOUNT_DRAIN_SECONDS = 30
+
+
+def _drain_mount() -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+        c.settimeout(MOUNT_DRAIN_SECONDS + 5)
+        try:
+            c.connect(MOUNT_CONTROL)
+        except (FileNotFoundError, ConnectionRefusedError):
+            return  # no mount serving: none, or a dead one whose socket file stayed
+        c.sendall(f"drain {MOUNT_DRAIN_SECONDS}\n".encode())
+        lines = c.makefile("r", encoding="utf-8", errors="replace").read().splitlines()
+    if lines[-1:] == ["exit 0"]:
+        return
+    if lines[-1:] == ["exit 2"]:
+        raise RuntimeError(
+            f"Files written in /Projects are still uploading to HopsFS after {MOUNT_DRAIN_SECONDS} s; run the command again."
+        )
+    failed = "; ".join(
+        line[len("unresolved ") :].replace("\t", ": ")
+        for line in lines
+        if line.startswith("unresolved ")
+    )
+    raise RuntimeError(
+        f"Files written in /Projects are not on HopsFS, so Hopsworks would not see them: {failed or lines[-3:]}"
+    )
 
 
 urllib3.disable_warnings(urllib3.exceptions.SecurityWarning)
@@ -180,6 +211,7 @@ class Client:
                 or when it may have received a call that is not safe to resend (any PUT, DELETE or non-read-only POST).
                 A call with its own `timeout` or `deadline`, or with `retry_while_unavailable=False`, is never retried.
         """
+        _drain_mount()
         f_url = furl.furl(self._base_url)
         if with_base_path_params:
             base_path_params = ["hopsworks-api", "api"]
