@@ -23,7 +23,8 @@ Already known, no need to look again:
   warehouse, object store) is mounted as an external feature group (**hops-data-sources**, Mount
   a table) and its rows shown with `hops fg preview <fg> --limit 20`: the Preview pane shows that
   feature group. A CRM, Google Sheets or REST table cannot be mounted: preview it with `hops
-  datasource preview <source> --table <t>`. A source lists its tables in one `hops datasource
+  datasource preview <source> --table <t>`; several tables of one source are one call with every
+  `--table` (a CRM, Google Sheets or REST source then fetches them with one job). A source lists its tables in one `hops datasource
   tables <source>` call; on a source read in place, `hops datasource preview` is only for finding
   the table a request asks for without naming it. Never loop a preview over every table of a
   source: each one is a read, and a source holds tables the user did not ask about.
