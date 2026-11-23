@@ -23,7 +23,7 @@ Make every `requirements.data_sources` entry `present` and record it under `data
 - File or URL: land it under `Resources/<slug>/data/`.
 - Synthetic: copy `hops-synthetic-data/references/generator.py` to
   `src/<slug_pkg>/synthetic_data.py` and write the story as code in Polars; it runs in
-  `python-feature-pipeline`, which ships Polars, so no environment is cloned. Run the backfill
+  `python-feature-pipeline`, which ships Polars, so no environment is cloned. This is the only generator path for a system; `data/<name>/generate.py` (hops-data-builder) is for a table with no `system.yaml`. Run the backfill
   in this shell when the frame fits (rows x columns x 8 bytes under 1 GB), else as the backfill
   job, count the offline rows with `hops sql` after materialization, and for events deploy
   `<slug>-events` in `--mode live`.
