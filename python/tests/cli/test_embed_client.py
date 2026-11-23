@@ -99,10 +99,19 @@ def wire(monkeypatch):
         return answer(prepped) if callable(answer) else answer
 
     client._session.send = send
+    wire.platform = []
+    wire.lookups = []
     route = mock.MagicMock()
-    route._send_request.return_value = {
-        "projectId": 1, "projectName": "serving", "backingName": "back",
-    }  # fmt: skip
+
+    def lookup(method, path, **kwargs):
+        wire.lookups.append(path)
+        if path == ["serving", "platform"]:
+            if isinstance(wire.platform, Exception):
+                raise wire.platform
+            return wire.platform
+        return {"projectId": 1, "projectName": "serving", "backingName": "back"}
+
+    route._send_request.side_effect = lookup
     with (
         mock.patch("hopsworks_common.client._get_instance", return_value=route),
         mock.patch("hopsworks_common.client.istio._get_instance", return_value=client),
@@ -255,3 +264,109 @@ def test_the_agent_search_tool_says_search_is_unavailable(tmp_path):
     assert "Search is unavailable" in result["message"]
     assert "Say in your answer that you could not search" in result["message"]
     ns["FG_SEARCH"].find_neighbors.assert_not_called()
+
+
+def _platform(name="embedder", project="serving", namespace="platns", pid=7, sid=99):
+    return {
+        "id": sid, "name": name, "projectId": pid, "projectName": project,
+        "namespace": namespace, "modelName": MODEL, "modelVersion": 1,
+    }  # fmt: skip
+
+
+def test_a_platform_deployment_is_called_by_its_namespace_and_never_looked_up_by_name(
+    wire,
+):
+    wire.platform = [_platform()]
+    wire.script.append(_ok())
+    assert embed.embed_query("q") == [0.0]
+    assert wire.sent[0][0].endswith("/v1/platns/embedder/v1/models/embedder:predict")
+    assert wire.lookups == [["serving", "platform"]]
+
+
+def test_outside_the_cluster_a_platform_deployment_goes_to_its_platform_route(wire):
+    wire.platform = [_platform()]
+    calls = []
+
+    def post(method, path, **kwargs):
+        calls.append(path)
+        return {
+            "predictions": [
+                {"model": MODEL, "data": [{"index": 0, "embedding": [1.0]}]}
+            ]
+        }
+
+    rest = mock.MagicMock()
+    rest._send_request.side_effect = lambda method, path, **kw: (
+        wire.platform if path == ["serving", "platform"] else post(method, path, **kw)
+    )
+    with (
+        mock.patch("hopsworks_common.client._get_instance", return_value=rest),
+        mock.patch("hopsworks_common.client.istio._get_instance", return_value=None),
+    ):
+        assert embed.embed_query("q") == [1.0]
+    assert calls == [["serving", "platform", "99:predict"]]
+
+
+def test_the_project_matches_a_platform_deployment_by_name_namespace_or_id(
+    wire, monkeypatch
+):
+    for configured in ("serving", "platns", "7"):
+        embed._routes.clear()
+        wire.lookups.clear()
+        monkeypatch.setenv("HOPSABLE_EMBEDDING_PROJECT", configured)
+        wire.platform = [_platform()]
+        wire.script.append(_ok())
+        embed.embed_query("q")
+        assert wire.lookups == [["serving", "platform"]], configured
+
+
+def test_a_platform_deployment_of_another_project_falls_back_to_the_member_route(wire):
+    wire.platform = [_platform(project="other", namespace="otherns", pid=8)]
+    wire.script.append(_ok())
+    embed.embed_query("q")
+    assert wire.sent[0][0].endswith("/v1/back/embedder/v1/models/embedder:predict")
+    assert wire.lookups == [
+        ["serving", "platform"],
+        ["project", "getProjectInfo", "serving"],
+    ]
+
+
+def test_two_matching_platform_deployments_are_refused_naming_the_ids(wire):
+    wire.platform = [_platform(pid=7), _platform(namespace="n2", pid=8, sid=100)]
+    with pytest.raises(embed.EmbedError, match="7, 8"):
+        embed.embed_query("q")
+    assert wire.sent == []
+
+
+def test_a_backend_without_platform_deployments_uses_the_member_route(wire):
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    wire.platform = RestAPIError(
+        "https://ingress/serving/platform", _response(404, {"errorCode": 0})
+    )
+    wire.script.append(_ok())
+    embed.embed_query("q")
+    assert wire.sent[0][0].endswith("/v1/back/embedder/v1/models/embedder:predict")
+
+
+def test_another_failure_of_the_platform_list_is_not_hidden(wire):
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    wire.platform = RestAPIError(
+        "https://ingress/serving/platform", _response(500, {"errorCode": 1})
+    )
+    with pytest.raises(embed.EmbedError, match="HTTP 500"):
+        embed.embed_query("q")
+    assert wire.sent == []
+    assert wire.lookups == [["serving", "platform"]]
+
+
+def test_a_404_from_a_platform_route_resolves_the_route_again_on_the_next_call(wire):
+    wire.platform = [_platform()]
+    wire.script.append(_response(404, {"errorCode": 240085}))
+    with pytest.raises(embed.EmbedError, match="HTTP 404"):
+        embed.embed_query("q")
+    wire.platform = []
+    wire.script.append(_ok())
+    embed.embed_query("q")
+    assert wire.sent[1][0].endswith("/v1/back/embedder/v1/models/embedder:predict")
