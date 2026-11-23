@@ -864,7 +864,9 @@ def deployment_logs(
 @deployment_group.command("delete")
 @click.argument("name")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-@click.option("--force", is_flag=True, help="Force-delete even when running.")
+@click.option(
+    "--force", is_flag=True, help="Stop a running deployment, then delete it."
+)
 @click.pass_context
 def deployment_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete a deployment.

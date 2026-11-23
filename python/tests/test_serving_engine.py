@@ -733,6 +733,68 @@ class TestSchemaPublishing:
             "/Projects/p/Deployments/dep/resources/schema"
         )
 
+    def test_a_running_deployment_refusal_names_both_ways_out(self, mocker):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = "Running"
+
+        with pytest.raises(ModelServingException) as refused:
+            eng._delete(deployment)
+
+        assert str(refused.value) == (
+            "Deployment 'dep' is Running: stop it first, or force the delete."
+        )
+        eng._serving_api._delete.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["Starting", "Updating"])
+    def test_a_starting_or_updating_deployment_is_told_to_wait(self, mocker, status):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = status
+
+        with pytest.raises(ModelServingException) as refused:
+            eng._delete(deployment)
+
+        assert str(refused.value) == (
+            f"Deployment 'dep' is {status}: wait until it is running, "
+            "then stop it or force the delete."
+        )
+        eng._serving_api._delete.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["Starting", "Updating"])
+    def test_force_leaves_the_decision_to_the_backend(self, mocker, status):
+        from hopsworks_common.client.exceptions import RestAPIError
+
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value.status = status
+        response = mocker.Mock(status_code=400)
+        response.json.return_value = {
+            "errorCode": 240001,
+            "errorMsg": "Deployment is starting or updating",
+        }
+        refusal = RestAPIError("url", response)
+        eng._serving_api._delete.side_effect = refusal
+
+        with pytest.raises(RestAPIError) as refused:
+            eng._delete(deployment, force=True)
+
+        assert refused.value is refusal
+        eng._serving_api._delete.assert_called_once_with(deployment)
+
+    def test_a_deployment_without_state_is_not_reported_deleted(self, mocker):
+        eng = self._engine(mocker)
+        deployment = mocker.Mock()
+        deployment.name = "dep"
+        deployment.get_state.return_value = None
+
+        with pytest.raises(ModelServingException, match="nothing deleted"):
+            eng._delete(deployment, force=True)
+        eng._serving_api._delete.assert_not_called()
+
     def test_read_schema_from_backend(self, mocker):
         from hsml.deployment_schema import DeploymentSchema
 
