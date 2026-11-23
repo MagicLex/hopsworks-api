@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 import requests
 from hopsworks.cli import waits
 from hopsworks_common import client
-from hopsworks_common.client import exceptions
+from hopsworks_common.client import exceptions, session_cache
 
 
 if TYPE_CHECKING:
@@ -133,7 +133,29 @@ def proxy_token(project_id: int) -> ProxyToken | None:
         if exc.response.status_code != 404:
             raise
         return None
-    return ProxyToken(minted["token"], minted["expiresAt"] / 1000)
+    token = ProxyToken(minted["token"], minted["expiresAt"] / 1000)
+    session_cache.put(f"jupyter_proxy_token:{project_id}", list(token))
+    return token
+
+
+def _kept_proxy_token(project_id: int) -> ProxyToken | None:
+    """The proxy token an earlier command of the session minted, while it is not near its end."""
+    kept = session_cache.get(f"jupyter_proxy_token:{project_id}")
+    if not kept:
+        return None
+    token = ProxyToken(*kept)
+    # Its lifetime at mint is unknown here: keep the whole margin.
+    return token if token.expires_at - time.time() > _RENEW_MARGIN_SECONDS else None
+
+
+def _renew_at(minted: ProxyToken) -> float:
+    """When to mint again: before a call started now outlives the token.
+
+    Never more than a quarter of a short lifetime early, so a lowered TTL does not mint on every call.
+    """
+    return minted.expires_at - min(
+        _RENEW_MARGIN_SECONDS, max(0.0, minted.expires_at - time.time()) / 4
+    )
 
 
 def stop(project_id: int) -> None:
@@ -292,6 +314,7 @@ def _jupyter(project_id: int, running: dict) -> Jupyter:
         running["token"],
         _client._verify,
         lambda: proxy_token(project_id),
+        _kept_proxy_token(project_id),
     )
 
 
@@ -316,6 +339,7 @@ class Jupyter:
         token: str,
         verify: bool | str = True,
         mint: Callable[[], ProxyToken | None] | None = None,
+        kept: ProxyToken | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -326,24 +350,24 @@ class Jupyter:
         self.http = requests.Session()
         self.http.cookies.set_policy(cookiejar.DefaultCookiePolicy(allowed_domains=[]))
         self.http.headers["Authorization"] = f"token {token}"
+        if kept is not None:
+            self._use(kept)
 
     def _renew(self) -> bool:
         """Mint a new proxy token. False when there is nothing to mint: no cookie is sent."""
         minted = self.mint() if self.mint else None
-        now = time.time()
         if minted is None:
             self.proxy_session = None
             self.http.headers.pop("Cookie", None)
             self._renew_at = float("inf")
             return False
+        self._use(minted)
+        return True
+
+    def _use(self, minted: ProxyToken) -> None:
         self.proxy_session = minted.token
         self.http.headers["Cookie"] = f"proxy_session={minted.token}"
-        # Early enough that a call started now ends before the token does, but never more than a
-        # quarter of a short lifetime, so a lowered TTL does not mint on every call.
-        self._renew_at = minted.expires_at - min(
-            _RENEW_MARGIN_SECONDS, max(0.0, minted.expires_at - now) / 4
-        )
-        return True
+        self._renew_at = _renew_at(minted)
 
     def _fresh(self) -> None:
         """Mint before a call when there is no token yet or it is near its end."""
