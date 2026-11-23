@@ -35,8 +35,10 @@ hops fg create orders --version 1 --primary-key order_id --event-time order_ts -
 
 `--features` is `name:type:description` per column, comma-separated, Hive types (`bigint` for a
 Polars `Int64`, `double`, `string`, `timestamp`, `date`, `boolean`); a description holds no comma.
-`hops fg create --help` lists the rest. The generator builds the frame and inserts it into that group with
-`fg.insert(df, wait=True)`. Run it where you run (a Hopsable sandbox, a terminal, a laptop):
+`hops fg create --help` lists the rest. Every integer column is `bigint`. The generator builds the frame,
+casts it to the declared types right before the insert (`pl.Int64` for `bigint`, `pl.Float64` for `double`):
+`pl.when` over int literals gives `Int32`, and the insert refuses a type the group does not have. Then it
+inserts it into that group with `fg.insert(df, wait=True)`. Run it where you run (a Hopsable sandbox, a terminal, a laptop):
 `python data/<name>/generate.py`, which writes `rows` in seconds; print `[time] generate
 <seconds>s`, `[time] insert <seconds>s` and `rows sent <len(df)>`, the rows handed to the insert. A job only when the frame would not fit in memory
 (rows x columns x 8 bytes over 1 GB), or when the generation runs out of memory. The same program
@@ -54,7 +56,10 @@ Once the job is deployed, tag it with the group it writes, which is how the line
 ## Rows from a source (`source: <data source>`)
 
 Load **hops-data-sources** the same way: mount the table as an external feature group when the
-source holds it already, else ingest it.
+source holds it already, else ingest it. The source is read only through Hopsworks: list tables with
+`hops datasource tables <ds> --database <db>`, write a query mount against the source's `schema.table`
+(not the `--database` name), and never open a database driver with a credential from a secret. A
+failed mount is reported with its error, not routed around.
 
 ## Check and return
 
