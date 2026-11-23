@@ -565,9 +565,11 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
     slug = target.name
     request = request or f"/hops-silver {slug}"
     if not launch or not shutil.which("claude"):
-        click.echo(
-            f"\nBuild it with:  cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
-        )
+        build = f"cd {shlex.quote(str(target))} && claude {shlex.quote(request)}"
+        if output.JSON_MODE:
+            output.print_json({"path": str(target), "build": build})
+        else:
+            click.echo(f"\nBuild it with:  {build}")
         return
     token = system_doc.acquire(target)["token"]
     if os.environ.get("TMUX") and shutil.which("tmux"):
@@ -577,7 +579,7 @@ def _launch(target: Path, launch: bool, request: str | None = None) -> None:
             ["tmux", "new-window", "-n", slug, "-c", str(target), shlex.join(command)],
             check=True,
         )
-        click.echo(
+        output.info(
             f"\nBuilding in the tmux window '{slug}'; the Hopsworks UI shows its progress."
         )
         return

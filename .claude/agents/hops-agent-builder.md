@@ -22,12 +22,20 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    time, online or not) and `hops fg preview <fg> --limit 3`. The agent answers from these
    columns only; a question the description implies that no column can answer ends the run with
    one line naming the missing data.
+   When the questions need search over text (documents, notes, descriptions), make the text
+   searchable first and pass the group to `--search`:
+   `hops fg embed <fg> --text <col> [--schedule]` names the group `<fg>_<col>_emb`, starts its
+   build as the job `<group>_embed` and returns the execution id; the build is not done when the
+   command returns, and a search over a group still building has no results. Read the job with
+   `hops job info <group>_embed` once, on a later step, and never poll or loop. When the command
+   exits non-zero it started nothing: tell the user its message (capacity, a build already
+   running, or the group being deleted) and do not retry in a loop. A source that changes gets `--schedule` (daily).
 2. **Write the entry script with `hops agent init`, then edit its output.** Never write the script
    from scratch:
 
    ```bash
    hops agent init <name> --reads <fg[:version]> [--reads <fg[:version]> ...] \
-     --model <model> --key-secret <key_secret>
+     [--search <embedding fg[:version]>] --model <model> --key-secret <key_secret>
    ```
 
    It writes `agents/<name>/agent.py` (it refuses to overwrite one without `--force`): an `AgentApp`
@@ -37,8 +45,11 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    SDK called with tools, a TOOL span per tool call and an LLM span per model call carrying the
    token counts once, `asyncio.to_thread` around the blocking calls, and per feature group a
    Trino aggregate (`LIMIT 50`, schema from the project's feature store name) and, for a group with a
-   primary key and an online store, a primary-key lookup. Its last lines print the `deploy_agent` call
-   with the model's prices.
+   primary key and an online store, a primary-key lookup. With `--search` it adds a `search`
+   tool (at most 10 neighbours) over an embedding group `hops fg embed` built; on an install without
+   the embedding client, init refuses `--search` and writes nothing: run it again without `--search`. Its last lines print the `deploy_agent` call
+   with the model's prices; with `--search` that call's `description` names the group
+   (`hopsable.embed.search=<group>`): keep it, `hops fg embed delete` reads it.
 
    Edit what the description changes: the system prompt (what the agent is for, from
    `description`; it answers with numbers from tool results only and says when the data has none),
@@ -54,7 +65,7 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    project = hopsworks.login()
    agent = project.get_agent_serving().deploy_agent(
        entry="agents/<name>/agent.py", name="<name>", environment="python-agent-pipeline",
-       description="<description>",
+       description="<description>",  # with --search: "<description> hopsable.embed.search=<group>"
        tracing={"enabled": True,
                 "input_token_price_per_million_tokens": <in>,
                 "output_token_price_per_million_tokens": <out>},
