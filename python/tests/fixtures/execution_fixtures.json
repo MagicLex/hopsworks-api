@@ -29,5 +29,59 @@
       "count": 0,
       "items": []
     }
+  },
+  "get_python_failed": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/umami-sync/executions/20074",
+      "id": 20074,
+      "submissionTime": "2026-10-19T02:00:01.000Z",
+      "state": "FAILED",
+      "stdoutPath": "/Projects/blah/Logs/Python/umami-sync/20074/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/Python/umami-sync/20074/stderr.log",
+      "hdfsUser": "blah__meb10000",
+      "args": "-start_time 2026-10-19T02:00:00Z",
+      "finalStatus": "FAILED",
+      "progress": 1.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 44006376,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {
+        "job": {}
+      },
+      "rerunCount": 0,
+      "logicalDate": "2026-10-18T02:00:00.000Z",
+      "dataIntervalEnd": "2026-10-19T02:00:00.000Z"
+    }
+  },
+  "get_python_finished": {
+    "response": {
+      "href": "http://10.113.154.130/hopsworks-api/api/project/2167/jobs/deal-win-scoring-data/executions/22652",
+      "id": 22652,
+      "submissionTime": "2026-10-20T01:00:02.000Z",
+      "state": "FINISHED",
+      "stdoutPath": "/Projects/blah/Logs/Python/deal-win-scoring-data/22652/stdout.log",
+      "stderrPath": "/Projects/blah/Logs/Python/deal-win-scoring-data/22652/stderr.log",
+      "hdfsUser": "blah__meb10000",
+      "args": "--bundle Resources/deal-win-scoring/runs/data-backfill-1/bundle.tar.gz --mode backfill --from 2023-01-01T00:00:00Z --to 2026-10-08T13:34:00Z -start_time 2026-10-20T01:00:00Z",
+      "finalStatus": "SUCCEEDED",
+      "progress": 1.0,
+      "user": {
+        "href": "http://10.113.154.130/hopsworks-api/api/users/10000"
+      },
+      "filesToRemove": [],
+      "duration": 94329,
+      "resourceManager": "KUBERNETES",
+      "monitoring": {},
+      "queued": 0,
+      "kubeMonitor": {},
+      "rerunCount": 0,
+      "logicalDate": "2026-10-19T01:00:00.000Z",
+      "dataIntervalEnd": "2026-10-20T01:00:00.000Z"
+    }
   }
 }

@@ -32,6 +32,12 @@ if TYPE_CHECKING:
     from hopsworks_common.execution import Execution
 
 
+# The longest wait for an execution's log files to be aggregated.
+_LOG_AGGREGATION_SECONDS = 6 * 60.0
+# Once they appear, the time it takes them to flush to the filesystem.
+_LOG_FLUSH_SECONDS = 5
+
+
 @also_available_as("hopsworks.engine.execution_engine.ExecutionEngine")
 class ExecutionEngine:
     def __init__(self):
@@ -192,31 +198,42 @@ class ExecutionEngine:
                     )
             execution_state = updated_execution.state
 
-        # wait for log files to be aggregated, max 6 minutes
-        await_time = 6 * 60.0
-        log_aggregation_files_exist = self._dataset_api.exists(
-            updated_execution.stdout_path
-        ) and self._dataset_api.exists(updated_execution.stderr_path)
-        log_aggregation_files_exist_already = log_aggregation_files_exist
-        self._log.info("Waiting for log aggregation to finish.")
-        while not log_aggregation_files_exist and await_time >= 0:
-            if timeout and timeout <= passed() + MAX_LAG:
-                break
-            await_time -= MAX_LAG
-            time.sleep(MAX_LAG)
-            updated_execution = self._execution_api._get(job, execution.id)
+        from hopsworks_common import constants
 
+        # Waiting on a type that writes its logs first would only wait for a file a killed pod
+        # never writes, such as the stdout.log of an OOM-killed job.
+        logs_written = (
+            job.job_type or ""
+        ).upper() in constants.JOBS.LOGS_BEFORE_FINAL_STATE
+        final_state = updated_execution.state in (
+            *constants.JOBS.SUCCESS_STATES,
+            *constants.JOBS.ERROR_STATES,
+        )
+        if not (logs_written and final_state):
+            await_time = _LOG_AGGREGATION_SECONDS
             log_aggregation_files_exist = self._dataset_api.exists(
                 updated_execution.stdout_path
             ) and self._dataset_api.exists(updated_execution.stderr_path)
+            log_aggregation_files_exist_already = log_aggregation_files_exist
+            self._log.info("Waiting for log aggregation to finish.")
+            while not log_aggregation_files_exist and await_time >= 0:
+                if timeout and timeout <= passed() + MAX_LAG:
+                    break
+                await_time -= MAX_LAG
+                time.sleep(MAX_LAG)
+                updated_execution = self._execution_api._get(job, execution.id)
 
-        if not log_aggregation_files_exist_already and (
-            not timeout or timeout > passed() + 5
-        ):
-            time.sleep(5)  # Helps for log aggregation to flush to filesystem
+                log_aggregation_files_exist = self._dataset_api.exists(
+                    updated_execution.stdout_path
+                ) and self._dataset_api.exists(updated_execution.stderr_path)
+
+            if not log_aggregation_files_exist_already and (
+                not timeout or timeout > passed() + _LOG_FLUSH_SECONDS
+            ):
+                time.sleep(_LOG_FLUSH_SECONDS)
 
         if updated_execution.success is False:
-            if is_spark_job:
+            if is_spark_job and updated_execution.final_status != "UNDEFINED":
                 status = updated_execution.final_status
             else:
                 status = updated_execution.state
