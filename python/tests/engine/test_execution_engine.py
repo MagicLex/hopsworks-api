@@ -14,22 +14,14 @@
 #   limitations under the License.
 #
 
-import json
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 from hopsworks_common import job
 from hopsworks_common.client import exceptions
 from hopsworks_common.core import dataset_api
 from hopsworks_common.engine import execution_engine
-
-
-# A Spark execution captured from a cluster, shared with the CLI tests.
-SPARK_FINISHED = (
-    Path(__file__).parents[1] / "cli" / "fixtures" / "execution_spark_finished.json"
-)
 
 
 class TestWaitUntilFinished:
@@ -122,15 +114,24 @@ class TestWaitUntilFinished:
         assert clock[0] == 0
 
     @pytest.mark.parametrize(
-        "state", ["INITIALIZATION_FAILED", "APP_MASTER_START_FAILED"]
+        "state, logs",
+        # YarnJob writes no log on INITIALIZATION_FAILED, only stderr on APP_MASTER_START_FAILED.
+        [("INITIALIZATION_FAILED", ()), ("APP_MASTER_START_FAILED", ("stderrPath",))],
     )
-    def test_a_spark_job_that_failed_to_start_ends_the_wait(self, mocker, clock, state):
+    def test_a_spark_job_that_failed_to_start_ends_the_wait(
+        self, mocker, backend_fixtures, clock, state, logs
+    ):
         # YarnJob sets the state alone: the final status stays UNDEFINED.
-        spark = json.loads(SPARK_FINISHED.read_text())
+        spark = backend_fixtures["execution"]["get_spark_finished"]["response"]
         body = {**spark, "state": state, "finalStatus": "UNDEFINED"}
-        logs = {spark["stdoutPath"], spark["stderrPath"]}
         # Bounded, so a success that stays None fails instead of waiting forever.
         with pytest.raises(exceptions.JobExecutionException, match=state):
-            self._run(mocker, "SPARK", body, existing=logs, timeout=600)
+            self._run(
+                mocker,
+                "SPARK",
+                body,
+                existing={spark[log] for log in logs},
+                timeout=600,
+            )
 
         assert clock[0] == 0

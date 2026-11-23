@@ -209,7 +209,12 @@ class ExecutionEngine:
             *constants.JOBS.SUCCESS_STATES,
             *constants.JOBS.ERROR_STATES,
         )
-        if not (logs_written and final_state):
+        # A YARN start failure never aggregates: YarnJob writes no log on INITIALIZATION_FAILED,
+        # only stderr on APP_MASTER_START_FAILED.
+        start_failed = (
+            updated_execution.state in constants.JOBS.FAILED_WITHOUT_FINAL_STATUS
+        )
+        if not (logs_written and final_state) and not start_failed:
             await_time = _LOG_AGGREGATION_SECONDS
             log_aggregation_files_exist = self._dataset_api.exists(
                 updated_execution.stdout_path
