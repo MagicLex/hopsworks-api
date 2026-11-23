@@ -33,7 +33,7 @@ def _connect_kwargs(catalog=None, schema=None):
 
 
 def test_defaults_to_the_feature_stores_delta_tables():
-    # Feature groups are created as DELTA tables in <project>_featurestore, so a
+    # Feature groups are created as DELTA tables in <backing name>_featurestore, so a
     # bare ``hops sql "SELECT * FROM <fg>_1"`` must land there.
     kwargs = _connect_kwargs()
     assert kwargs["catalog"] == "delta"

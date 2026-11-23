@@ -50,7 +50,7 @@ The connection comes from the SDK: `trino_env.py` logs in and writes the
 path of the cluster CA the SDK keeps, whether to verify Trino's hostname (off
 where `HOPSWORKS_HOSTNAME_VERIFICATION=false`, as outside the cluster), the coordinator URL, the user
 `<project>__<username>`, its password from the secrets store and the schema
-`<project>_featurestore` to `/tmp/trino.json`, readable only by the app's user.
+`<backing name>_featurestore` to `/tmp/trino.json`, readable only by the app's user.
 Never print the password or export it as an environment variable: both leak it
 into logs and every child process. A feature group is the table
 `<name>_<version>` in catalog `delta` (or `hudi`/`iceberg`, per its format).
@@ -64,7 +64,7 @@ const conn = JSON.parse(readFileSync("/tmp/trino.json", "utf8")); // from trino_
 const trino = Trino.create({
   server: conn.server, // https://coordinator.trino.service.consul:8443
   catalog: "delta",
-  schema: conn.schema, // <project>_featurestore
+  schema: conn.schema, // <backing name>_featurestore
   auth: new BasicAuth(conn.user, conn.password),
   // the cluster CA, not in Node's trust store; no hostname check where the client turns it off
   ssl: { ca: readFileSync(conn.ca), ...(conn.verifyHostname ? {} : { checkServerIdentity: () => undefined }) },
