@@ -6,6 +6,7 @@ from typing import Any
 
 import click
 from hopsworks.cli import auth, config, egress, output, session
+from hopsworks_common.client.exceptions import RestAPIError
 
 
 @click.group("project")
@@ -287,7 +288,7 @@ def members_group() -> None:
 @members_group.command("list")
 @click.pass_context
 def members_list(ctx: click.Context) -> None:
-    """List the members of the active project: role and owner.
+    """List the members of the active project: role and owner, then pending invites.
 
     \f
     Args:
@@ -310,7 +311,51 @@ def members_list(ctx: click.Context) -> None:
                 "*" if owner and (m.email or "").casefold() == owner else "",
             ]
         )
+    invites, unavailable = _invites_of(project)
+    for invite in invites:
+        rows.append(
+            [
+                invite.get("email") or "?",
+                "",
+                f"{invite.get('role') or '?'} (invited, until {_day(invite.get('expires'))})",
+                "",
+            ]
+        )
     output.print_table(["EMAIL", "NAME", "ROLE", "OWNER"], rows)
+    if unavailable:
+        click.echo(f"invites unavailable: {unavailable}", err=True)
+
+
+def _invites_of(project: Any) -> tuple[list[dict], str | None]:
+    """Pending invites and why they could not be read, if so.
+
+    A 403 means the caller may not read invites (an Observer): no invites, no
+    reason. Any other failure is returned as the reason, so a backend outage
+    never reads as "nothing pending".
+    """
+    try:
+        invites = project.get_invites()
+    except RestAPIError as exc:
+        status = getattr(exc.response, "status_code", None)
+        if status == RestAPIError.STATUS_CODE_FORBIDDEN:
+            return [], None
+        return [], f"HTTP {status} {exc.user_message or ''}".strip()
+    except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
+        return [], str(exc) or type(exc).__name__
+    return sorted(invites or [], key=lambda i: (i.get("email") or "").casefold()), None
+
+
+def _day(value: Any) -> str:
+    """A date from the backend, epoch milliseconds or ISO text, as YYYY-MM-DD."""
+    import datetime  # noqa: PLC0415
+
+    if isinstance(value, (int, float)):
+        return (
+            datetime.datetime.fromtimestamp(value / 1000, datetime.timezone.utc)
+            .date()
+            .isoformat()
+        )
+    return str(value or "?")[:10]
 
 
 def _owner_email(project: Any) -> str:
@@ -351,6 +396,40 @@ def members_add(ctx: click.Context, email: str, role: str) -> None:
     output.success("Added %s as %s", email, getattr(member, "role", None) or role)
 
 
+@members_group.command("invite")
+@click.argument("email")
+@click.option(
+    "--role",
+    required=True,
+    help="Data owner, Data scientist, Observer or Feature store restricted.",
+)
+@click.pass_context
+def members_invite(ctx: click.Context, email: str, role: str) -> None:
+    """Invite an email address with no Hopsworks account to the active project.
+
+    Once an account with that address is activated and its email is
+    proven, it becomes a member with the role. The invite lasts 14 days;
+    inviting again refreshes it. For an existing user, use add. Only a
+    Data owner of the project can invite.
+
+    Args:
+        ctx: Click context carrying the resolved ``HopsConfig``.
+        email: Email address to invite.
+        role: The project role it gets.
+    """
+    project = session.get_project(ctx)
+    try:
+        invite = project.invite_member(email, role)
+    except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
+        raise click.ClickException(f"Could not invite '{email}': {exc}") from exc
+    output.success(
+        "Invited %s as %s, until %s",
+        email,
+        (invite or {}).get("role") or role,
+        _day((invite or {}).get("expires")),
+    )
+
+
 @members_group.command("set")
 @click.argument("email")
 @click.option("--role", required=True, help="The member's new project role.")
@@ -386,7 +465,7 @@ def members_set(ctx: click.Context, email: str, role: str) -> None:
 def members_remove(
     ctx: click.Context, email: str, keep_schedules: bool, yes: bool
 ) -> None:
-    """Remove a member from the active project.
+    """Remove a member from the active project, or cancel a pending invite.
 
     Hopsworks stops their runs and notebooks. The schedules of jobs they
     created keep starting runs on the owner's resources, so they are paused
@@ -402,6 +481,15 @@ def members_remove(
     """
     project = session.get_project(ctx)
     name = getattr(project, "name", "?")
+    if _is_invited(project, email):
+        try:
+            project.cancel_invite(email)
+        except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
+            raise click.ClickException(
+                f"Could not cancel the invite of '{email}': {exc}"
+            ) from exc
+        output.success("Cancelled the invite of %s to %s", email, name)
+        return
     if not yes:
         pause = (
             "" if keep_schedules else " The schedules of jobs they created pause too."
@@ -421,6 +509,14 @@ def members_remove(
         raise click.ClickException(
             "Could not pause the schedule of " + ", ".join(failed)
         )
+
+
+def _is_invited(project: Any, email: str) -> bool:
+    """Whether the address has a pending invite and no membership: an invite exists only for an address with no account."""
+    return any(
+        (i.get("email") or "").casefold() == email.casefold()
+        for i in _invites_of(project)[0]
+    )
 
 
 def _pause_schedules_of(project: Any, email: str) -> list[str]:
