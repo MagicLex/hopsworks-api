@@ -184,7 +184,7 @@ hops job logs <name> [--execution ID]
 hops job history <name>
 hops job schedule set <name> "0 0 * * * ?"              # Quartz 6-field cron
 hops job schedule info <name>
-hops job schedule delete <name>
+hops job schedule delete <name> --yes
 hops job delete <name> --yes
 ```
 

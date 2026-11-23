@@ -465,8 +465,8 @@ def agent_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
         force: Pass `force=True` to the SDK (stops the agent first if running).
     """
     agent = _get_agent(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete agent '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete agent '{name}'?")
     try:
         agent.delete(force=force)
     except Exception as exc:  # noqa: BLE001

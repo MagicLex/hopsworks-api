@@ -1140,7 +1140,7 @@ def fg_delete(
         delete_feature_views: Also delete the dependent feature views and their training data.
     """
     fg = _get_fg(ctx, name, version, exact=True)
-    if not yes and not output.JSON_MODE:
+    if not yes:
         if delete_feature_views:
             extra = " Any feature views using it (and their training data) will also be deleted."
         elif force:
@@ -1157,11 +1157,8 @@ def fg_delete(
             )
         else:
             wipes = "This wipes all offline and online data."
-        click.confirm(
-            f"Delete feature group '{name}' v{getattr(fg, 'version', '?')}? "
-            f"{wipes}{extra}",
-            abort=True,
-        )
+        target = f"feature group '{name}' v{getattr(fg, 'version', '?')}"
+        output.confirm(f"Delete {target}? {wipes}{extra}", f"Deleting {target}")
     try:
         fg.delete(force=force, delete_feature_views=delete_feature_views)
     except Exception as exc:  # noqa: BLE001

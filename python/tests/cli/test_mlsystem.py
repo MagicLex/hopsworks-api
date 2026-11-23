@@ -60,11 +60,17 @@ def test_remove_finds_a_system_by_name_or_id(monkeypatch, logged_in):
     monkeypatch.setattr(ml_system_api, "_list", lambda factory=None: SYSTEMS)
     monkeypatch.setattr(ml_system_api, "_remove", removed.append)
     assert (
-        CliRunner().invoke(cli, ["factory", "system", "remove", "Recs"]).exit_code == 0
+        CliRunner()
+        .invoke(cli, ["factory", "system", "remove", "Recs", "--yes"])
+        .exit_code
+        == 0
     )
-    assert CliRunner().invoke(cli, ["factory", "system", "remove", "7"]).exit_code == 0
+    assert (
+        CliRunner().invoke(cli, ["factory", "system", "remove", "7", "--yes"]).exit_code
+        == 0
+    )
     assert removed == [8, 7]
-    missing = CliRunner().invoke(cli, ["factory", "system", "remove", "nope"])
+    missing = CliRunner().invoke(cli, ["factory", "system", "remove", "nope", "--yes"])
     assert missing.exit_code != 0 and "No system" in missing.output
 
 

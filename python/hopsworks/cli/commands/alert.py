@@ -200,8 +200,8 @@ def alert_delete(ctx: click.Context, alert_id: int, yes: bool) -> None:
         yes: Skip confirmation when True.
     """
     aa = _alerts_api(ctx)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete alert {alert_id}?", abort=True)
+    if not yes:
+        output.confirm(f"Delete alert {alert_id}?")
     try:
         aa.delete_alert(alert_id)
     except Exception as exc:  # noqa: BLE001
