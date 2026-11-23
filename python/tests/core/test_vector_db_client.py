@@ -1106,3 +1106,27 @@ class TestBatchedEmbeddingReads:
 
         with pytest.raises(FeatureStoreException, match="does not have embedding"):
             client._read_many(99, ["col"], [{"col": "a"}], index_name="idx")
+
+
+# --- tombstones of fenced groups --------------------------------------------------
+
+
+def test_only_a_fenced_group_filters_tombstones():
+    from hsfs.core.vector_db_client import _not_deleted
+    from hsfs.embedding import EmbeddingIndex
+
+    assert _not_deleted(EmbeddingIndex(fenced=True)) == {
+        "must_not": [{"term": {"_deleted": True}}]
+    }
+    assert _not_deleted(EmbeddingIndex()) == {}
+    assert _not_deleted(None) == {}
+
+
+def test_the_fenced_flag_goes_to_the_backend_only_when_set():
+    from hsfs.embedding import EmbeddingIndex
+
+    assert "fenced" not in EmbeddingIndex(index_name="mine").to_dict()
+    assert EmbeddingIndex(fenced=True).to_dict()["fenced"] is True
+    assert EmbeddingIndex.from_response_json(
+        {"indexName": "7__embedding_fenced_9", "features": [], "fenced": True}
+    ).fenced

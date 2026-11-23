@@ -237,11 +237,12 @@ def quiet():
     """Discard what the SDK prints, for the calling thread: a CLI's stdout carries its payload."""
     if not isinstance(sys.stdout, _ThreadSilencedStdout):
         sys.stdout = _ThreadSilencedStdout(sys.stdout)
+    previous = getattr(_ThreadSilencedStdout._silenced, "on", False)
     _ThreadSilencedStdout._silenced.on = True
     try:
         yield
     finally:
-        _ThreadSilencedStdout._silenced.on = False
+        _ThreadSilencedStdout._silenced.on = previous
 
 
 def verify(
