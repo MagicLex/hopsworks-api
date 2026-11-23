@@ -127,3 +127,14 @@ def test_every_skill_file_a_playbook_cites_exists():
     folders = {p.parent.name: p.parent for p in SKILLS_ROOT.glob("*/*/SKILL.md")}
     missing = [(s, f) for s, f in cited if not (folders[s] / f).is_file()]
     assert not missing
+
+
+def test_info_puts_its_path_header_on_stdout_for_a_pipe(tmp_path, monkeypatch):
+    path = _write(tmp_path, "data/hops-demo/SKILL.md")
+    monkeypatch.setenv("HOPS_SKILLS_DIR", str(tmp_path))
+
+    done = CliRunner().invoke(cli, ["skills", "info", "hops-demo"])
+    assert done.exit_code == 0, done.output
+    lines = done.stdout.splitlines()
+    assert lines[0].startswith("# hops-demo")
+    assert lines[1] == f"# {path}"
