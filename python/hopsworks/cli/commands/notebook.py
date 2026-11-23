@@ -33,8 +33,17 @@ def notebook_group() -> None:
 @click.option(
     "--timeout", default=300, show_default=True, help="Seconds to wait for the server."
 )
+@click.option(
+    "--shutdown-hours",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Hours after its start that Hopsworks stops the server, one of the cluster's levels.",
+)
 @click.pass_context
-def notebook_start(ctx: click.Context, env: str | None, timeout: int) -> None:
+def notebook_start(
+    ctx: click.Context, env: str | None, timeout: int, shutdown_hours: int
+) -> None:
     """Start the Jupyter server, or check the running one answers.
 
     Prints the Python environment its kernels run in and the folder for notebooks.
@@ -44,10 +53,11 @@ def notebook_start(ctx: click.Context, env: str | None, timeout: int) -> None:
         ctx: Click context.
         env: Python environment to start the server in.
         timeout: Seconds to wait for the server to answer.
+        shutdown_hours: Hours after its start that Hopsworks stops a server started here.
     """
     project_id = _project_id(ctx)
     try:
-        notebook_api.connect(project_id, timeout, env)
+        notebook_api.connect(project_id, timeout, env, shutdown_hours)
         setup = notebook_api.setup(project_id)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not start Jupyter: {exc}") from exc
