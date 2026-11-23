@@ -19,6 +19,7 @@ import json
 import os
 import stat
 import threading
+import time
 
 import pytest
 import requests
@@ -30,17 +31,52 @@ from hsfs.client.exceptions import RestAPIError
 from tests.util import changes_environ
 
 
+def _patch_time(mocker, name, **kwargs):
+    """Patch time.<name> for the calling test's thread only.
+
+    base.time is the time module, so a plain patch is process-wide: a thread an earlier test
+    left running reads the frozen clock and spins on the mocked sleep, adding calls to it.
+    """
+    real = getattr(time, name)
+    mock = mocker.Mock(**kwargs)
+    owner = threading.get_ident()
+    mocker.patch(
+        f"hopsworks_common.client.base.time.{name}",
+        side_effect=lambda *args: (
+            mock(*args) if threading.get_ident() == owner else real(*args)
+        ),
+    )
+    return mock
+
+
 class TestBaseClient:
+    def test_a_patched_clock_ignores_other_threads(self, mocker):
+        stop = threading.Event()
+
+        def spin():
+            while not stop.is_set():
+                time.sleep(0.001)
+
+        spinner = threading.Thread(target=spin, daemon=True)
+        spinner.start()
+        try:
+            sleep = _patch_time(mocker, "sleep")
+            time.sleep(7)
+            threading.Event().wait(0.05)
+            sleep.assert_called_once_with(7)
+        finally:
+            stop.set()
+            spinner.join(1)
+
     @pytest.mark.parametrize("status", [429, 401])
     def test_request_deadline_includes_http_and_retries(self, mocker, status):
         client = self._init_test_client()
         client._base_url = "https://example.test"
         now = [0]
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic", side_effect=lambda: now[0]
-        )
-        mocker.patch(
-            "hopsworks_common.client.base.time.sleep",
+        _patch_time(mocker, "monotonic", side_effect=lambda: now[0])
+        _patch_time(
+            mocker,
+            "sleep",
             side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds),
         )
         mocker.patch.dict(os.environ, {Client.REST_ENDPOINT: "True"})
@@ -71,9 +107,7 @@ class TestBaseClient:
         client = self._init_test_client()
         client._base_url = "https://example.test"
         now = [0]
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic", side_effect=lambda: now[0]
-        )
+        _patch_time(mocker, "monotonic", side_effect=lambda: now[0])
         response = self._ok_response()
         response._content = b'{"id": 42}'
 
@@ -94,11 +128,10 @@ class TestBaseClient:
         client = self._init_test_client()
         client._base_url = "https://example.test"
         now = [0]
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic", side_effect=lambda: now[0]
-        )
-        mocker.patch(
-            "hopsworks_common.client.base.time.sleep",
+        _patch_time(mocker, "monotonic", side_effect=lambda: now[0])
+        _patch_time(
+            mocker,
+            "sleep",
             side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds),
         )
         budgets = []
@@ -260,10 +293,8 @@ class TestBaseClient:
         return response
 
     def _mock_clock(self, mocker, monotonic=1000.0):
-        sleep = mocker.patch("hopsworks_common.client.base.time.sleep")
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic", return_value=monotonic
-        )
+        sleep = _patch_time(mocker, "sleep")
+        _patch_time(mocker, "monotonic", return_value=monotonic)
         return sleep
 
     def test_rate_limited_request_waits_and_retries(self, mocker):
@@ -281,6 +312,63 @@ class TestBaseClient:
         assert send.call_count == 2
         sleep.assert_called_once_with(3)
         refused.close.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "error_code", [150138, 130106, 100087, 240080, 510032], ids=lambda c: str(c)
+    )
+    def test_compute_busy_request_waits_and_retries(self, mocker, error_code):
+        client = self._init_test_client()
+        refused = self._rate_limited_response(
+            mocker, retry_after="7", error_code=error_code
+        )
+        mocker.patch("requests.sessions.Session.prepare_request")
+        send = mocker.patch(
+            "requests.sessions.Session.send",
+            side_effect=[refused, self._ok_response()],
+        )
+        sleep = self._mock_clock(mocker)
+
+        client._send_request("POST", ["project", 1, "jobs", "j", "executions"])
+
+        assert send.call_count == 2
+        sleep.assert_called_once_with(7)
+        refused.close.assert_called_once()
+
+    def test_compute_busy_wait_beyond_budget_raises_with_the_server_message(
+        self, mocker
+    ):
+        client = self._init_test_client()
+        refused = self._rate_limited_response(
+            mocker, retry_after="61", error_code=130106
+        )
+        refused._content = json.dumps(
+            {"errorCode": 130106, "errorMsg": "needs 4.1 CPU, only 4.05 free"}
+        ).encode()
+        mocker.patch("requests.sessions.Session.prepare_request")
+        send = mocker.patch("requests.sessions.Session.send", return_value=refused)
+        sleep = self._mock_clock(mocker)
+
+        with pytest.raises(RestAPIError) as error:
+            client._send_request("POST", ["project", 1, "jobs", "j", "executions"])
+
+        assert error.value.response is refused
+        assert error.value.response.json()["errorMsg"].startswith("needs 4.1 CPU")
+        assert send.call_count == 1
+        sleep.assert_not_called()
+
+    def test_compute_busy_without_retry_after_is_not_retried(self, mocker):
+        client = self._init_test_client()
+        refused = self._rate_limited_response(mocker, error_code=130106)
+        del refused.headers["Retry-After"]
+        mocker.patch("requests.sessions.Session.prepare_request")
+        send = mocker.patch("requests.sessions.Session.send", return_value=refused)
+        sleep = self._mock_clock(mocker)
+
+        with pytest.raises(RestAPIError):
+            client._send_request("POST", ["project", 1, "jobs", "j", "executions"])
+
+        assert send.call_count == 1
+        sleep.assert_not_called()
 
     def test_other_too_many_requests_is_not_retried(self, mocker):
         client = self._init_test_client()
@@ -309,10 +397,11 @@ class TestBaseClient:
         send = mocker.patch(
             "requests.sessions.Session.send", side_effect=[first, second]
         )
-        sleep = mocker.patch("hopsworks_common.client.base.time.sleep")
+        sleep = _patch_time(mocker, "sleep")
         # Deadline at 1060; the first 30 s wait ends at 1030, and at 1031 only 29 s remain for the second.
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic",
+        _patch_time(
+            mocker,
+            "monotonic",
             side_effect=[1000.0, 1000.0, 1030.0, 1031.0],
         )
 
@@ -360,11 +449,10 @@ class TestBaseClient:
         )
         mocker.patch("hopsworks_common.client.base.Client._read_jwt")
         clock = [1000.0]
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic", side_effect=lambda: clock[0]
-        )
-        mocker.patch(
-            "hopsworks_common.client.base.time.sleep",
+        _patch_time(mocker, "monotonic", side_effect=lambda: clock[0])
+        _patch_time(
+            mocker,
+            "sleep",
             side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
         )
 
@@ -389,15 +477,13 @@ class TestBaseClient:
         )
         mocker.patch("hopsworks_common.client.base.Client._read_jwt")
         clock = [1000.0]
-        mocker.patch(
-            "hopsworks_common.client.base.time.monotonic", side_effect=lambda: clock[0]
-        )
+        _patch_time(mocker, "monotonic", side_effect=lambda: clock[0])
 
         def sleep(seconds):
             # The token refresh wait is the only sub-second sleep; it overshoots by 120 s.
             clock[0] += seconds + (120 if seconds < 1 else 0)
 
-        mocker.patch("hopsworks_common.client.base.time.sleep", side_effect=sleep)
+        _patch_time(mocker, "sleep", side_effect=sleep)
 
         with pytest.raises(RestAPIError) as error:
             client._send_request("GET", ["variables", "versions"])
