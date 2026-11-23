@@ -95,7 +95,7 @@ is the whole dispatch:
 
 | Piece | Needs | Makes | Exit check | Builder |
 | --- | --- | --- | --- | --- |
-| table | nothing, or a data source | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row | **hops-data-builder** |
+| table | nothing (generated rows), or a table of a data source (mounted, the user keeps it) | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row | **hops-data-builder** |
 | features | feature groups with rows, or a data source | feature group `<f>` with rows, job `<f>-features` | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
 | model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>`; a model the user names is made, whatever its view | **hops-model-builder** |
 | inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
