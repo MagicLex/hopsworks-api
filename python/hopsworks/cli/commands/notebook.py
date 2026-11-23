@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 
 import click
 from hopsworks.cli import notebook_api, output, session
+from hopsworks_common import events
 
 
 OUTPUT_LIMIT = 8000
@@ -126,6 +128,22 @@ def notebook_run(
     """
     if not path.endswith(".ipynb"):
         raise click.BadParameter("A notebook path ends in .ipynb.", param_hint="PATH")
+    # started, then done or failed with the cell, so a UI can show the notebook from its first run.
+    with events.tracked(
+        "notebook", "update", long=True, path=path.strip("/")
+    ) as change:
+        _run(ctx, path, code, cell, markdown, timeout, change)
+
+
+def _run(
+    ctx: click.Context,
+    path: str,
+    code: str,
+    cell: int | None,
+    markdown: bool,
+    timeout: int,
+    change: events.Change,
+) -> None:
     text = sys.stdin.read() if code == "-" else code
     project_id = _project_id(ctx)
     try:
@@ -168,6 +186,7 @@ def notebook_run(
             cells[cell - 1] = new
             index = cell
         jupyter.write(path, notebook)
+        change.detail = {"cell": new["id"], "number": index}
     except click.ClickException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -177,9 +196,19 @@ def notebook_run(
         _report(project_path, index, None, [], True)
         return
     try:
-        outputs, count, finished, execution = jupyter.execute(
-            jupyter_session, new["id"], text, timeout
-        )
+        # A kernel still starting may close a socket before it takes the cell: nothing ran, so
+        # the cell is sent again, a few times at most.
+        for attempt in range(3):
+            try:
+                run = jupyter.execute(jupyter_session, new["id"], text, timeout)
+                break
+            except notebook_api.Unreached:
+                if attempt == 2:
+                    raise
+                time.sleep(2)
+                jupyter_session = jupyter.session(path, kernel_name)
+        outputs, count, finished, execution, msg_id = run
+        change.detail["msg_id"] = msg_id
         # The user may have edited the notebook in JupyterLab meanwhile: save onto the latest.
         latest = jupyter.read(path) or notebook
         for c in latest["cells"]:
