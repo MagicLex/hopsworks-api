@@ -768,13 +768,13 @@ def _get_deployment(ctx: click.Context, name: str) -> Any:
 
 @deployment_group.group("platform")
 def deployment_platform_group() -> None:
-    r"""Deployments an administrator opened to every user.
+    """Deployments an administrator opened to every user.
 
     \f
     A platform deployment answers the predict calls of any user, each under
     the caller's own key and a per-caller rate; `hops fg embed` and agent
     search use one without project membership.
-    """
+    """  # noqa: D301
 
 
 @deployment_platform_group.command("list")
@@ -841,7 +841,7 @@ def deployment_platform_set(
     rate: int | None,
     burst: int | None,
 ) -> None:
-    r"""Open a deployment to every user, or close it. Administrators only.
+    """Open a deployment to every user, or close it. Administrators only.
 
     \f
     The deployment must log no inference. Its id is the ID column of
@@ -853,7 +853,7 @@ def deployment_platform_set(
         enabled: On or off.
         rate: Calls per second per caller.
         burst: Burst per caller.
-    """
+    """  # noqa: D301
     from hopsworks_common.core import rest
 
     if enabled and (rate is None or burst is None):
