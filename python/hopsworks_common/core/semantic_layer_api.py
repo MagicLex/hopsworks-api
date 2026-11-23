@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 from hopsworks_apigen import public
-from hopsworks_common import client, decorators, semantic_layer, tag, usage
+from hopsworks_common import client, decorators, events, semantic_layer, tag, usage
 from hopsworks_common.client import auth
 from hopsworks_common.client.exceptions import RestAPIError, SemanticLayerException
 from hopsworks_common.core import job_api
@@ -164,6 +164,9 @@ class SemanticLayerApi:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "semantic", "create", key=lambda self, name, *a, **k: {"name": name}
+    )
     def create_project(
         self,
         name: str,
@@ -214,10 +217,15 @@ class SemanticLayerApi:
             headers={"content-type": _JSON},
             data=json.dumps(body),
         )
-        return semantic_layer.SemanticProject.from_response_json(response, self)
+        created = semantic_layer.SemanticProject.from_response_json(response, self)
+        events.note(id=created.id)
+        return created
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "semantic", "delete", key=lambda self, name, *a, **k: {"name": name}
+    )
     def delete_project(self, name: str) -> None:
         """Delete a semantic project and its builds; the definitions in HopsFS are left in place.
 
@@ -235,6 +243,7 @@ class SemanticLayerApi:
                 error_code="SEMANTIC_LAYER_NOT_FOUND",
             )
         _client = client._get_instance()
+        events.note(id=sp.id)
         _client._send_request("DELETE", self._path(sp.id))
 
     # endregion
@@ -415,9 +424,13 @@ class SemanticLayerApi:
             data=json.dumps({"email": email}),
         )
 
+    @events.tracking(
+        "semantic", "update", key=lambda self, sp, *a, **k: {"name": sp.name}
+    )
     def _promote(
         self, sp: semantic_layer.SemanticProject, build_id: int
     ) -> dict[str, Any]:
+        events.note(id=sp.id, build=build_id)
         _client = client._get_instance()
         return _client._send_request(
             "POST", self._path(sp.id, "builds", build_id, "promote")
