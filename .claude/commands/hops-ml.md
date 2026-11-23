@@ -93,7 +93,8 @@ independent.
 ### Real-time
 
 - **Data.** See *Data sources* below.
-- **An app to try the deployment?** Yes (recommended) or no. Record
+- **An app to try the deployment?** Yes or no, neither marked recommended: an app holds cluster
+  resources, so the user picks it. Record
   `app={wanted: <yes|no>, kind: query_ui, status: pending}` and `requirements.consumers=api`:
   other systems call the deployment, and the app only tries it.
 - **Latency:** p99 under 50 ms, 100 ms (recommended), 500 ms, or the user's own. **Throughput:**
@@ -103,7 +104,8 @@ independent.
 ### Agentic
 
 - **Data.** See *Data sources* below; documents or files for retrieval count as a source.
-- **An app to try the agent?** Yes (recommended) or no. Record
+- **An app to try the agent?** Yes or no, neither marked recommended: an app holds cluster
+  resources, so the user picks it. Record
   `app={wanted: <yes|no>, kind: chat, status: pending}` and `requirements.consumers=api`.
 - **Which LLM?** Run `hops deployment list` and offer any LLM deployment it shows first, then a
   provider endpoint (OpenAI, Anthropic, or another OpenAI-compatible URL) whose key is stored as a

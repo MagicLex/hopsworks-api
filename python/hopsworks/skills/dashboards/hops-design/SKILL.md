@@ -25,8 +25,9 @@ and the actions on it; it does not explain itself.
 | accent | `#1eb182` | the one primary action, the selection, a positive state |
 | accent soft | `#e6f2ee` | the background of a selected or positive item |
 | danger | `#e7000b` | errors and destructive actions only |
+| warn | `#e0a100` | the middle band of a score bar; never text |
 | radius | `10px` (controls `8px`) | a child's radius is at most its parent's |
-| font | `Inter, system-ui, sans-serif` | everything |
+| font | `Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif` | everything |
 | mono | `"IBM Plex Mono", ui-monospace, monospace` | code, ids, paths, SQL |
 
 - Light theme only: the app renders inside the light Hopsworks UI. No dark mode, no
@@ -113,8 +114,9 @@ and the actions on it; it does not explain itself.
 - Vercel Web Interface Guidelines: https://vercel.com/design/guidelines
 
 ## Related skills
-- [hops-app](../hops-app/SKILL.md): Streamlit theme and the custom app skeleton
-  (`references/app_skeleton/static/app.css` and `chart-theme.js` carry these tokens).
+- [hops-app](../hops-app/SKILL.md): the app skeleton, whose `static/app.css` and
+  `chart-theme.js` carry these tokens and the components built from them
+  (`references/look.md`); a Streamlit theme in `references/frameworks.md`.
 - [hops-superset](../hops-superset/SKILL.md): dashboards and charts in Superset.
 - [hops-reqs](../../ml/hops-reqs/SKILL.md): `charts.py` draws a model's registry charts
   in matplotlib with these tokens; [hops-train](../../ml/hops-train/SKILL.md),

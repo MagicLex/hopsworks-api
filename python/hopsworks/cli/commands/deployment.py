@@ -56,14 +56,26 @@ def deployment_list(ctx: click.Context) -> None:
 
 @deployment_group.command("info")
 @click.argument("name")
+@click.option(
+    "--stable",
+    type=click.IntRange(min=1),
+    metavar="SECONDS",
+    help="Watch the deployment this long; exit non-zero unless it stays Running "
+    "with no container restart in that window.",
+)
 @click.pass_context
-def deployment_info(ctx: click.Context, name: str) -> None:
+def deployment_info(ctx: click.Context, name: str, stable: int | None) -> None:
     """Show details for a single deployment.
+
+    With `--stable`, the deployment is read every few seconds for that long, and
+    the command fails as soon as it leaves Running or a container restarts: a
+    deployment that answers one request and then crashes is flapping, not served.
 
     \f
     Args:
         ctx: Click context.
         name: Deployment name.
+        stable: Seconds to watch for a status change or a restart.
     """
     project = session.get_project(ctx)
     ms = project.get_model_serving()
@@ -76,8 +88,16 @@ def deployment_info(ctx: click.Context, name: str) -> None:
     if deployment is None:
         raise click.ClickException(f"Deployment '{name}' not found.")
 
+    status, restarts = (
+        _watch_stable(deployment, name, stable)
+        if stable
+        else (_deployment_status_live(deployment), _restarts(deployment))
+    )
+
     if output.JSON_MODE:
-        output.print_json(_deployment_to_dict(deployment))
+        output.print_json(
+            {**_deployment_to_dict(deployment), "status": status, "restarts": restarts}
+        )
         return
 
     rows = [
@@ -90,9 +110,54 @@ def deployment_info(ctx: click.Context, name: str) -> None:
         ["Model server", getattr(deployment, "model_server", "-")],
         ["Schema", _schema_label(deployment)],
         ["Schema id", getattr(deployment, "schema_id", None) or "-"],
-        ["Status", _deployment_status_live(deployment)],
+        ["Status", status],
+        ["Restarts", "-" if restarts is None else restarts],
     ]
     output.print_table(["FIELD", "VALUE"], rows)
+    if stable:
+        output.success("✓ %s stayed Running for %ds with no restart", name, stable)
+
+
+_STABLE_POLL_SECONDS = 5
+
+
+def _restarts(d: Any) -> int | None:
+    """Container restarts of the predictor's live pods; None when none is reported."""
+    try:
+        logs = d._serving_engine._serving_api._get_logs(d, "predictor", 1)
+    except Exception:  # noqa: BLE001 - a stopped deployment has no live pod
+        return None
+    counts = [
+        log.restart_count
+        for log in logs or []
+        if getattr(log, "restart_count", None) is not None
+    ]
+    return sum(counts) if counts else None
+
+
+def _watch_stable(d: Any, name: str, seconds: int) -> tuple[str, int | None]:
+    """Status and restarts after `seconds` of Running with no new restart, or fail."""
+    import time
+
+    deadline = time.monotonic() + seconds
+    first = None
+    while True:
+        status, restarts = _deployment_status_live(d), _restarts(d)
+        if status.lower() != "running":
+            raise click.ClickException(
+                f"Deployment '{name}' is {status}, not Running. "
+                f"Read `hops deployment logs {name}`."
+            )
+        first = restarts if first is None else first
+        if first is not None and restarts is not None and restarts > first:
+            raise click.ClickException(
+                f"Deployment '{name}' restarted {restarts - first} time(s) while "
+                f"watched: it is flapping, not served. Read `hops deployment logs {name}`."
+            )
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return status, restarts
+        time.sleep(min(_STABLE_POLL_SECONDS, left))
 
 
 @deployment_group.command("schema")
