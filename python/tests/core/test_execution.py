@@ -16,6 +16,7 @@
 
 from unittest import mock
 
+import pytest
 from hopsworks_common.execution import Execution
 from hsfs.core import execution
 
@@ -220,3 +221,16 @@ class TestExecutionPerTable:
         )
 
         assert ex.files_progress is None
+
+
+def test_success_of_an_execution_whose_job_has_no_type():
+    job = mock.Mock(job_type=None)
+    assert Execution(state="FAILED", final_status="FAILED", job=job).success is False
+    assert Execution(state="RUNNING", final_status="UNDEFINED", job=job).success is None
+
+
+@pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "PYTHON"])
+@pytest.mark.parametrize("state", ["INITIALIZATION_FAILED", "APP_MASTER_START_FAILED"])
+def test_a_start_failure_without_a_final_status_is_a_failure(job_type, state):
+    job = mock.Mock(job_type=job_type)
+    assert Execution(state=state, final_status="UNDEFINED", job=job).success is False
