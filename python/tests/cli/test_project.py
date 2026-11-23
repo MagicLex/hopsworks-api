@@ -237,10 +237,13 @@ QUOTA = {
 
 
 def _run_info(send_request):
-    from hopsworks_common.core import rest
+    from hopsworks_common.core import project_api, rest
 
     with (
         mock.patch.object(auth, "login", return_value=mock.MagicMock(name="Project")),
+        mock.patch.object(
+            project_api.ProjectApi, "_get_project_teams", return_value=[]
+        ),
         mock.patch.object(rest, "_send_request", side_effect=send_request),
         mock.patch.object(rest, "_project_path", side_effect=lambda *p: list(p)),
     ):
