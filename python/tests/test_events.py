@@ -295,6 +295,45 @@ def test_a_dashboard_line_carries_its_id(tmp_path, monkeypatch, mocker):
     assert (deleted["key"], deleted["detail"]) == ({"name": "7"}, {"id": 7})
 
 
+def test_a_semantic_line_carries_its_project_and_final_build(
+    tmp_path, monkeypatch, mocker
+):
+    from hopsworks_common import semantic_layer
+    from hopsworks_common.core.semantic_layer_api import SemanticLayerApi
+
+    target = tmp_path / "events.jsonl"
+    monkeypatch.setenv(events.ENV_VAR, str(target))
+    mocker.patch("time.sleep")
+    send = mocker.patch(
+        "hopsworks_common.client._get_instance"
+    ).return_value._send_request
+    api = SemanticLayerApi.__new__(SemanticLayerApi)
+    api._project_id = 119
+    sp = semantic_layer.SemanticProject(id=4, name="churn", semantic_layer_api=api)
+    send.side_effect = [
+        {"id": 11, "semanticProjectId": 4, "status": "COMPILING"},
+        {"id": 11, "semanticProjectId": 4, "status": "VALID"},
+        {"id": 4, "name": "churn", "currentBuildId": 11},
+        {},
+    ]
+    sp.compile()
+    api._promote(sp, 11)
+
+    lines = _lines(target)
+    assert [(line["kind"], line["op"], line["phase"]) for line in lines] == [
+        ("semantic", "update", "started"),
+        ("semantic", "update", "done"),
+        ("semantic", "update", "done"),
+    ]
+    _, compiled, promoted = lines
+    assert compiled["key"] == {"name": "churn"}
+    assert compiled["detail"] == {"id": 4, "build": 11, "status": "VALID"}
+    assert (promoted["key"], promoted["detail"]) == (
+        {"name": "churn"},
+        {"id": 4, "build": 11},
+    )
+
+
 def test_a_run_line_names_the_execution_hopsworks_took(tmp_path, monkeypatch, mocker):
     from hopsworks_common import job as job_module
 
