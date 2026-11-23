@@ -16,11 +16,11 @@ HopsFS or a Git repository. The app type (`app_kind`) decides how it starts:
 
 | Kind | App file | Started as | Port |
 |---|---|---|---|
-| `STREAMLIT` (default) | `.py` | `streamlit run <file>` | 8501, fixed |
+| `STREAMLIT` | `.py` | `streamlit run <file>` | 8501, fixed |
 | `FLASK` (5.2+) | `.py` with an `app` object | `flask --app <file> run --host 0.0.0.0 --port $APP_PORT` | `app_port`, default 8080 |
 | `GRADIO` (5.2+) | `.py` that calls `demo.launch()` | `python <file>`; `GRADIO_SERVER_NAME`/`GRADIO_SERVER_PORT`/`GRADIO_ROOT_PATH` are set | `app_port`, default 8080 |
 | `NODEJS` (5.2+) | `.js`, `.mjs`, `.cjs`, `.ts`, `.mts` | `node <file>`; `PORT` and `HOST` are set | `app_port`, default 8080 |
-| `CUSTOM` | optional | your `entrypoint_command` | `app_port`, default 8080 |
+| `CUSTOM` (default) | optional | your `entrypoint_command` | `app_port`, default 8080 |
 
 Every kind but `CUSTOM` is **launched from its app file** with a command Hopsworks
 generates: no `entrypoint_command`, and a git-backed app gives the file as
@@ -50,7 +50,7 @@ hops app logs <name>          # tail logs (a running app is directed to the live
 hops app delete <name> --yes  # non-interactive
 ```
 
-`hops app create <name> --path /Projects/<project>/Users/<user>/app.py --start`
+`hops app create <name> --path /Projects/<project>/Users/<user>/app.py --entrypoint-command "python app.py" --start`
 creates, starts, and waits for serving in one call. It takes a **HopsFS-absolute**
 path, while the SDK `create_app(app_path=...)` takes a **project-relative** one
 (`Users/<username>/app.py`); each surface rejects the other's form. Routing and
@@ -136,6 +136,7 @@ apps = project.get_app_api()
 app = apps.create_app(
     name="my_dashboard",
     app_path="Users/<username>/app.py",   # project-relative (CLI --path is HopsFS-absolute)
+    entrypoint_command="python app.py",   # a CUSTOM app, the default kind
     environment="python-app-pipeline",    # or the clone from references/libraries.md
     memory=2048,                          # MB
     cores=1.0,
