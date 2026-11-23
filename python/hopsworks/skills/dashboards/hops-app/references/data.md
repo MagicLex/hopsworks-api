@@ -12,7 +12,7 @@ project = hopsworks.login()
 verify = os.environ.get("HOPSWORKS_HOSTNAME_VERIFICATION", "true").lower() != "false"
 conn = project.get_trino_api().connect(
     catalog="delta",  # hudi or iceberg for a feature group in that format
-    schema=f"{project.name.lower()}_featurestore",
+    schema=f"{getattr(project, 'backing_name', project.name).lower()}_featurestore",
     verify=verify,  # off only where the client turns it off (a laptop, a build sandbox)
 )
 ```

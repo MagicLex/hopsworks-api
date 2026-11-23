@@ -169,6 +169,25 @@ def _pods(prefixes: dict[str, str]) -> dict[str, list[dict]]:
     return found
 
 
+def _app_pod_prefix(project: Any, app: str) -> str:
+    """The name prefix of an app's pods.
+
+    The backend names the app's Deployment as hopsworks-ee PythonAppServiceName.getDeploymentName
+    does: "pythonapp-" + the project namespace + "--" + the app name lowercased, [^a-z0-9-] as "-",
+    trailing dashes dropped, cut at 63. The namespace is the lowercased backing name with the same
+    replacement. Kubernetes cuts a pod's generated name base, "<replica set>-", at 58 characters
+    (k8s.io/apiserver/pkg/storage/names/generate.go: maxNameLength 63 less randomLength 5).
+    """
+    namespace = getattr(project, "project_namespace", None) or re.sub(
+        "[^a-z0-9-]", "-", (getattr(project, "backing_name", None) or "").lower()
+    )
+    name = re.sub("-+$", "", re.sub("[^a-z0-9-]", "-", app.lower())) or "app"
+    deployment = f"pythonapp-{namespace}--{name}"
+    if len(deployment) > 63:
+        deployment = re.sub("-+$", "", deployment[:63])
+    return f"{deployment}-"[:58]
+
+
 def collect(project: Any, doc: dict, slug: str, hours: int = 24) -> dict:
     """The facts of the report: jobs over the last `hours`, what the feature pipelines wrote, deployments and apps with their pods.
 
@@ -218,7 +237,7 @@ def collect(project: Any, doc: dict, slug: str, hours: int = 24) -> dict:
                     "name": asset.name,
                     "state": getattr(app, "state", None) or "missing",
                     "url": getattr(app, "app_url", None),
-                    "prefix": f"pythonapp-{getattr(project, 'name', '')}--{asset.name}",
+                    "prefix": _app_pod_prefix(project, asset.name),
                 }
             )
     pods = _pods({s["name"]: s.pop("prefix") for s in services})

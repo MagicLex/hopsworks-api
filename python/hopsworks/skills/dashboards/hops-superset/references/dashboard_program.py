@@ -364,12 +364,12 @@ def check_charts(api, chart_ids: list[int], datasets: dict[str, int]) -> list[st
     return problems
 
 
-def build(api, project_name: str, semantic=None) -> int:
+def build(api, backing_name: str, semantic=None) -> int:
     """Create or update the datasets, charts and dashboard; return the dashboard id.
 
     `semantic` is the project's semantic layer API, needed only when SEMANTIC_DATASETS or METRIC_DATASETS is set.
     """
-    schema = f"{project_name.lower()}_featurestore"
+    schema = f"{backing_name.lower()}_featurestore"
     database_id = find_trino_db_id(api)
     datasets = {fg["name"]: ensure_dataset(api, database_id, schema, fg) for fg in FEATURE_GROUPS}
     for entry in METRIC_DATASETS:
@@ -391,7 +391,7 @@ def build(api, project_name: str, semantic=None) -> int:
     return dashboard_id
 
 
-def delete(api, project_name: str) -> dict[str, list]:
+def delete(api, backing_name: str) -> dict[str, list]:
     """Remove this program's dashboard and charts, and its datasets no other chart uses."""
     removed: dict[str, list] = {"dashboards": [], "charts": [], "datasets": []}
     dashboard_id = find_dashboard(api)
@@ -402,7 +402,7 @@ def delete(api, project_name: str) -> dict[str, list]:
     for chart_id in charts:
         api.delete_chart(chart_id)
         removed["charts"].append(chart_id)
-    schema = f"{project_name.lower()}_featurestore"
+    schema = f"{backing_name.lower()}_featurestore"
     ours = {dataset_name(fg) for fg in FEATURE_GROUPS} | {
         metric_dataset_name(e) for e in METRIC_DATASETS
     }
@@ -436,11 +436,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([{"id": d["id"], "title": d.get("dashboard_title")} for d in dashboards]))
         return 0
     if args.delete:
-        print(json.dumps(delete(api, project.name)))
+        print(json.dumps(delete(api, getattr(project, "backing_name", project.name))))
         return 0
     semantic = project.get_semantic_layer_api() if SEMANTIC_DATASETS or METRIC_DATASETS else None
     started = time.monotonic()
-    dashboard_id = build(api, project.name, semantic)
+    dashboard_id = build(api, getattr(project, "backing_name", project.name), semantic)
     print(f"[time] build {time.monotonic() - started:.1f}s", flush=True)
     print(dashboard_url(api, project.get_url(), dashboard_id))
     return 0
