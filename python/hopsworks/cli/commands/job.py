@@ -193,7 +193,7 @@ def _job_to_dict(job: Any) -> dict[str, Any]:
 @click.option(
     "--args",
     "app_args",
-    help="Arguments passed to the program. Split on spaces; quotes stay literal, so keep each value space-free (2026-10-16T00:00:00).",
+    help='Arguments passed to the program, split as shell words: quote a value that holds spaces ("2026-10-16 00:00:00").',
 )
 @click.option("--description", help="Free-form description of the job.")
 @click.pass_context
@@ -257,7 +257,7 @@ def job_create(
 @click.option(
     "--args",
     "app_args",
-    help="Arguments passed to the program. Split on spaces; quotes stay literal, so keep each value space-free (2026-10-16T00:00:00).",
+    help='Arguments passed to the program, split as shell words: quote a value that holds spaces ("2026-10-16 00:00:00").',
 )
 @click.option(
     "--cron",
@@ -479,7 +479,7 @@ _UTC_DATETIME = _UtcDateTime(formats=_DT_FORMATS)
 @click.option(
     "--args",
     "app_args",
-    help="Argument string passed to this execution. Split on spaces; quotes stay literal, so keep each value space-free (2026-10-16T00:00:00).",
+    help='Argument string passed to this execution, split as shell words: quote a value that holds spaces ("2026-10-16 00:00:00").',
 )
 @click.option(
     "--wait/--no-wait",
@@ -551,7 +551,7 @@ def job_run(
 @click.option(
     "--args",
     "app_args",
-    help="Argument string passed to this execution. Split on spaces; quotes stay literal, so keep each value space-free (2026-10-16T00:00:00).",
+    help='Argument string passed to this execution, split as shell words: quote a value that holds spaces ("2026-10-16 00:00:00").',
 )
 @click.option(
     "--wait/--no-wait",
