@@ -9,7 +9,7 @@ Each project member binds their own, and every read as that member uses them: SD
 | --- | --- | --- |
 | Username | Env var in the member's account, private | `DS_<NAME>_<feature store id>_USER` |
 | Password | Secret in the member's account, private | `ds_<name>_<feature store id>_password` |
-| Wallet zip (optional) | A zip under `/Projects/<project>/Users/<username>/.datasources/<name>/` | `wallet-<random hex>.zip` when the CLI uploads it |
+| Wallet zip (optional) | A zip under `/Projects/<backing name>/Users/<username>/.datasources/<name>/` | `wallet-<random hex>.zip` when the CLI uploads it |
 | Wallet password (optional) | Secret in the member's account, private | `ds_<name>_<feature store id>_wallet_password` |
 
 `<NAME>` is the data source name upper-cased with every character outside `[A-Z0-9_]` replaced by `_`; `<name>` is the same lower-cased.

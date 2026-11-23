@@ -504,7 +504,7 @@ def env_install(
         )
 
     # Resolve the requirements path — upload when a local file was given, so the
-    # backend (which resolves against /Projects/<project>/) can read it. Same
+    # backend (which resolves against /Projects/<backing name>/) can read it. Same
     # convention as `hops job deploy` resolving its script argument.
     remote_path = requirements_file
     if os.path.isfile(requirements_file):

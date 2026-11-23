@@ -174,7 +174,7 @@ def root(project_id: int) -> str:
 
 
 def _home(saved: dict) -> str:
-    # baseDir is absolute: /Projects/<project>/<path in the project>.
+    # baseDir is absolute: /Projects/<backing name>/<path in the project>.
     return "/".join(saved["baseDir"].strip("/").split("/")[2:])
 
 

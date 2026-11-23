@@ -103,7 +103,7 @@ integrity hash: the app serves everything the page loads. Then deploy `app/` as
 **hops-app** says, in `python-agent-pipeline`, with 1024 MB and half a core:
 
 ```bash
-hops app create <slug>-app --path /Projects/<project>/Users/<user>/<slug>/app/app.py \
+hops app create <slug>-app --path /Projects/<backing name>/Users/<user>/<slug>/app/app.py \
   --app-kind custom --entrypoint-command "python app.py" --app-port 8080 \
   --readiness-probe-path /health --env python-agent-pipeline --cores 0.5 --memory 1024 --start
 ```
