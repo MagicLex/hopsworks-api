@@ -23,7 +23,7 @@ import threading
 import pytest
 import requests
 from hopsworks_common import constants
-from hopsworks_common.client import auth
+from hopsworks_common.client import auth, base
 from hsfs.client.base import Client
 from hsfs.client.exceptions import RestAPIError
 
@@ -599,3 +599,27 @@ class TestBaseClient:
             for name in ("ca_chain", "client_cert", "client_key")
         )
         assert all(os.path.isdir(os.path.dirname(path)) for path in paths)
+
+
+class TestRetryWindow:
+    @changes_environ
+    @pytest.mark.parametrize("seconds", ["0", "-5", "2m", "inf", "nan"])
+    def test_a_bad_window_names_the_variable_and_the_value(self, seconds):
+        os.environ[Client.RETRY_SECONDS_ENV] = seconds
+
+        with pytest.raises(
+            ValueError, match=f"HOPSWORKS_REQUEST_RETRY_SECONDS.*{seconds!r}"
+        ):
+            base._retry_window()
+
+    @changes_environ
+    def test_the_environment_sets_the_window_and_the_switch(self):
+        os.environ[Client.RETRY_SECONDS_ENV] = "150"
+        assert base._retry_window() == 150
+
+        os.environ[Client.RETRY_ENV] = "off"
+        assert base._retry_window() is None
+
+        os.environ[Client.RETRY_ENV] = "maybe"
+        with pytest.raises(ValueError, match="HOPSWORKS_REQUEST_RETRY must be"):
+            base._retry_window()
