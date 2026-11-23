@@ -246,6 +246,8 @@ def load(
         cfg.api_key = env_api_key
         cfg.api_key_source = "HOPSWORKS_API_KEY"
     if env_project:
+        if env_project != cfg.project:
+            cfg.project_id = None
         cfg.project = env_project
     if env_project_id and env_project_id.isdigit():
         cfg.project_id = int(env_project_id)
@@ -269,6 +271,9 @@ def apply_overrides(
         cfg.api_key = flag_api_key
         cfg.api_key_source = "--api-key"
     if flag_project:
+        # The stored id belongs to the stored project, not to another name.
+        if flag_project != cfg.project:
+            cfg.project_id = None
         cfg.project = flag_project
     # Hostname verification precedence: CLI flag > HOPSWORKS_HOSTNAME_VERIFICATION
     # env var > saved file value > default (off).
