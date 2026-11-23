@@ -578,9 +578,13 @@ def test_the_client_posts_to_the_serving_project_by_its_backing_name(monkeypatch
 
     monkeypatch.setattr(embed, "_routes", {})
     rest, istio = mock.MagicMock(), mock.MagicMock()
-    rest._send_request.return_value = {
+    project_info = {
         "projectId": 21623, "projectName": "hopsable_embeddings", "backingName": "5okprgv34044",
     }  # fmt: skip
+    # No platform deployment listed: a member reaches the serving project by its name.
+    rest._send_request.side_effect = lambda method, path, **kw: (
+        [] if path == ["serving", "platform"] else project_info
+    )
     istio._send_request.return_value = {
         "predictions": [{"model": "bge", "data": [{"embedding": [0.5]}]}]
     }

@@ -296,7 +296,7 @@ def _send(
     """
     from hopsworks_common import client
 
-    namespace, name, project_id = _route(project, deployment)
+    namespace, name, project_id, platform_id = _route(project, deployment)
     istio = client.istio._get_instance()
     if istio is not None:
         from hsml.core.serving_api import ServingApi
@@ -305,6 +305,9 @@ def _send(
             SimpleNamespace(project_namespace=namespace, name=name, model_server=None)
         )
         sender, with_base = istio, False
+    elif platform_id is not None:
+        path = ["serving", "platform", f"{platform_id}:predict"]
+        sender, with_base = client._get_instance(), True
     else:
         path = ["project", project_id, "inference", "models", name + ":predict"]
         sender, with_base = client._get_instance(), True
@@ -319,20 +322,47 @@ def _send(
     )
 
 
-def _route(project: str, deployment: str) -> tuple[str, str, int]:
-    """The path segment the ingress routes the serving project by, the deployment and the project id, read once per process.
+def _route(project: str, deployment: str) -> tuple[str, str, int, int | None]:
+    """The ingress path segment of the serving project, the deployment, the project id and its platform id, read once per process.
 
-    The segment is the project's backing name, read from the project; the
-    deployment is named as configured, never looked up in the caller's project.
+    A deployment an administrator opened to every user is found among the
+    platform deployments (``GET /serving/platform``), matched on its name and
+    the configured project's name, namespace or id, and called by its id.
+    Only an administrator flags one, so a same-named project of another owner
+    is never reached. Otherwise the caller is a member of the serving project
+    and it is read by name, as before; a backend without platform deployments
+    answers the list with 404.
     """
     key = (project, deployment)
     if key not in _routes:
         from hopsworks_common import client
+        from hopsworks_common.client.exceptions import RestAPIError
 
-        info = client._get_instance()._send_request(
-            "GET", ["project", "getProjectInfo", project]
-        )
-        # A backend without backing names returns none; there the segment is the project name.
-        backing = info.get("backingName") or info["projectName"]
-        _routes[key] = (backing, deployment, info["projectId"])
+        sender = client._get_instance()
+        try:
+            listed = sender._send_request("GET", ["serving", "platform"])
+        except RestAPIError as exc:
+            if getattr(exc.response, "status_code", None) != 404:
+                raise
+            listed = []
+        matches = [
+            d
+            for d in listed or []
+            if d.get("name") == deployment
+            and project
+            in (d.get("projectName"), d.get("namespace"), str(d.get("projectId")))
+        ]
+        if len(matches) > 1:
+            raise EmbedError(
+                f"Several platform deployments named {deployment!r} match project {project!r}: "
+                f"name the project by id ({', '.join(str(d.get('projectId')) for d in matches)})."
+            )
+        if matches:
+            d = matches[0]
+            _routes[key] = (d["namespace"], deployment, d["projectId"], d["id"])
+        else:
+            info = sender._send_request("GET", ["project", "getProjectInfo", project])
+            # A backend without backing names returns none; there the segment is the project name.
+            backing = info.get("backingName") or info["projectName"]
+            _routes[key] = (backing, deployment, info["projectId"], None)
     return _routes[key]
