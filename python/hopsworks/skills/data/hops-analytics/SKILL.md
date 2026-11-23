@@ -199,3 +199,4 @@ The TPC-H blueprint, [references/tpch_duckdb/](references/tpch_duckdb/README.md)
 ## Next Steps
 
 - Bronze ingestion: **hops-data-sources**. dbt and its runner: **hops-dbt**. PySpark: **hops-spark**. Job schedules and windows: **hops-job**. Feature groups: **hops-fg**.
+- Charts and dashboards over the marts: **hops-superset**, in the **hops-design** look.
