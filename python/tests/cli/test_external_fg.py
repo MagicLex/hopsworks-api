@@ -464,3 +464,15 @@ def test_create_external_sends_google_analytics_to_its_report_sync(mock_project)
     assert "report sync" in result.output
     assert "fg ingest" not in result.output
     fs.create_external_feature_group.assert_not_called()
+
+
+def test_info_shows_the_schema_of_an_external_fg(mock_project):
+    fs = mock_project.get_feature_store.return_value
+    fs.get_feature_group.return_value = _external_fg(
+        database="neondb", group="public", table="customers"
+    )
+    result = CliRunner().invoke(cli, ["fg", "info", "sales", "--version", "1"])
+    assert result.exit_code == 0, result.output
+    assert any(
+        line.split()[:2] == ["Schema", "public"] for line in result.output.splitlines()
+    ), result.output
