@@ -10,6 +10,10 @@ gives `telco_churn`), replaces the word `slug_pkg` in the copied Python and
 TOML files, and installs `gitignore` as `.gitignore`. Refuses a target that
 already holds a system.yaml, so an existing system is never overwritten.
 
+A target outside any git work tree becomes a git repository on `main`: a system
+kept in Hopsworks only commits there, and a new GitHub repository is created
+from it. A target inside an existing repository stays part of it.
+
 With `--phase`, copies that phase's stubs (PHASES) into an existing system the
 same way, skipping any file it already has.
 
@@ -26,6 +30,7 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -134,6 +139,7 @@ def create(target: Path, example: str | None = None) -> Path:
             copied.rmdir()
     (target / "src" / "slug_pkg").rename(target / "src" / package)
     (target / "gitignore").rename(target / ".gitignore")
+    _init_repository(target)
     for path in target.rglob("*"):
         if path.suffix in (".py", ".toml") and path.is_file():
             _name_package(path, package)
@@ -148,6 +154,17 @@ def create(target: Path, example: str | None = None) -> Path:
             encoding="utf-8",
         )
     return target
+
+
+def _init_repository(target: Path) -> None:
+    inside = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if inside.returncode != 0:
+        subprocess.run(["git", "init", "-q", "-b", "main", str(target)], check=True)
 
 
 def add_phase(target: Path, phase: str) -> list[Path]:
