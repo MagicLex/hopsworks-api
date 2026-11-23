@@ -109,6 +109,10 @@ class Watch:
         line = f"{self.label}: {state}" + (f": {reason}" if reason else "")
         click.echo(f"{line} ({self.elapsed():.0f} s)")
 
+    def forget_reason(self) -> None:
+        """Drop the kept reason: one from before the pod ran does not explain how it ended."""
+        self.last_reason = None
+
     def sleep(self) -> None:
         time.sleep(self.interval_s)
 
