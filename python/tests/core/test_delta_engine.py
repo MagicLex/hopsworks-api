@@ -13,7 +13,9 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 #
+import json
 import os
+import pathlib
 import sys
 import types
 import zoneinfo
@@ -1881,15 +1883,14 @@ class TestDeltaEngine:
         # Assert
         assert result == "commit"
         fake_deltalake.write_deltalake.assert_called_once_with(
-            "hdfs://nn:8020/p",
+            delta_table,
             dataset,
             mode="append",
-            storage_options=None,
             commit_properties=None,
         )
         delta_table.merge.assert_not_called()
         mock_commit.assert_called_once_with(
-            None, "hdfs://nn:8020/p", storage_options={}
+            None, "hdfs://nn:8020/p", delta_rs_table=delta_table
         )
 
     def test_write_delta_rs_dataset_existing_table_uses_merge_by_default(
@@ -1932,7 +1933,7 @@ class TestDeltaEngine:
         insert_builder.return_value.execute.assert_called_once()
         fake_deltalake.write_deltalake.assert_not_called()
         mock_commit.assert_called_once_with(
-            None, "hdfs://nn:8020/p", storage_options={}
+            None, "hdfs://nn:8020/p", storage_options={}, delta_rs_table=delta_table
         )
 
     def test_prepare_df_for_delta_importerror(self, monkeypatch):
@@ -3789,3 +3790,313 @@ def test_write_tz_map_into_backend_made_table(mocker, monkeypatch, tmp_path, ope
         DeltaTable(location).to_pyarrow_table().column("m").to_pylist()
         == [[("a", datetime(2026, 10, 21, 11, 30))]] * rows
     )
+
+
+def _real_local_rs_engine(monkeypatch, location, columns, partition_key=None):
+    """A real feature group and delta-rs engine on a local temp-dir table.
+
+    A feature group on HopsFS needs an initialised client to resolve its
+    location, and the real client fetches its credentials over REST at
+    construction. An S3 connector without keys takes the location as-is with
+    no storage options, so delta-rs writes the local path.
+    """
+    from hopsworks_common import connection
+    from hsfs import feature, feature_group
+    from hsfs import storage_connector as sc
+
+    monkeypatch.delitem(sys.modules, "deltalake", raising=False)
+    monkeypatch.delitem(sys.modules, "deltalake.exceptions", raising=False)
+    pytest.importorskip("deltalake")
+    monkeypatch.setattr(connection, "_hsfs_engine_type", "python")
+    fg = feature_group.FeatureGroup(
+        name="fg",
+        version=1,
+        featurestore_id=1,
+        location=location,
+        primary_key=["id"],
+        partition_key=partition_key or [],
+        time_travel_format="DELTA",
+        features=[feature.Feature(name, type) for name, type in columns],
+    )
+    fg.storage_connector = sc.S3Connector(id=1, name="local", featurestore_id=1)
+    return DeltaEngine(1, "fs", fg, None, None)
+
+
+def _count_table_opens(monkeypatch):
+    """Count DeltaTable constructions, the failed ones included."""
+    from deltalake.table import DeltaTable
+
+    opens = []
+    init = DeltaTable.__init__
+
+    def counting_init(self, *args, **kwargs):
+        opens.append(args[0] if args else kwargs.get("table_uri"))
+        init(self, *args, **kwargs)
+
+    monkeypatch.setattr(DeltaTable, "__init__", counting_init)
+    return opens
+
+
+def _count_log_reads(monkeypatch):
+    """Count history() limits and update_incremental() calls, calling the real ones."""
+    from deltalake.table import DeltaTable
+
+    reads = {"history_limits": [], "update_incremental": 0}
+    history = DeltaTable.history
+    update_incremental = DeltaTable.update_incremental
+
+    def counting_history(self, limit=None):
+        reads["history_limits"].append(limit)
+        return history(self, limit)
+
+    def counting_update_incremental(self):
+        reads["update_incremental"] += 1
+        return update_incremental(self)
+
+    monkeypatch.setattr(DeltaTable, "history", counting_history)
+    monkeypatch.setattr(DeltaTable, "update_incremental", counting_update_incremental)
+    return reads
+
+
+def _assert_bounded_log_reads(reads):
+    assert reads["update_incremental"] == 0
+    assert reads["history_limits"] == [1]
+
+
+def _assert_commit_is_last_data_commit(
+    commit, location, operation, inserted, updated, oldest_sent=False
+):
+    from deltalake import DeltaTable
+
+    table = DeltaTable(location)
+    history = table.history()
+    data = [c for c in history if c["operation"] in ("MERGE", "WRITE")]
+    last = max(data, key=lambda c: c["version"])
+    oldest = min(data, key=lambda c: c["version"])
+    assert last["version"] == table.version()
+    assert last["operation"] == operation
+    expected = DeltaEngine._get_delta_feature_group_commit(last, oldest)
+    assert commit.commit_time == expected.commit_time
+    assert commit.commit_date_string == expected.commit_date_string
+    assert commit.commitid == expected.commitid
+    # A write sends the oldest commit only when a checkpoint may have removed log
+    # files; a create is its own oldest commit.
+    if oldest_sent:
+        assert commit.last_active_commit_time == expected.last_active_commit_time
+    else:
+        assert commit.last_active_commit_time is None
+    assert (commit.rows_inserted, commit.rows_updated, commit.rows_deleted) == (
+        expected.rows_inserted,
+        expected.rows_updated,
+        expected.rows_deleted,
+    )
+    assert (commit.rows_inserted, commit.rows_updated) == (inserted, updated)
+
+
+def test_create_opens_the_table_once_after_the_write(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("v", "string")]
+    )
+    opens = _count_table_opens(monkeypatch)
+
+    commit = engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [1, 2], "v": ["a", "b"]}), operation="upsert"
+    )
+
+    # The failed probe, write_deltalake's own failed probe, one open for the history.
+    assert len(opens) == 3
+    _assert_commit_is_last_data_commit(
+        commit, location, "WRITE", 2, 0, oldest_sent=True
+    )
+
+
+def test_merge_opens_the_table_once(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("v", "string")]
+    )
+    engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [1, 2], "v": ["a", "b"]}), operation="upsert"
+    )
+    opens = _count_table_opens(monkeypatch)
+    reads = _count_log_reads(monkeypatch)
+
+    commit = engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [2, 3], "v": ["B", "c"]}), operation="upsert"
+    )
+
+    assert len(opens) == 1
+    _assert_bounded_log_reads(reads)
+    _assert_commit_is_last_data_commit(commit, location, "MERGE", 1, 1)
+
+
+@pytest.mark.parametrize(
+    "write_options, operation",
+    [
+        ({"mode": "append"}, "upsert"),
+        (None, "insert"),
+        ({"mode": "append", "delta.enableChangeDataFeed": "false"}, "upsert"),
+    ],
+)
+def test_explicit_append_opens_the_table_once(
+    monkeypatch, tmp_path, write_options, operation
+):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("v", "string")]
+    )
+    engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [1, 2], "v": ["a", "b"]}), operation="upsert"
+    )
+    opens = _count_table_opens(monkeypatch)
+    reads = _count_log_reads(monkeypatch)
+
+    commit = engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [2, 3], "v": ["B", "c"]}),
+        write_options=write_options,
+        operation=operation,
+    )
+
+    assert len(opens) == 1
+    _assert_bounded_log_reads(reads)
+    _assert_commit_is_last_data_commit(commit, location, "WRITE", 2, 0)
+    from deltalake import DeltaTable
+
+    assert DeltaTable(location).to_pyarrow_table().num_rows == 4
+
+
+def test_partition_disjoint_append_opens_the_table_once(monkeypatch, tmp_path):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("p", "string")], partition_key=["p"]
+    )
+    engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [1, 2], "p": ["a", "a"]}), operation="upsert"
+    )
+    opens = _count_table_opens(monkeypatch)
+    reads = _count_log_reads(monkeypatch)
+
+    commit = engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [3, 4, 5], "p": ["b", "b", "c"]}), operation="upsert"
+    )
+
+    assert len(opens) == 1
+    _assert_bounded_log_reads(reads)
+    _assert_commit_is_last_data_commit(commit, location, "WRITE", 3, 0)
+
+
+def _oldest_log_commit_timestamp(location):
+    """The timestamp of the smallest _delta_log/NNN.json, read from the file."""
+    log = pathlib.Path(location) / "_delta_log"
+    oldest = min(log.glob("*[0-9].json"), key=lambda f: int(f.stem))
+    for line in oldest.read_text().splitlines():
+        commit_info = json.loads(line).get("commitInfo")
+        if commit_info:
+            return commit_info["timestamp"]
+    raise AssertionError(f"no commitInfo in {oldest}")
+
+
+def _table_with_checkpoint_interval(monkeypatch, tmp_path, retention=None):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("v", "string")]
+    )
+    from deltalake import DeltaTable
+
+    engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [1], "v": ["a"]}), operation="upsert"
+    )
+    properties = {"delta.checkpointInterval": "2"}
+    if retention:
+        properties["delta.logRetentionDuration"] = retention
+    DeltaTable(location).alter.set_table_properties(properties)
+    return engine, location
+
+
+def test_checkpoint_write_sends_the_oldest_commit(monkeypatch, tmp_path):
+    engine, location = _table_with_checkpoint_interval(monkeypatch, tmp_path)
+    from deltalake import DeltaTable
+
+    sent = []
+    for i in range(2, 6):
+        commit = engine._write_delta_rs_dataset(
+            pd.DataFrame({"id": [i], "v": ["x"]}), operation="upsert"
+        )
+        version = DeltaTable(location).version()
+        sent.append((version, commit.last_active_commit_time))
+
+    assert [v for v, t in sent if t is not None] == [
+        v for v, _ in sent if (v + 1) % 2 == 0
+    ]
+    assert any(t is None for _, t in sent)
+    true_oldest = _oldest_log_commit_timestamp(location)
+    assert true_oldest == DeltaTable(location).history()[-1]["timestamp"]
+    assert all(t == true_oldest for _, t in sent if t is not None)
+
+
+def test_checkpoint_write_sends_the_oldest_commit_left_after_cleanup(
+    monkeypatch, tmp_path
+):
+    import time
+
+    engine, location = _table_with_checkpoint_interval(
+        monkeypatch, tmp_path, retention="interval 0 seconds"
+    )
+    from deltalake import DeltaTable
+
+    first_oldest = _oldest_log_commit_timestamp(location)
+    sent = []
+    for i in range(2, 6):
+        time.sleep(1.1)
+        commit = engine._write_delta_rs_dataset(
+            pd.DataFrame({"id": [i], "v": ["x"]}), operation="upsert"
+        )
+        sent.append((DeltaTable(location).version(), commit.last_active_commit_time))
+
+    new_oldest = _oldest_log_commit_timestamp(location)
+    assert new_oldest > first_oldest
+    final_version, final_sent = sent[-1]
+    assert (final_version + 1) % 2 == 0
+    assert final_sent == new_oldest
+
+
+@pytest.mark.parametrize("commits_on_top", [1, 3])
+def test_metadata_is_the_writes_own_commit_when_another_commit_lands_on_top(
+    monkeypatch, tmp_path, commits_on_top
+):
+    location = str(tmp_path / "fg")
+    engine = _real_local_rs_engine(
+        monkeypatch, location, [("id", "bigint"), ("v", "string")]
+    )
+    from deltalake import DeltaTable
+
+    engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [1, 2], "v": ["a", "b"]}), operation="upsert"
+    )
+    reads = _count_log_reads(monkeypatch)
+    real = DeltaEngine._get_last_commit_metadata
+
+    def metadata_after_other_commits(*args, **kwargs):
+        for i in range(commits_on_top):
+            DeltaTable(location).alter.set_table_properties(
+                {"delta.logRetentionDuration": f"interval {30 + i} days"}
+            )
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        DeltaEngine,
+        "_get_last_commit_metadata",
+        staticmethod(metadata_after_other_commits),
+    )
+
+    commit = engine._write_delta_rs_dataset(
+        pd.DataFrame({"id": [2, 3], "v": ["B", "c"]}), operation="upsert"
+    )
+
+    assert DeltaTable(location).version() == 1 + commits_on_top
+    assert reads["update_incremental"] == 0
+    assert reads["history_limits"] == [1, commits_on_top + 1]
+    assert (commit.rows_inserted, commit.rows_updated) == (1, 1)
+    merge = next(h for h in DeltaTable(location).history() if h["operation"] == "MERGE")
+    assert commit.commit_time == merge["timestamp"]
