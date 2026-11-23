@@ -122,8 +122,8 @@ After the fifth attempt, stop with the last lines of the logs and what was tried
 
 **Edit** changes the source as asked, updates the docstring, runs
 `hops app deploy` and reruns the smoke tests. **Delete** confirms the exact name, runs
-`hops app delete <name> --yes`, and removes the source directory and the
-environment clone when one was created for the app.
+`hops app delete <name> --yes`, and removes the source directory. Hopsworks
+removes an app's cloned environment once nothing uses it.
 
 ## Creating and running the app
 
