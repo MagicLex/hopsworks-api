@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 import click
+import requests
 from hopsworks.cli import output, session
 from hopsworks_common import util
 
@@ -54,8 +55,7 @@ def superset_dataset_info(ctx: click.Context, dataset_id: int) -> None:
         ctx: Click context.
         dataset_id: Superset dataset ID.
     """
-    result = _api(ctx).get_dataset(dataset_id)
-    output.print_json(result)
+    output.print_json(_get(_api(ctx).get_dataset, "dataset", dataset_id))
 
 
 @superset_dataset_group.command("create")
@@ -168,7 +168,7 @@ def superset_chart_info(ctx: click.Context, chart_id: int) -> None:
         ctx: Click context.
         chart_id: Superset chart ID.
     """
-    output.print_json(_api(ctx).get_chart(chart_id))
+    output.print_json(_get(_api(ctx).get_chart, "chart", chart_id))
 
 
 @superset_chart_group.command("create")
@@ -455,7 +455,7 @@ def superset_dashboard_info(ctx: click.Context, dashboard_id: int) -> None:
         ctx: Click context.
         dashboard_id: Superset dashboard ID.
     """
-    output.print_json(_api(ctx).get_dashboard(dashboard_id))
+    output.print_json(_get(_api(ctx).get_dashboard, "dashboard", dashboard_id))
 
 
 @superset_dashboard_group.command("create")
@@ -517,6 +517,20 @@ def superset_dashboard_delete(ctx: click.Context, dashboard_id: int, yes: bool) 
 
 def _api(ctx: click.Context) -> Any:
     return session.get_project(ctx).get_superset_api()
+
+
+def _get(get: Any, kind: str, item_id: int) -> dict[str, Any]:
+    """`get(item_id)` for the Superset `kind` (dataset, chart, dashboard), or a one-line error."""
+    try:
+        return get(item_id)
+    except requests.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) == 404:
+            raise click.ClickException(
+                f"Superset {kind} {item_id} not found."
+            ) from None
+        raise click.ClickException(
+            f"Could not get Superset {kind} {item_id}: {exc}"
+        ) from exc
 
 
 def _items(payload: Any) -> list[dict[str, Any]]:

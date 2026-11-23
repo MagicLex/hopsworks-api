@@ -1082,17 +1082,28 @@ class ServingEngine:
         },
     )
     def _delete(self, deployment_instance, force=False):
+        name = deployment_instance.name
         state = deployment_instance.get_state()
         if state is None:
-            return
-
-        if (
-            not force
-            and state.status != PREDICTOR_STATE.STATUS_STOPPED
-            and state.status != PREDICTOR_STATE.STATUS_CREATED
-        ):
             raise ModelServingException(
-                "Deployment not stopped, please stop it first by using `.stop()` or check its status with .get_state()"
+                f"Deployment '{name}' was not found or its state is unknown: nothing deleted."
+            )
+
+        # With force the backend decides, and its refusal is shown as it comes.
+        if not force and state.status not in (
+            PREDICTOR_STATE.STATUS_STOPPED,
+            PREDICTOR_STATE.STATUS_CREATED,
+        ):
+            if state.status in (
+                PREDICTOR_STATE.STATUS_STARTING,
+                PREDICTOR_STATE.STATUS_UPDATING,
+            ):
+                raise ModelServingException(
+                    f"Deployment '{name}' is {state.status}: wait until it is running, "
+                    "then stop it or force the delete."
+                )
+            raise ModelServingException(
+                f"Deployment '{name}' is {state.status}: stop it first, or force the delete."
             )
 
         self._serving_api._delete(deployment_instance)
