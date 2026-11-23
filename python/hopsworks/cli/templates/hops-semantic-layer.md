@@ -66,7 +66,7 @@ The cumulative and year-over-year metrics need the day time spine: unless `hops 
 Register the dbt project in `semantic_project.path` as the semantic project `semantic_project.name`: `hops semantic create <name> --path "$(pwd)/<semantic_project.path>"`, then `hops semantic compile <name> --wait`.
 An `INVALID` build lists each issue at its file and line: fix the definitions, record why in `decisions`, and compile again.
 Then `hops semantic test <name>`, which runs every metric once on Trino and exits 1 on any failure.
-Record `outputs.semantic_project` (`name`, `id` from `hops semantic show <name>`, the serving `build`, and the number of `metrics` from `hops semantic metrics <name>`).
+Record `outputs.semantic_project` (`name`, `id` from `hops semantic info <name>`, the serving `build`, and the number of `metrics` from `hops semantic metrics <name>`).
 
 ### verify
 
@@ -79,7 +79,7 @@ Then run the saved queries (`hops semantic saved-queries <name>`, then `hops sem
 The chat app's LLM is the account environment variables `LLM_URL`, `LLM_MODEL` and `LLM_API_KEY` of the member who starts it, which the Factory's form saved; never read or print their values.
 Before deploying, run the app here and smoke-test it: `uv pip install -r <app.path>/app-requirements.txt` when a package is missing, `APP_PORT=8080 python <app.path>/app.py &`, then with `curl` on `http://localhost:8080`: `/health` answers, `/api/catalog` lists the semantic project's metrics, and `/api/run` with `{"query": {"metrics": ["revenue"], "group_by": ["metric_time__month"]}}` returns rows; stop it afterwards.
 `/api/catalog` also says whether the LLM is configured (`llm.configured`): when it is, `/api/ask` with one example question returns `"kind": "answer"`; when it is not, say that the app answers questions once the three variables are set in the account settings and the app is restarted, and go on, since its Build a query form works without them.
-Deploy the app from this directory, as **hops-app** says for a custom app, with its path relative to the project (the terminal's `/hopsfs/` mount is the project's root, and an app path is not read through it): `hops app create <app.name> --path "${PWD#/hopsfs/}/<app.path>/app.py" --app-kind custom --entrypoint-command "python app.py" --app-port 8080 --readiness-probe-path /health --environment <app.environment> --start`, adding `app-requirements.txt` to the environment only when **hops-app**'s reuse rule says the environment lacks them.
+Deploy the app from this directory, as **hops-app** says for a custom app, with its path relative to the project (the terminal's `/hopsfs/` mount is the project's root, and an app path is not read through it): `hops app create <app.name> --path "${PWD#/hopsfs/}/<app.path>/app.py" --app-kind custom --entrypoint-command "python app.py" --app-port 8080 --readiness-probe-path /health --env <app.environment> --start`, adding `app-requirements.txt` to the environment only when **hops-app**'s reuse rule says the environment lacks them.
 `--start` returns once the readiness probe on `/health` passes; check that it serves with `hops app info <app.name>` (`kubectl port-forward` is refused in a Hopsworks terminal).
 When it fails, read `hops app logs <app.name>`, fix the cause, and `hops app redeploy <app.name>`.
 Record `outputs.app` (`name`, `url` from `hops app url <app.name>`).

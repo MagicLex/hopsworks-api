@@ -145,7 +145,7 @@ hops semantic test sales                                       # CI: compile, th
 hops semantic test sales --no-compile                          # PINNED: test the promoted build; a plain test exits 1 on an unpromoted build
 hops semantic builds sales                                     # * marks the build answering queries
 hops semantic build sales 13                                   # one build's errors and warnings at file:line
-hops semantic show sales                                       # settings, the build queries use, and whether it is stale
+hops semantic info sales                                       # settings, the build queries use, and whether it is stale
 hops semantic update sales --path Jupyter/analytics/dbt_v2     # a new root path or format compiles again
 ```
 
@@ -250,7 +250,7 @@ What GraphQL serves, how queries run, and the plain SQL tables BI tools read (ex
 
 ## Tags
 
-Semantic projects and metrics carry schematised tags (`hops semantic tag set|list|get|delete`, `add_tag`), and a metric's tags live in its YAML under `config.meta.hopsworks.tags`, checked on every compile: [references/tags.md](references/tags.md).
+Semantic projects and metrics carry schematised tags (`hops semantic tag set|list|info|delete`, `add_tag`), and a metric's tags live in its YAML under `config.meta.hopsworks.tags`, checked on every compile: [references/tags.md](references/tags.md).
 
 ## Dashboards
 

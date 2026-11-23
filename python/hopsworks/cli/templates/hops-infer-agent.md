@@ -57,7 +57,7 @@ breakdown predicts.
    only a `full_window` line can make the phase `met`.
 4. **SLA holds:** for realtime, add `tests/integration/test_parity.py` and a short-duration
    benchmark call and run them; record `inference.tests.last_run`. Leave the job scheduled or the deployment running,
-   verify with `hops job schedule-info` or `hops deployment status`, build what
+   verify with `hops job schedule info` or `hops deployment info`, build what
    `requirements.monitoring` asks (see Monitoring), set `status: met`, commit.
 5. **SLA misses and attempts remain:** change one thing and go to 3. The levers, roughly in
    order: replicas and per-replica concurrency; batched lookups above 50 qps; moving on-demand
