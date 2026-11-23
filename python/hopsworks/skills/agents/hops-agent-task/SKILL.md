@@ -144,7 +144,8 @@ write the list in the claude form whatever the provider.
 hops job run <name>                                   # the configured prompt
 hops job run <name> --args "Only check the transactions feature group today"   # prompt override for this run only
 hops job schedule set <name> "0 0 6 * * ?"                # 6-field Quartz cron (@daily also accepted)
-hops job schedule info <name> / hops job schedule delete <name>
+hops job schedule info <name>
+hops job schedule delete <name> --yes
 hops job stop <name>                                  # stop the running execution
 hops job logs <name> --stdout --tail 200
 hops job delete <name> --yes

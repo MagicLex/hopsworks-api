@@ -91,7 +91,7 @@ def test_delete_requires_existing(api):
     result = CliRunner().invoke(cli, ["git", "provider", "delete"])
     assert result.exit_code != 0
     api.providers.append(_Provider("GitHub", "jim", "github.com"))
-    result = CliRunner().invoke(cli, ["git", "provider", "delete"])
+    result = CliRunner().invoke(cli, ["git", "provider", "delete", "--yes"])
     assert result.exit_code == 0, result.output
     assert api.deleted == [("GitHub", "github.com")]
 

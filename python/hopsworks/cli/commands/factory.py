@@ -228,7 +228,7 @@ def factory_import(
     doc = factory_spec.parse(text)
     if not yes:
         _review(doc)
-        click.confirm("Import this factory?", abort=True)
+        output.confirm("Import this factory?")
     session.get_project(ctx)
     if update:
         factory = factory_api._update(name or doc["name"], text)
@@ -315,7 +315,7 @@ def factory_delete(ctx: click.Context, name: str, yes: bool) -> None:
     from hopsworks_common.core import factory_api
 
     if not yes:
-        click.confirm(f"Delete factory {name}?", abort=True)
+        output.confirm(f"Delete factory {name}?")
     session.get_project(ctx)
     factory_api._delete(name)
     output.success(f"Deleted factory {name}")
@@ -580,7 +580,7 @@ def _prompt(field: dict, default: Any, label: str) -> Any:
     kind = field["type"]
     options = [factory_spec._option_value(o) for o in field.get("options") or []]
     if kind == "boolean":
-        return click.confirm(label, default=bool(default))
+        return output.ask(label, default=bool(default))
     if kind == "choice":
         return click.prompt(
             label,
@@ -591,7 +591,7 @@ def _prompt(field: dict, default: Any, label: str) -> Any:
         return _ask_list(field, default if isinstance(default, list) else [], label)
     if kind == "repository":
         start = default if isinstance(default, dict) else {"create": True}
-        if click.confirm("Create new GitHub repo", default=start.get("create", True)):
+        if output.ask("Create new GitHub repo", default=start.get("create", True)):
             return {"create": True}
         url = click.prompt(
             "URL of the GitHub, GitLab, Bitbucket or other git repository to store the code,"
@@ -658,7 +658,7 @@ def _ask_list(field: dict, start: list, label: str) -> list:
     item_label = field.get("item_label") or "entry"
     while True:
         wanted = len(items) < len(start) or len(items) < field.get("min_items", 0)
-        if not click.confirm(f"{label}: add a {item_label}?", default=wanted):
+        if not output.ask(f"{label}: add a {item_label}?", default=wanted):
             return items
         preset = start[len(items)] if len(items) < len(start) else {}
         item: dict = {}

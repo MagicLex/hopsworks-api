@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from hopsworks.cli import config, session, waits
+from hopsworks.cli import config, output, session, waits
 from hopsworks.cli.commands import factory
 from hopsworks_common.core.dataset_api import DatasetApi
 
@@ -39,6 +39,13 @@ class Clock:
 
     def sleep(self, seconds: float) -> None:
         self.now += seconds
+
+
+@pytest.fixture
+def tty():
+    """A terminal on stdin, so prompts are asked and the runner's input answers them."""
+    with mock.patch.object(output, "_stdin_tty", return_value=True):
+        yield
 
 
 @pytest.fixture
@@ -99,52 +106,19 @@ def hopsfs():
         yield fake
 
 
+# The reason Kubernetes gave for a pod it could not place on the dev cluster.
+PENDING_REASON = (
+    "FailedScheduling: 0/6 nodes are available: 1 node(s) didn't match Pod's node "
+    "affinity/selector, 5 Insufficient memory. preemption: 0/6 nodes are available: "
+    "1 Preemption is not helpful for scheduling, 5 No preemption victims found for "
+    "incoming pod."
+)
+
+
 @pytest.fixture
 def unschedulable():
-    """A pod Kubernetes cannot place, as Hopsworks reports it in a KubeMonitorDTO."""
-    return {
-        "job": {
-            "lastCondition": None,
-            "events": [],
-            "pods": [
-                {
-                    "name": "etl-7-abcde",
-                    "status": "Pending",
-                    "ready": False,
-                    "lastCondition": {
-                        "type": "PodScheduled",
-                        "reason": "Unschedulable",
-                        "status": "False",
-                        "message": "0/5 nodes are available: 3 Insufficient memory.",
-                        "age": "40s",
-                    },
-                    "events": [
-                        {
-                            "type": "Warning",
-                            "reason": "FailedScheduling",
-                            "age": "2m",
-                            "from": "default-scheduler",
-                            "message": "0/5 nodes are available: 5 Insufficient cpu.",
-                        },
-                        {
-                            "type": "Warning",
-                            "reason": "FailedScheduling",
-                            "age": "35s",
-                            "from": "default-scheduler",
-                            "message": "0/5 nodes are available: 3 Insufficient memory.",
-                        },
-                        {
-                            "type": "Normal",
-                            "reason": "Scheduled",
-                            "age": "1s",
-                            "from": "default-scheduler",
-                            "message": "Successfully assigned",
-                        },
-                    ],
-                }
-            ],
-        }
-    }
+    """The KubeMonitorDTO of a job execution whose pod Kubernetes cannot place."""
+    return backend("execution_queued")["kubeMonitor"]
 
 
 @pytest.fixture

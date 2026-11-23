@@ -186,7 +186,7 @@ def _read_secret(
             raise click.BadParameter("stdin was empty", ctx=ctx, param=param)
     # An empty value (``--password ""`` or an empty env var) is missing, not a secret.
     if not value and required:
-        if _interactive():
+        if not output.no_input():
             value = click.prompt(flag.lstrip("-").replace("-", " "), hide_input=True)
         else:
             raise click.MissingParameter(ctx=ctx, param=param)
@@ -204,10 +204,6 @@ def _account_secret(ctx: click.Context, param: click.Parameter, name: str) -> st
             f"your account has no variable {name}", ctx=ctx, param=param
         )
     return var.value
-
-
-def _interactive() -> bool:
-    return sys.stdin.isatty()
 
 
 def _secret_option(
@@ -1760,7 +1756,7 @@ def _credential_arguments(
             )
     bound = getattr(sc, "user_credentials", None) or {}
     if not _given(values, "--password") and not _given(values, "--password-secret"):
-        if _interactive():
+        if not output.no_input():
             values["password"] = click.prompt("password", hide_input=True)
         elif not bound.get("password_secret_name"):
             raise click.UsageError(
@@ -1994,8 +1990,8 @@ def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
         yes: Skip confirmation when True.
     """
     sc = _provided_connector(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Remove your credentials for '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Remove your credentials for '{name}'?")
     try:
         sc.delete_credentials()
     except Exception as exc:  # noqa: BLE001
@@ -2020,8 +2016,8 @@ def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
         yes: Skip confirmation when True.
     """
     fs = session.get_feature_store(ctx)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete connector '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete connector '{name}'?")
 
     from hopsworks_common import events
     from hopsworks_common.core import rest

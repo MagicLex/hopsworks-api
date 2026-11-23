@@ -44,7 +44,7 @@ a question you are about to ask depends on.
 
 ## Rules
 
-- **Change requests.** The Factory and `hops factory run <factory> <slug> --change <id>` record a change to the system as a `changes` entry with `status: pending`, holding its `label`, `answers` and `instructions`. Before anything else, carry out each pending one, oldest first: follow its `instructions` with its `answers`, then set its `status: done` and `finished` (UTC), or `status: failed` with a `reason` you also report, and commit `[<slug>] <label>`. Delete a job or a feature group only with `hops factory system delete-assets <slug> --job <name> --table <name>:<version>`, before removing it from `system.yaml`: it refuses what the system reads, what another system names, and anything neither in this `system.yaml` nor carrying the slug.
+- **Change requests.** The Factory and `hops factory run <factory> <slug> --change <id>` record a change to the system as a `changes` entry with `status: pending`, holding its `label`, `answers` and `instructions`. Before anything else, carry out each pending one, oldest first: follow its `instructions` with its `answers`, then set its `status: done` and `finished` (UTC), or `status: failed` with a `reason` you also report, and commit `[<slug>] <label>`. Delete a job or a feature group only with `hops factory system delete-assets <slug> --yes --job <name> --table <name>:<version>`, before removing it from `system.yaml`: it refuses what the system reads, what another system names, and anything neither in this `system.yaml` nor carrying the slug.
 - **A cloned factory's additions.** `system.yaml`'s `factory` block names the factory that created the system. When it has `instructions`, a project factory cloned from a built-in one added them: follow them as well as this command, and treat `requirements.extra` as further requirements the user gave.
 - **Ask, never guess, never stall.** When something the work depends on is unclear, ask with
   `AskUserQuestion`: one call, up to four questions, two to four concrete options each with the
@@ -204,7 +204,7 @@ phases `stale` per the transition table. Write the `verify` block and commit it 
 
 ### stop
 
-Unschedule the system's jobs (`hops job schedule delete` for each scheduled job the YAML names), stop
+Unschedule the system's jobs (`hops job schedule delete <name> --yes` for each scheduled job the YAML names), stop
 its continuous executions (`hops job stop`) and deployments (`hops deployment stop`), leave data
 and models in place, record it in `decisions`, and commit.
 

@@ -45,7 +45,7 @@ One name per meaning:
 - `--output`: a file to write; `--dir`: a directory to write into.
 - `--wait/--no-wait`: whether to block until the operation finishes; `--timeout`: the seconds to wait, where the SDK takes a limit.
 - `--yes`: skip the confirmation of a command that destroys data.
-  `factory system delete-assets` does not ask: builds run it without a terminal, it names every asset it deletes, and it checks them before deleting any.
+  Without a terminal, or with HOPS_NO_INPUT=1, such a command fails naming --yes, also with --json: builds pass --yes.
 - `--version`: the version of the entity the first argument names.
   Versions of other entities name their entity: `--fv-version`, `--td-version`.
   `td` commands take a feature view first, so they use only `--fv-version` and `--td-version`.

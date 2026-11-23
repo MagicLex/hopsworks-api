@@ -276,8 +276,8 @@ def dataset_remove(ctx: click.Context, path: str, yes: bool) -> None:
         path: HopsFS path.
         yes: Skip confirmation when True.
     """
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Remove '{path}' from HopsFS?", abort=True)
+    if not yes:
+        output.confirm(f"Remove '{path}' from HopsFS?")
     project = session.get_project(ctx)
     try:
         project.get_dataset_api().remove(path)
