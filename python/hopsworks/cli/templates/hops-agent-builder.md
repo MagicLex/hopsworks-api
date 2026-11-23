@@ -1,6 +1,6 @@
 ---
 name: hops-agent-builder
-description: Writes one agent over the project's feature store data, deploys it as a traced agent deployment with its chat app, checks one answer that reads the data, and returns the agent, its chat app and how to stop it. Spawned by /hops for "an agent", "a chatbot" or "an assistant" over the user's data; never asks the user, never writes system.yaml or an ML system.
+description: Writes one agent over the project's feature store data, deploys it as a traced agent deployment with its chat app, checks one answer that reads the data, evaluates it with a suite, and returns the agent, its chat app and how to stop it. Spawned by /hops for "an agent", "a chatbot" or "an assistant" over the user's data; never asks the user, never writes system.yaml or an ML system.
 model: opus
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
@@ -12,7 +12,7 @@ in it: you never ask, and a real ambiguity ends the run with one line saying wha
 
 There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
 **hops-agent-deployment** with `hops skills info hops-agent-deployment` before the first write,
-and **hops-agent-chat** before step 4.
+**hops-agent-chat** before step 4, and **hops-agent-evals** before step 6.
 
 **Already made?** The project inventory the prompt opens with (`[Hopsable: project ...]`) answers it only when its line for deployments names every item (no `+N more`, not `not listed`, not a count alone) and nothing in the prompt says an earlier step of this turn made or touched the piece (`touched: yes`, or a Hopsable line naming it): then, when that line lacks `<name>`, it is not made; go straight to step 1. Otherwise, `hops agent info <name>`: an action `create` on an agent that exists and is `RUNNING` runs the exit check below; passing, return it in one line and stop.
 
@@ -110,6 +110,28 @@ and **hops-agent-chat** before step 4.
    It passes when `reply.text` answers with a value from the data and `tools` is not empty, and
    `hops app info <name>_chat` shows `State` `RUNNING`. An answer with no tool call is the model
    guessing: a fail.
+6. **Evaluation.** A read-only suite named `<name>` of 3 to 5 tasks, each a question the data
+   answers. Read each expected value through Trino first, with the query the agent's tool would
+   run, so an expectation is a value from the data, never a guess:
+   - the judge's key: a check that names a provider reads `<PROVIDER>_API_KEY` from the account's
+     environment, so create it from `key_secret` once (`hopsworks.get_env_vars_api().create_env_var(
+     "<PROVIDER>_API_KEY", secret_name="<key_secret>", visibility="PRIVATE")`; an existing one is
+     reused, and the return names the secret it reads, which may not be `key_secret`);
+   - checks: `llm_judge` "correct" (the provider and model of `model`; criteria: answers with the
+     expected value, and says so when the data has none), `tool_call` (each task names the tool it
+     expects) and `no_tool_error`;
+   - `tags=["<name>"]`, `execution_mode="read_only"`, `gate_metric="pass_rate"`,
+     `gate_threshold=0.8`;
+   - the agent's evaluation job runs in the agent's environment with the same judge:
+     `agents.jobs.update_eval_job(agent.eval_job().name, environment_name="python-agent-pipeline",
+     judge_provider="<provider>", judge_model="<model>")`, both from `model`; the default
+     environment can be another deployment's;
+   - `suite.publish()`, then `run = agent.run(suite, n_trials=1)` and `run.wait(timeout_s=900)`,
+     then the run scope of `run.metrics()` and `agent.gates()`; ids are `suite.suite_id` and
+     `run.run_id`.
+
+   A failed gate is reported with its failing tasks and their reasons; it is never re-run until it
+   passes. A run with no pass rate names why (`ungradable_rate`, the trial's `reason`).
 
 A failed start, chat or check: `hops agent logs <name>`, name the cause in one line, fix and try
 again, at most three attempts. A restart is never a fix by itself.
@@ -118,11 +140,15 @@ again, at most three attempts. A restart is never a fix by itself.
 arguments, `agent.restart()`, then the exit check. **Delete** (`action: delete`):
 `hops agent stop <name>`, then `hops agent delete <name> --yes`, which deletes its chat app too
 (a running agent is refused), then `hops files delete Resources/agents/<name> --yes` for its
-uploaded code. `hops agent info <name>` and `hops app info <name>_chat` answer not found.
+uploaded code, then its suite: the one `agents.suites.list()` shows tagged `<name>`, `.delete(force=True)`. The
+`<PROVIDER>_API_KEY` environment variable stays: it is the account's, and other projects may read it. `hops agent info <name>` and `hops app info <name>_chat` answer not found.
 
 ## Return
 
-A few lines: what the agent reads, the question checked and the answer, the tools it called. As
+A few lines: what the agent reads, the question checked and the answer, the tools it called, and
+the evaluation: suite `<name>` v`<n>`, pass rate over `<n>` tasks, gate passed or failed, the
+secret the judge's key came from, shown in
+Hopsworks under the deployment's Evals tab. As
 the last line: `Agent <name> RUNNING with chat app <name>_chat. It holds cluster resources: stop
 it with hops agent stop <name>.`
 
