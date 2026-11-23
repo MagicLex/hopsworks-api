@@ -67,7 +67,7 @@ def emit(
     """Append one event line, or do nothing when no events file is configured.
 
     Parameters:
-        kind: What changed: `file`, `fg`, `fv`, `td`, `model`, `deployment`, `job`, `execution`, `schedule`, `dashboard`, `chart`, `app`, `notebook`, `datasource` or `experiment` (a sweep of model runs, named by its model).
+        kind: What changed: `file`, `fg`, `fv`, `td`, `model`, `deployment`, `job`, `execution`, `schedule`, `dashboard`, `chart`, `app`, `notebook`, `datasource`, `experiment` (a sweep of model runs, named by its model) or `semantic` (a semantic project).
         op: `create`, `update` or `delete`; `read` for a `datasource` (`source_preview` writes it).
         phase: `started`, `progress`, `done` or `failed`.
         name: The asset's name.
