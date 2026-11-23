@@ -51,7 +51,8 @@ schema, the rules and the template), **hops-eda**, **hops-fv**, **hops-train**, 
 4. **Create the feature view** with the label and the model-dependent transformations, rooted as
    **hops-fv** says: for a batch system that scores every current entity, at the entity group
    with a row per entity per scoring time, with the labels group joined on its whole primary key
-   (entity and snapshot time) and the training data ending at the newest snapshot whose label has
+   (entity and snapshot time) with `join_type="left"`, never `"inner"`: an entity still open has no
+   label row, and an inner join drops it from every batch read that scores it; and the training data ending at the newest snapshot whose label has
    matured (time bounds, never an `extra_filter` on the label, which batch reads of that training
    dataset version reapply); otherwise at the labels group. Join the other
    feature groups at their own grain: with an `event_time` on every group the view's training data
