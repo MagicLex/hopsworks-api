@@ -921,7 +921,7 @@ _SPECS: dict[str, _Spec] = {
                 "--dataset",
                 "datasetName",
                 "Dataset name as `hops files list` shows it (Resources, "
-                "<project>_featurestore.db), not a path. Create checks that it exists.",
+                "<backing name>_featurestore.db), not a path. Create checks that it exists.",
                 required=True,
             ),
         ),

@@ -1,6 +1,6 @@
 # Silver tasks: SQL and PySpark
 
-Each task as a dbt model fragment (Trino SQL over `delta.<project>_featurestore.<fg>_<version>`) and as PySpark.
+Each task as a dbt model fragment (Trino SQL over `delta.<backing name>_featurestore.<fg>_<version>`) and as PySpark.
 `{{ arrival }}` is the source's arrival column, `{{ key }}` its business key.
 Chain them as CTEs in one model per silver table, in the order below.
 
