@@ -39,6 +39,8 @@ hops semantic init sales --from-fg orders --repo new               # a new priva
 hops semantic init sales --repo https://github.com/acme/metrics.git   # an existing repository, cloned and registered as it is
 ```
 
+- The project's files are in HopsFS at `Resources/semantic/<name>/`: edit them with the HopsFS mount at `/Projects/<backing name>/Resources/semantic/<name>/` (`/hopsfs/Resources/semantic/<name>/` in a terminal), else `hops files download`, edit, `hops files upload`. Measures exist only on a feature group with an event time (references/init.md).
+- `hops semantic delete <name>` removes the project and its builds and keeps `Resources/semantic/<name>/` (the files are the user's source, a git clone too); a scaffold this conversation made goes with `hops files delete`.
 - One simple metric per measure is written commented out: uncomment the ones to serve, give them labels and descriptions, then `hops semantic compile <name> --wait`.
 - How feature groups map to entities, dimensions and measures, `--repo new` and the other flags: [references/init.md](references/init.md).
 
