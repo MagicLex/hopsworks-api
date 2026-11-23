@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -20,24 +21,92 @@ from hopsworks.cli.main import cli
 # --- deployment ------------------------------------------------------------
 
 
-def test_deployment_start_calls_sdk(mock_project):
-    ms = mock.MagicMock()
+def _state(status, reason=None):
+    return SimpleNamespace(
+        status=status,
+        condition=SimpleNamespace(reason=reason) if reason is not None else None,
+    )
+
+
+def _deployment(mock_project, *states):
     deployment = mock.MagicMock()
-    ms.get_deployment.return_value = deployment
-    mock_project.get_model_serving.return_value = ms
+    deployment.get_state.side_effect = list(states)
+    mock_project.get_model_serving.return_value.get_deployment.return_value = deployment
+    return deployment
+
+
+def test_deployment_start_polls_the_state_itself(mock_project, clock):
+    deployment = _deployment(mock_project, _state("Stopped"), _state("Running"))
     result = CliRunner().invoke(cli, ["deployment", "start", "fraud"])
     assert result.exit_code == 0, result.output
-    deployment.start.assert_called_with(await_running=600)
+    deployment.start.assert_called_with(await_running=0)
+    deployment._serving_engine._await_route.assert_called_once_with(deployment, 600)
 
 
-def test_deployment_stop_calls_sdk(mock_project):
-    ms = mock.MagicMock()
-    deployment = mock.MagicMock()
-    ms.get_deployment.return_value = deployment
-    mock_project.get_model_serving.return_value = ms
+def test_deployment_start_prints_each_status_once(mock_project, clock):
+    unschedulable = (
+        "Failed to be scheduled: 0/5 nodes are available: 3 Insufficient memory"
+    )
+    _deployment(
+        mock_project,
+        _state("Stopped"),
+        _state("Starting", "Deployment is starting"),
+        _state("Starting", "Deployment is starting"),
+        _state("Starting", unschedulable),
+        _state("Starting", unschedulable),
+        _state("Running", "Deployment is ready"),
+    )
+    result = CliRunner().invoke(cli, ["deployment", "start", "fraud"])
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if "Deployment fraud:" in line]
+    assert lines == [
+        "Deployment fraud: Starting: Deployment is starting (0 s)",
+        f"Deployment fraud: Starting: {unschedulable} (10 s)",
+        "Deployment fraud: Running: Deployment is ready (20 s)",
+    ]
+
+
+def test_deployment_start_names_the_stuck_state_on_timeout(mock_project, clock):
+    unschedulable = (
+        "Failed to be scheduled: 0/5 nodes are available: 3 Insufficient memory"
+    )
+    _deployment(
+        mock_project, _state("Stopped"), *[_state("Starting", unschedulable)] * 20
+    )
+    result = CliRunner().invoke(
+        cli, ["deployment", "start", "fraud", "--timeout", "30"]
+    )
+    assert result.exit_code == 1
+    assert (
+        f"Deployment fraud still Starting after 30 s: {unschedulable}. "
+        "Read `hops deployment logs fraud`" in result.output
+    )
+
+
+def test_deployment_start_fails_at_once_on_failed(mock_project, clock):
+    deployment = _deployment(
+        mock_project,
+        _state("Stopped"),
+        _state("Failed", "Predictor container terminated: OOMKilled"),
+    )
+    result = CliRunner().invoke(cli, ["deployment", "start", "fraud"])
+    assert result.exit_code == 1
+    assert (
+        "Deployment fraud failed: Predictor container terminated: OOMKilled"
+        in result.output
+    )
+    assert deployment.get_state.call_count == 2
+    assert clock.now == 0
+
+
+def test_deployment_stop_polls_until_stopped(mock_project, clock):
+    deployment = _deployment(
+        mock_project, _state("Stopping"), _state("Stopped", "Deployment is stopped")
+    )
     result = CliRunner().invoke(cli, ["deployment", "stop", "fraud", "--timeout", "30"])
     assert result.exit_code == 0, result.output
-    deployment.stop.assert_called_with(await_stopped=30)
+    deployment.stop.assert_called_with(await_stopped=0)
+    assert "Deployment fraud: Stopped: Deployment is stopped (5 s)" in result.output
 
 
 def test_deployment_predict_parses_json_data(mock_project):
@@ -213,13 +282,21 @@ def test_job_run_with_wait(mock_project):
     job.run.return_value = execution
     api.get_job.return_value = job
     mock_project.get_job_api.return_value = api
-    result = CliRunner().invoke(cli, ["job", "run", "etl", "--wait"])
+    with _polled("FINISHED"):
+        result = CliRunner().invoke(cli, ["job", "run", "etl", "--wait"])
     assert result.exit_code == 0, result.output
     # The CLI holds the execution it started and waits on that one, not the job's latest.
     job.run.assert_called_with(
         args=None, await_termination=False, start_time=None, end_time=None
     )
     execution.await_termination.assert_called_once_with(None)
+
+
+def _polled(state):
+    """The CLI's wait sees the execution in `state` straight away."""
+    return mock.patch(
+        "hopsworks.cli.commands.job._execution_json", return_value={"state": state}
+    )
 
 
 def _failing(tmp_path, execution):
@@ -243,7 +320,8 @@ def test_a_failed_wait_prints_the_log_tails_and_exits_1(
     )
     job = _job_api(mock_project, execution)
     job.get_executions.return_value = [execution]
-    result = CliRunner().invoke(cli, ["job", *command])
+    with _polled("FAILED"):
+        result = CliRunner().invoke(cli, ["job", *command])
     assert result.exit_code == 1
     assert "ValueError: bad column" in result.output
     assert "line 79" in result.output and "line 29" not in result.output
@@ -286,18 +364,19 @@ def _job_api(mock_project, execution):
 def test_a_waited_run_says_it_finished_and_how(mock_project):
     execution = mock.MagicMock(id=5, state="FINISHED", final_status="SUCCEEDED")
     _job_api(mock_project, execution)
-    result = CliRunner().invoke(
-        cli,
-        [
-            "job",
-            "backfill",
-            "etl",
-            "--start-time",
-            "2026-10-01",
-            "--end-time",
-            "2026-10-02",
-        ],
-    )
+    with _polled("FINISHED"):
+        result = CliRunner().invoke(
+            cli,
+            [
+                "job",
+                "backfill",
+                "etl",
+                "--start-time",
+                "2026-10-01",
+                "--end-time",
+                "2026-10-02",
+            ],
+        )
     assert result.exit_code == 0, result.output
     assert (
         "etl finished for 2026-10-01T00:00:00+00:00 to 2026-10-02T00:00:00+00:00: "
