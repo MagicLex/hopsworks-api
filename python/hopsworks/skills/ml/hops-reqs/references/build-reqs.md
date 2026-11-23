@@ -50,7 +50,7 @@ following "The requirements conversation" in `hops-reqs/SKILL.md`:
   generalises_to: new_periods}'`;
 - the features to compute and where (`feature_pipeline`, `streaming`, `on_demand`), preferring
   features that already exist;
-- the target: a metric, a number and a direction, and how it is measured;
+- the target: a metric, a number and a direction, and how it is measured. When the user gave none: classification `pr_auc` (regression `rmse`, min), the baseline model's test score plus 0.05 (minus 5% for rmse), `by: claude`: generate the data and fit that baseline before the requirements are `met`; never a number from an example;
 - the rest of the SLA for the type (`window` and `must_finish_by` for batch, `error_rate_max` and
   `timeout_ms` for real-time);
 - `operations` (scheduled with cadence and window, or continuous; the alert receiver), the sizing
