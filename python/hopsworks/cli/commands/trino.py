@@ -124,8 +124,8 @@ def _table_hint(ctx: click.Context, exc: Exception, schema: str | None) -> str:
     name = getattr(exc, "error_name", None)
     if name == "SYNTAX_ERROR" and _DIGIT_IDENTIFIER in str(exc):
         return (
-            ". A feature store name that starts with a digit goes in double quotes: "
-            '"<store>".<name>_<version>.'
+            ". A catalog or feature store name that starts with a digit goes in double quotes: "
+            '"<catalog>".<schema>.<table>, "<store>".<name>_<version>.'
         )
     if name != "TABLE_NOT_FOUND":
         return ""
@@ -308,6 +308,16 @@ def trino_catalogs(ctx: click.Context) -> None:
     _execute(ctx, "SHOW CATALOGS", catalog=None, schema=None, limit=0)
 
 
+def _quoted(ref: str) -> str:
+    """Quote each part of a dotted name, since catalog and store names may start with a digit.
+
+    A name the caller already quoted is used as given.
+    """
+    if '"' in ref:
+        return ref
+    return ".".join(f'"{part}"' for part in ref.split("."))
+
+
 @trino_group.command("schemas")
 @click.argument("catalog")
 @click.pass_context
@@ -319,7 +329,9 @@ def trino_schemas(ctx: click.Context, catalog: str) -> None:
         ctx: Click context.
         catalog: Trino catalog name.
     """
-    _execute(ctx, f"SHOW SCHEMAS FROM {catalog}", catalog=None, schema=None, limit=0)
+    _execute(
+        ctx, f"SHOW SCHEMAS FROM {_quoted(catalog)}", catalog=None, schema=None, limit=0
+    )
 
 
 @trino_group.command("tables")
@@ -337,13 +349,9 @@ def trino_tables(ctx: click.Context, target: str) -> None:
         ctx: Click context.
         target: `<catalog>.<schema>` or just `<schema>`.
     """
-    if "." in target:
-        cat, sch = target.split(".", 1)
-        sql = f"SHOW TABLES FROM {cat}.{sch}"
-        _execute(ctx, sql, catalog=None, schema=None, limit=0)
-        return
-    sql = f"SHOW TABLES FROM {target}"
-    _execute(ctx, sql, catalog=None, schema=None, limit=0)
+    _execute(
+        ctx, f"SHOW TABLES FROM {_quoted(target)}", catalog=None, schema=None, limit=0
+    )
 
 
 @trino_group.command("columns")
@@ -366,7 +374,7 @@ def trino_describe(ctx: click.Context, table_ref: str) -> None:
         raise click.UsageError(
             "TABLE_REF must be <catalog>.<schema>.<table> or <schema>.<table>."
         )
-    _execute(ctx, f"DESCRIBE {table_ref}", catalog=None, schema=None, limit=0)
+    _execute(ctx, f"DESCRIBE {_quoted(table_ref)}", catalog=None, schema=None, limit=0)
 
 
 # region: connection info -------------------------------------------------
@@ -443,7 +451,11 @@ def _wait_synced(api: Any, name: str, timeout_s: int) -> dict[str, Any]:
 
 @trino_catalog_group.command("create")
 @click.argument("data_source")
-@click.option("--name", default=None, help="Catalog name (default: the one Hopsworks suggests).")
+@click.option(
+    "--name",
+    default=None,
+    help="Catalog name, with the prefix of the suggested one (default: the suggested name).",
+)
 @click.option(
     "--wait/--no-wait",
     default=True,
@@ -454,7 +466,9 @@ def _wait_synced(api: Any, name: str, timeout_s: int) -> dict[str, Any]:
 def trino_catalog_create(
     ctx: click.Context, data_source: str, name: str | None, wait: bool
 ) -> None:
-    """Create a Trino catalog from DATA_SOURCE, then query it as `<catalog>.<schema>.<table>`.
+    """Create a Trino catalog from DATA_SOURCE.
+
+    Query it as `"<catalog>".<schema>.<table>`.
 
     Credentials come from the data source; none are passed here. On a Trino with dynamic
     catalogs the catalog answers within about a minute. On a static one it answers after the
@@ -488,7 +502,8 @@ def trino_catalog_create(
         output.info(
             "Trino here loads catalogs at a restart: %s answers after the next one (%s).",
             catalog["name"],
-            capabilities.get("nextScheduledRestart") or "none scheduled; ask an administrator",
+            capabilities.get("nextScheduledRestart")
+            or "none scheduled; ask an administrator",
         )
         return
     if wait:
@@ -500,7 +515,9 @@ def trino_catalog_create(
         )
     if catalog.get("status") == "SYNCED":
         output.success(
-            "Catalog %s answers: hops trino schemas %s", catalog["name"], catalog["name"]
+            "Catalog %s answers: hops trino schemas %s",
+            catalog["name"],
+            catalog["name"],
         )
     elif wait:
         raise click.ClickException(
@@ -508,11 +525,11 @@ def trino_catalog_create(
         )
 
 
-@trino_catalog_group.command("show")
+@trino_catalog_group.command("info")
 @click.argument("name")
 @click.pass_context
-def trino_catalog_show(ctx: click.Context, name: str) -> None:
-    """Show catalog NAME: its connector, scope and whether Trino has it (status).
+def trino_catalog_info(ctx: click.Context, name: str) -> None:
+    """Show catalog NAME: its connector, scope and status.
 
     \f
     Args:
