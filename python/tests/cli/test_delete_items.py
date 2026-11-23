@@ -52,6 +52,10 @@ def lookups(tmp_path, monkeypatch):
         mock.patch("hopsworks.cli.commands.git.find_provider", return_value=object()),
         mock.patch("hopsworks.cli.commands.git.git_provider_api") as providers,
         mock.patch("hopsworks.cli.commands.agent._is_agent", return_value=True),
+        mock.patch(
+            "hopsworks.cli.commands.datasource._get_connector", return_value={"id": 1}
+        ),
+        mock.patch("hopsworks.cli.commands.datasource._groups_on", return_value=[]),
     ):
         yield providers
 
