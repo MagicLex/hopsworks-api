@@ -160,13 +160,14 @@ line why, so `verify` and the next run see what was not done.
   being asked again. `--only` stops after the named phase. The only stops are: the requirements
   confirmation, an agent escalation, the app question, and the pull request. Free text after the
   phase is an instruction to that phase (a regenerate); none is a rerun.
-- **Commits.** Every phase ends with one commit, `[<slug>] <phase>: <one line>`, pushed. Run
-  `hops factory system register <slug>` once at the start: it lists the system in the project's ML
-  systems in the Hopsworks UI (from an external client it records the repository URL) and is a
-  no-op refresh when the interview already registered it. With `system.repo.url: local` from an
-  external client the code has no remote and no HopsFS mount, so a plain register fails: it gets a
-  home in HopsFS instead. After each phase commit, `hops files upload <slug> Users/<user>/systems/
-  --overwrite` (the `.git` directory too); after the first, register once with
+- **Commits.** Every phase ends with one commit, `[<slug>] <phase>: <one line>`, pushed. With a
+  remote repository, or inside Hopsworks, run `hops factory system register <slug>` once at the
+  start: it lists the system in the project's ML systems in the Hopsworks UI (from an external
+  client it records the repository URL) and is a no-op refresh when the interview already
+  registered it. With `system.repo.url: local` from an external client the code has no remote and
+  no HopsFS mount, so do not register at the start, where a plain register fails. After each phase
+  commit, `hops files upload <slug> Users/<user>/systems/ --overwrite` (the `.git` directory too);
+  after the first upload, register once with
   `--location /Projects/<project>/Users/<user>/systems/<slug>`.
 - **The repository and `reqs`.** While `requirements.status` is `pending`, or on `/hops-build
   <slug> reqs`, read `hops skills info hops-reqs references/build-reqs.md` and follow it: it sets up the repository `system.repo` names, then completes the specification.
