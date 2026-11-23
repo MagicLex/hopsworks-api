@@ -26,7 +26,7 @@ import requests
 from hopsworks.cli import notebook_api
 from hopsworks.cli.commands import notebook
 from hopsworks_common import client
-from hopsworks_common.client import exceptions
+from hopsworks_common.client import exceptions, session_cache
 from tornado import httpserver, netutil, web, websocket
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
@@ -490,6 +490,49 @@ def test_an_expired_proxy_token_is_minted_again_after_a_401(jupyter, gate, path)
     assert through.read(path)["nbformat"] == notebook_api.NBFORMAT
     assert gate.issued == 2
     assert gate.refused_http == 1
+
+
+def test_a_later_command_reuses_the_proxy_token_an_earlier_one_minted(
+    jupyter, gate, path, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(session_cache.ENV_VAR, "1")
+    monkeypatch.setenv(session_cache.DIR_ENV_VAR, str(tmp_path))
+    session_cache.bind("h", 443, "k", "119")
+    try:
+        first = notebook_api.Jupyter(gate.base_url, jupyter.token, mint=gate.issue)
+        first.write(path, notebook_api.new_notebook(first.kernelspec()))
+        minted = notebook_api.ProxyToken(first.proxy_session, time.time() + 3600)
+        session_cache.put("jupyter_proxy_token:119", list(minted))
+
+        session_cache.bind("h", 443, "k", "119")
+        kept = notebook_api._kept_proxy_token(119)
+        assert kept == minted
+        later = notebook_api.Jupyter(
+            gate.base_url, jupyter.token, mint=gate.issue, kept=kept
+        )
+        assert later.read(path)["nbformat"] == notebook_api.NBFORMAT
+        assert gate.issued == 1
+
+        # A kept token the proxy refuses is minted again once.
+        gate.expire()
+        assert later.read(path)["nbformat"] == notebook_api.NBFORMAT
+        assert gate.issued == 2
+        assert gate.refused_http == 1
+    finally:
+        session_cache.bind("h", 443, "k", None)
+
+
+def test_a_kept_proxy_token_near_its_end_is_not_used(tmp_path, monkeypatch):
+    monkeypatch.setenv(session_cache.ENV_VAR, "1")
+    monkeypatch.setenv(session_cache.DIR_ENV_VAR, str(tmp_path))
+    session_cache.bind("h", 443, "k", "119")
+    try:
+        session_cache.put("jupyter_proxy_token:119", ["t", time.time() + 60])
+        assert notebook_api._kept_proxy_token(119) is None
+        session_cache.put("jupyter_proxy_token:119", ["t", time.time() + 3600])
+        assert notebook_api._kept_proxy_token(119).token == "t"
+    finally:
+        session_cache.bind("h", 443, "k", None)
 
 
 def test_a_socket_closed_1008_before_any_message_is_opened_again_with_a_new_token(
