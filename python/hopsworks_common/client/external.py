@@ -123,8 +123,9 @@ class Client(base.Client):
             backing_name = project_info.get("backingName")
         self._project_name = project
         _logger.debug("Project name: %s", self._project_name)
-        self._bind_session(project)
         self._project_id = str(project_id)
+        # By id: several projects may share a display name.
+        self._bind_session(self._project_id)
         # Older backends return no backingName; there the backing name is the project name.
         self._project_backing_name = backing_name or project
         _logger.debug("Setting Project ID: %s", self._project_id)
@@ -274,17 +275,19 @@ class Client(base.Client):
         return True
 
     def _refresh_session(self, path_params):
-        """Log in again after the session cache went stale, and return the call's path for the new project id."""
-        old_project_id = self._project_id
+        """Log in again after the session cache went stale, to the same project id; the call's path is unchanged.
+
+        The project is its id: a project that is gone stays gone, and the backend's 404 is raised here.
+        Its display name is never resolved again, since a new project may carry it.
+        """
         session_cache.invalidate()
         self._cert_folder = None
-        self._provide_project(self._project_name)
-        if (
-            len(path_params) > 1
-            and path_params[0] == "project"
-            and str(path_params[1]) == old_project_id
-        ):
-            return ["project", self._project_id, *path_params[2:]]
+        info = self._send_request("GET", ["project", int(self._project_id)])
+        self._provide_project(
+            info["projectName"],
+            project_id=info["projectId"],
+            backing_name=info.get("backingName"),
+        )
         return path_params
 
     def _cert_project_dir(self) -> str:
