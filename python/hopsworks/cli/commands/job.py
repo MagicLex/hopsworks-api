@@ -7,6 +7,7 @@ follows the same memoized-session pattern as the rest of the CLI.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -21,6 +22,8 @@ from hopsworks.cli.commands.files import makedirs
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    from hopsworks_common.execution import Execution
 
 
 START_TIMEOUT = 600
@@ -416,23 +419,30 @@ def _await(
     Prints each state of the execution. The wait for RUNNING is bounded by `start_timeout`,
     the whole wait by `timeout` (unbounded when None).
     """
-    from hopsworks_common.client.exceptions import (  # noqa: PLC0415 - SDK loaded on use
-        JobExecutionException,
+    watch = waits.Watch(
+        f"{name}{window}: execution #{execution.id}", start_timeout, _POLL_SECONDS
     )
+    final = _follow(job, name, execution.id, watch, timeout)
+    # The SDK waits for the logs of the types that write them after the final state.
+    if final.success is not None:
+        from hopsworks_common.client.exceptions import (  # noqa: PLC0415 - SDK loaded on use
+            JobExecutionException,
+        )
 
-    left = _follow(name, execution.id, window, start_timeout, timeout)
-    try:
-        if left is None or left > 0:
-            # Waits for the logs to be aggregated, and raises on a failed execution.
-            execution.await_termination(left)
-    except JobExecutionException:
-        _failed(job, name, _refreshed(job, execution), window)
-    final = _refreshed(job, execution)
+        left = None if timeout is None else max(0.0, timeout - watch.elapsed())
+        if left != 0:
+            with contextlib.suppress(JobExecutionException):
+                final.await_termination(left)
     if final.success is False:
-        _failed(job, name, final, window)
+        _failed(name, final, window)
     if final.success is None:
+        if final.state in _final_states():
+            raise click.ClickException(
+                f"{name}{window}: execution #{final.id} {final.state}, but its final "
+                f"status is still {final.final_status} after {watch.elapsed():.0f} s."
+            )
         raise click.ClickException(
-            f"{name}{window}: execution #{final.id} still {final.state} after {timeout}s."
+            f"{name}{window}: execution #{final.id} still {final.state} after {timeout} s."
         )
     return final
 
@@ -441,6 +451,14 @@ def _await(
 _STARTING = ("INITIALIZING", "QUEUED", "DEPLOYING")
 _STARTED = ("RUNNING", "AGGREGATING_LOGS")
 _POLL_SECONDS = 3.0
+# A Spark execution's success comes from its final status, which YARN may write after its state.
+_SETTLE_SECONDS = 30.0
+
+
+def _final_states() -> set[str]:
+    from hopsworks_common.constants import JOBS  # noqa: PLC0415 - SDK loaded on use
+
+    return {*JOBS.SUCCESS_STATES, *JOBS.ERROR_STATES}
 
 
 def _execution_json(name: str, ident: int, kube: bool) -> dict:
@@ -463,48 +481,64 @@ def _execution_json(name: str, ident: int, kube: bool) -> dict:
 
 
 def _follow(
-    name: str, ident: int, window: str, start_timeout: int, timeout: int | None
-) -> float | None:
-    """Print each state of the execution until it ends; the seconds left of `timeout`, None when unbounded."""
-    from hopsworks_common.constants import JOBS  # noqa: PLC0415 - SDK loaded on use
+    job: Any, name: str, ident: int, watch: waits.Watch, timeout: int | None
+) -> Execution:
+    """Print each state of the execution until it is final with its success known, or `timeout` passes.
 
-    final = {*JOBS.SUCCESS_STATES, *JOBS.ERROR_STATES}
-    watch = waits.Watch(
-        f"{name}{window}: execution #{ident}", start_timeout, _POLL_SECONDS
+    Returns the execution as the last poll read it. `watch` bounds the wait for RUNNING;
+    `timeout` None is unbounded.
+    """
+    from hopsworks_common.execution import (  # noqa: PLC0415 - SDK loaded on use
+        Execution,
     )
+
+    final = _final_states()
     started = False
     kube = True
+    ended_at = None
     while True:
-        execution = _execution_json(name, ident, kube)
-        state = execution.get("state") or "?"
+        body = _execution_json(name, ident, kube)
+        execution = Execution.from_response_json(body, job)
+        state = execution.state or "?"
         kube = state in _STARTING
-        watch.see(
-            state, waits.kube_reason(execution.get("kubeMonitor")) if kube else None
-        )
+        watch.see(state, waits.kube_reason(body.get("kubeMonitor")) if kube else None)
         started = started or state in _STARTED
+        # Spark and Ray set the final status before they aggregate the logs, and a Spark
+        # execution's success reads the final status: only a final state ends the wait.
         if state in final:
-            break
-        if not started and watch.expired():
+            if execution.success is not None:
+                return execution
+            ended_at = watch.elapsed() if ended_at is None else ended_at
+            if watch.elapsed() - ended_at >= _SETTLE_SECONDS:
+                return execution
+        elif not started and watch.expired():
             watch.fail(
                 f"The execution is left as is: `hops job stop {name}` ends it, "
                 "or raise --start-timeout."
             )
         if timeout is not None and watch.elapsed() >= timeout:
-            break
+            return execution
         watch.sleep()
-    return None if timeout is None else max(0.0, timeout - watch.elapsed())
 
 
-def _failed(job: Any, name: str, execution: Any, window: str = "") -> None:
+def _ended_as(execution: Execution) -> str:
+    """The state that says how the execution ended, read as Execution.success reads it."""
+    spark = (execution.job_type or "").lower() in ("spark", "pyspark")
+    if spark and execution.final_status not in (None, "UNDEFINED"):
+        return execution.final_status
+    return execution.state
+
+
+def _failed(name: str, execution: Execution, window: str = "") -> None:
     """Print the last lines of a failed execution's stdout and stderr, then exit 1."""
-    ident = getattr(execution, "id", "?")
-    status = getattr(execution, "final_status", None) or getattr(
-        execution, "state", "?"
-    )
+    ident = execution.id
     tmp = tempfile.mkdtemp(prefix="hops-joblogs-")
     try:
         stdout_path, stderr_path = execution.download_logs(path=tmp)
         for stream, path in (("stdout", stdout_path), ("stderr", stderr_path)):
+            if path is None:
+                click.echo(f"(no {stream}.log)", err=True)
+                continue
             text = _read_log(path, LOG_TAIL)
             if text.strip():
                 click.echo(f"=== {stream}, last {LOG_TAIL} lines ===", err=True)
@@ -514,16 +548,8 @@ def _failed(job: Any, name: str, execution: Any, window: str = "") -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     raise click.ClickException(
-        f"{name}{window}: execution #{ident} {status}. "
+        f"{name}{window}: execution #{ident} {_ended_as(execution)}. "
         f"Full logs: hops job logs {name} --execution {ident} --stdout"
-    )
-
-
-def _refreshed(job: Any, execution: Any) -> Any:
-    """The execution as the backend has it now."""
-    ident = getattr(execution, "id", None)
-    return next(
-        (e for e in _executions(job) if getattr(e, "id", None) == ident), execution
     )
 
 
