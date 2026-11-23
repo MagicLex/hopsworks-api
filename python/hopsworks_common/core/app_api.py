@@ -123,8 +123,8 @@ class AppApi:
         name: str,
         app_path: str | None = None,
         environment: str = "python-app-pipeline",
-        memory: int = 2048,
-        cores: float = 1.0,
+        memory: int | None = None,
+        cores: float | None = None,
         env_vars: dict[str, str] | None = None,
         app_kind: str = "STREAMLIT",
         entrypoint_command: str | None = None,
@@ -165,8 +165,8 @@ class AppApi:
             name: Name of the app.
             app_path: Path to the app file in HopsFS.
             environment: Python environment name (default: "python-app-pipeline").
-            memory: Memory in MB (default: 2048).
-            cores: CPU cores (default: 1.0).
+            memory: Memory in MB. None leaves the choice to the cluster.
+            cores: CPU cores. None leaves the choice to the cluster.
             env_vars: Per-runtime env vars applied when the app is started.
                 These override account-level env vars for this app's executions.
             app_kind: What the app is, which decides how it is started.
@@ -307,13 +307,13 @@ class AppApi:
             # so the app serves at its base path. Without it the backend falls back to
             # the compatibility prefix and forwards /hopsworks-api/pythonapp/... as is.
             "proxyPathMode": "ROOT",
-            "resourceConfig": {
-                "memory": memory,
-                "cores": cores,
-                "gpus": 0,
-                "shmSize": 128,
-            },
+            "resourceConfig": {"gpus": 0, "shmSize": 128},
         }
+        # Unset is left out: the backend fills it from the cluster defaults.
+        if memory is not None:
+            config["resourceConfig"]["memory"] = memory
+        if cores is not None:
+            config["resourceConfig"]["cores"] = cores
         if app_path and not git_repo_app:
             config["appPath"] = app_path
         config["appKind"] = app_kind_name

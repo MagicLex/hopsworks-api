@@ -62,7 +62,7 @@ may be absent on older deployed `hops` binaries.
 - Does the app need **custom libraries** not in `python-app-pipeline`? If so, clone the env and install `app-requirements.txt` ([references/libraries.md](references/libraries.md)).
 - Does the app come from **HopsFS or Git**? If Git, ask for `git_url`, `git_provider`, and (if needed) `git_branch` plus the entrypoint.
 - Should a git-backed app **auto-redeploy** on new commits (`git_auto_redeploy=True`)? It only applies to git-backed apps.
-- What **memory / cores** should the app get? Defaults are `memory=2048` MB, `cores=1.0`.
+- What **memory / cores** should the app get? Unset = the cluster default (`pythonapp_memory`/`pythonapp_cores`).
 - Does the app still depend on `APP_BASE_URL_PATH`? Then it is a **migration** task (see **Routing and readiness**); confirm whether the code can switch to root routing.
 - Does the app need **monitoring** narrowed to specific routes? Monitoring is on by default and routes are optional.
 - Does the app need **public access**? Public sharing of any app kind is feature-flagged; only ask for it when the platform has it enabled.
