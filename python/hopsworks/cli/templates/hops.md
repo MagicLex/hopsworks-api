@@ -90,9 +90,9 @@ Already known, no need to look again:
 | none | Ask "What do you want to do?": **Explore data**, **Make a table and look at it**, **Build or resume an ML system**, **A dashboard or an app** (then ask which); with a system listed above, **Resume <slug>** replaces **Explore data**, first and recommended, and runs `/hops-build <slug>`. Then continue with that choice below. |
 | `explore`, or a look or a question ("show", "list", "what is in", "how many") | Explore (below). |
 | an instruction to make or change something outside an ML system (a table, features, a model input, a training dataset, a change of a feature group, a model or candidates, scoring, a real-time endpoint for a model, a dashboard, an app, an agent, a notebook, an analytics layer), alone or several together, and not a request for an ML system or an FTI pipeline | Pieces (below), whatever its first word. |
-| `dashboard` | Dashboard (below), with the rest as the instruction. |
-| `app` | App (below), with the rest as the instruction. |
-| `agent` | Agent (below), with the rest as the instruction. |
+| `dashboard` | Invoke the `hops-piece-dashboard` command with the Skill tool, passing the rest as its arguments, and follow it. |
+| `app` | Invoke the `hops-piece-app` command with the Skill tool, passing the rest as its arguments, and follow it. |
+| `agent` | Invoke the `hops-piece-agent` command with the Skill tool, passing the rest as its arguments, and follow it. |
 | `status` | Status (below). |
 | `ml`, or a request for an ML system or an FTI pipeline | Run the interview: invoke the `hops-ml` command with the Skill tool, passing the rest as its arguments, and follow it. |
 | `reqs`, `data`, `features`, `train`, `infer`, `verify`, `stop`, `f`, `t`, `i`, with an ML system listed above | Reply with one line: building and running phases is `/hops-build` (for example `/hops-build train`, `/hops-build verify`), and stop. Without a system, `features`, `train` and `infer` are Pieces (below). |
@@ -125,10 +125,10 @@ is the whole dispatch:
 | model input | feature groups with rows and the key that joins them (the label too, when the request names one) | feature view `<v>` | `hops fv info <v>` shows its feature groups | you, no builder: a view of the project that already reads those feature groups is reused: say so in one line and ask only whether to make another one beside it (reusing it marked "(Recommended)"), unless the request names the new view: then make it. Otherwise `hops fv create` as the **hops-fv** skill says |
 | training dataset | feature view `<v>` | a training dataset version of `<v>`, split as the request says | `hops td list <v>` shows the new version | you, no builder: `hops td compute` as the **hops-fv** skill says (it splits by fractions; a split by time goes through the SDK as that skill's time split says) |
 | change of a feature group | feature group `<t>` the user has: a column to add, online on, or a refresh on a schedule | the change on `<t>` itself, never a copy | column: `hops fg feature list <t>` shows it; online: `hops fg preview <t> --online --limit 1` prints a row; refresh: `hops job info <t>-refresh` shows the schedule | you, in this order: `hops fg info <t>`; then ask_user to confirm the change by `<t>`'s name, always and before any other step, a connect included; only on yes: for a refresh from a data source that is not connected yet, connect it (Connecting a source), then: A column: `hops fg feature add`, then fill it as `hops skills info hops-fg references/changes.md` says. Online: `hops fg update <t> --version <n> --online`. A refresh: a mounted (external) group reads its source live, so say that and stop; otherwise **hops-features-builder** with `name: <t>`, `existing: yes`, the schedule, and as source the one the request names, else the one `hops fg info <t>` shows (none shown: ask it as an open question). A backfill is that job's first run. |
-| dashboard | feature groups with rows | an app `<a>`, or a Superset dashboard `<title>`, as Dashboard below asks | the App or Dashboard row's check | Dashboard below: **hops-app-builder** or **hops-dashboard-builder** |
-| app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (App below) |
-| agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, its chat app `<a>_chat`, and evaluation suite `<a>` with one run | one question the data answers gets an answer whose trace has a tool call, `hops app info <a>_chat` shows `State` `RUNNING`, and the suite's run has a pass rate | **hops-agent-builder** (Agent below) |
-| notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (Notebook below) |
+| dashboard | feature groups with rows | an app `<a>`, or a Superset dashboard `<title>`, as `/hops-piece-dashboard` asks | the App or Dashboard row's check | `/hops-piece-dashboard`: **hops-app-builder** or **hops-dashboard-builder** |
+| app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (`/hops-piece-app`) |
+| agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, its chat app `<a>_chat`, and evaluation suite `<a>` with one run | one question the data answers gets an answer whose trace has a tool call, `hops app info <a>_chat` shows `State` `RUNNING`, and the suite's run has a pass rate | **hops-agent-builder** (`/hops-piece-agent`) |
+| notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (`/hops-piece-notebook`) |
 | analytics layer | bronze: a source; silver: feature groups with rows, used as bronze by name, never copied; gold: silver tables | the layer's tables with rows | `hops fg preview <table> --limit 1` for each table its `system.yaml` lists | `/hops-bronze` only for the example bronze of generated data, never when the request names a table or this conversation made one (that table is the bronze: `hops factory run analytics-silver` with it by name), then `/hops-silver`, `/hops-gold` |
 
 1. **The goal.** Write down the pieces the request names, each with its asset name. Add a piece
@@ -150,7 +150,7 @@ is the whole dispatch:
    says; train models is the model piece. "An agent", "a chatbot", "an assistant", "a chat over my data" or a
    chat UI to talk to the data is the agent piece, never an app that calls a model itself: the
    agent piece is traced and evaluated.
-2. **Run what is missing, in needs order.** For each piece, run its exit check (a change of a feature group runs `hops fg info <t>` first, as its row says; a new dashboard has no title to check yet and goes straight to Dashboard below), unless the turn's
+2. **Run what is missing, in needs order.** For each piece, run its exit check (a change of a feature group runs `hops fg info <t>` first, as its row says; a new dashboard has no title to check yet and goes straight to `/hops-piece-dashboard`), unless the turn's
    inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
    `not listed`, not a count alone), the piece is not among them, and no earlier step of this
    turn made or touched it. Passing: the piece exists; say so in one line and go on. Failing or
@@ -192,7 +192,7 @@ For a model, read the label from the data rather than asking: the column the req
 implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the
 choice in one line ("Predicting `status`, the order outcome") and go on. "Train X", "train a model", "an
 experiment (run)" or "compare models" without names, or a model made only to be deployed or scored, is `candidates: 3`; asked while this system
-builds a notebook, it is Notebook step 5, in that notebook. "Show the experiments" or "the runs"
+builds a notebook, it is `/hops-piece-notebook` step 5, in that notebook. "Show the experiments" or "the runs"
 of a model the project has is a read: `hops model runs <m>`, never a new sweep. "A (training)
 pipeline" is the model piece with `job: yes`; "run it" afterwards is `hops job run <m>-train
 --wait`, then `hops model runs <m>`. Ask only when two or more
@@ -205,7 +205,7 @@ columns fit the request equally.
 | hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, else as the model rules above say), `metric`, `job` (`yes` when the user asks for a pipeline, a job or a schedule, else `no`), `training_dataset` (the version a training dataset piece of this turn made, or none) |
 | hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `population` (the entities to score, such as open deals, and the feature group that lists them), `schedule` |
 | hops-deploy-builder | `name` (the deployment, a letter first, then letters and digits), `model` (name:version, or the best by a metric), `feature_view` (name:version), `passed_features` (sent by the caller instead of looked up, or none), `known_entity` (a key to check with, or none), `cores` and `memory` (1 and 1024 unless the user said) |
-| hops-agent-builder | the prompt in Agent (below) |
+| hops-agent-builder | the prompt in `/hops-piece-agent` |
 
 ## Status
 
@@ -213,152 +213,3 @@ With a system listed above, run `python <slug>/status.py` and `hops factory syst
 and print their output verbatim: the plan says what the project already has and what is next. Without
 one, list apps (`hops app list`) and dashboards (`hops superset dashboard list`, which works from
 anywhere).
-
-## Dashboard
-
-`hops superset` and the SDK reach Superset from anywhere, through the Hopsworks proxy, so the
-builder runs its program where it runs.
-
-1. A request for a new dashboard ("a dashboard of my orders") first asks the kind, in one
-   `AskUserQuestion` question, unless the request names Superset or an app: **An app
-   (Recommended)**, a page of charts served by Hopsworks, lighter and quicker to build and change;
-   **A Superset dashboard**, charts in Superset over the offline store, heavier; **Explain the
-   difference**, which answers in a few lines (an app: any layout, reads feature groups or a
-   deployment, iterated in the sandbox before a deploy; Superset: standard BI charts and filters,
-   built through its API) and asks again without that option. An app goes to App (below), the
-   request as its description. A Superset dashboard goes to create. Otherwise list the
-   dashboards (`hops superset dashboard list`) and ask: edit one (each by title, marked when a program exists under `dashboards/`), create one,
-   or delete one. With none, go to create.
-2. **Create.** The feature groups are the ones the request names or this conversation just made;
-   with neither, `hops fg list` and ask which to chart (multi-select; a group that is online only
-   cannot be charted, since Superset reads the offline store). Read their columns with
-   `hops fg feature list <name>`, then ask in one `ask_user` call, two questions: which charts to
-   keep (multi-select) from a few you propose by name (a big-number total, a bar over the
-   categorical column with the fewest distinct values, a histogram of a numeric column, a time
-   series on the event time when there is one), and the title, two proposals from the table names.
-3. **Edit.** Ask which dashboard and what should change, in words.
-4. **Delete.** Ask the user to confirm the exact title.
-5. Spawn **hops-dashboard-builder** with the Agent tool and this prompt, then print what it returns:
-
-   ```
-   action: create | edit | delete
-   title: <title>
-   feature_groups: [<name>:<version>, ...]
-   charts: <the charts the user kept, one per line, with the columns they use>
-   change: <for an edit, the user's words>
-   program: <dashboards/<slug>.py, or the ML system's <slug>/dashboards/<slug>.py>
-   where: <Hopsworks terminal | external client>
-   ```
-
-## Notebook
-
-A notebook is cells run on the user's own Jupyter kernel and saved with their outputs, in an
-`.ipynb` that opens in the user's JupyterLab. Write it yourself, with no builder:
-
-1. Run `hops notebook start`: it prints the Python environment the cells run in and the user's
-   Jupyter folder (`Users/<username>`). The notebook is `<folder>/<slug>.ipynb`, named after what
-   it shows. A package the environment lacks: the `hops-notebook` skill, never `pip install` in a cell.
-   An existing notebook: `hops notebook info <path> --source` prints every cell's text, and a change
-   to several cells is one `hops notebook update <path>` with all of them (`hops-notebook` skill),
-   never one `run --cell` per cell.
-2. Write one cell at a time and run it before writing the next:
-   `hops notebook run <path> --code -` with the cell on stdin. The first cell is
-   `import hopsworks` then `fs = hopsworks.login().get_feature_store()`. Each section starts with
-   its markdown cell, `hops notebook run <path> --markdown --code "## <what it shows>"`, then one
-   code cell per step: the read (`fs.get_feature_group("<t>", version=<n>).read()`), a look at the
-   rows, one chart each.
-3. A model's predictions: load the model from the registry and score the test part of the training
-   dataset it was trained on, with `<n>` from `Training dataset` in `hops model info <m>`:
-   `fv.get_training_data(training_dataset_version=<n>, primary_key=True)`, then the
-   `split_by_key` call of the training code (**hops-train** section 1, or the pipeline's
-   `train.py`), which keeps one entity's rows in one part and gives the same test part. Never
-   another split. A model whose training code split another way: show the test metrics its
-   `run.json` records instead.
-4. A cell that raised, or one the user asks to change: fix it in place with `--cell N`, never with
-   a new cell after it. `N` is the number its `hops notebook run` printed (`Cell N of ...`); no
-   `hops notebook info` to find it, since `--cell` refuses a cell the user edited.
-5. An experiment, candidates, a training run or a model asked for in the notebook: the cells
-   run the code and **hops-train** is the contract, its "In a notebook" section (read it with
-   `hops skills info hops-train` once, when you reach this step). Every candidate is a run in
-   the model registry, the chosen model registered, both checked with `hops model runs <m>` and
-   `hops model info <m>` (the check is these commands, not a download). Data in a feature group
-   trains on a feature view of it that leaves out the primary key and event time, so the view
-   serves model inputs only and takes every other column (`hops fv create <v> --feature-group <fg>:<n> --except
-   <key>,<event time> --labels <label>`, never a hand-picked `select`; text columns one-hot, as
-   **hops-train** says), then
-   `split_by_key` of **hops-train** section 1 in a cell) and registers
-   with `feature_view=` and `training_dataset_version=`, so it can be deployed; only data the
-   notebook made itself registers without, unless the request deploys the model: then that data
-   goes into a feature group and a view of it first (in a cell:
-   `fs.get_or_create_feature_group("<name>", version=1, primary_key=["<key>"]).insert(df)`). "Register the model" afterwards is the best run,
-   already registered: say its version. Then offer once per notebook, no option marked
-   "(Recommended)", to make it a training pipeline: the model piece (Pieces above), on a feature
-   group of the notebook's data.
-6. A question about the data while this system builds a notebook is answered in it: a cell for the
-   table, a cell per chart, never `hops sql` beside it.
-7. Never change a cell you did not write unless the user asks: the user may have the notebook open
-   in JupyterLab.
-8. A model the project already has (a pipeline's, a builder's) in a notebook: load it from the
-   registry and plot or score what it holds (step 3, its `run.json` and `images/`); never train it
-   again there.
-
-## App
-
-1. `hops app list`. An instruction naming an existing app is an edit; "delete" is a delete;
-   otherwise a new app. With several candidates, ask which.
-2. **Create.** The description is the instruction; without one, ask what the app should show, what
-   a person can do in it, and what it reads (feature groups, feature views, a deployment, a model).
-   An app that shows scores, ranks or the chance of an outcome, with no model named, asks how to
-   score first (Pieces, step 1). On Kumo, `hops score <name>` runs before the app, which reads
-   `<name>_scores` rows of the current run (the `run_id` of the newest `<name>_score_runs` row, as
-   the **hops-score** skill reads it) and trains nothing.
-   Ask the name, proposing a slug from the description. When the working directory is a GitHub
-   repository, ask whether the app is git-backed (a push redeploys it) or kept in HopsFS
-   (recommended; no repository needed).
-3. **Edit.** Ask what should change, in words, unless the instruction says it. A move between
-   Python and Node.js is a new app under the same name: ask the user before
-   `hops app delete <name> --yes --force`, then create it.
-4. **Delete.** Ask the user to confirm the exact name.
-5. Spawn **hops-app-builder** with the Agent tool and this prompt, then print what it returns:
-
-   ```
-   action: create | edit | delete
-   name: <name>
-   description: <the user's words>
-   change: <for an edit, the user's words>
-   runtime: <node when the request says Node or an npm framework, else python>
-   source: <hopsfs | git>
-   where: <Hopsworks terminal | external client>
-   deploy: no
-   ```
-6. **Deploy.** Ask with `AskUserQuestion` whether to deploy it to Hopsworks, never marked
-   "(Recommended)": the local run is where the app is iterated, and a redeploy in Hopsworks is
-   slower. On yes, spawn **hops-app-builder** with `action: deploy`, `name: <name>`, `deploy: yes`.
-   An edit is asked again before its deploy.
-
-## Agent
-
-1. `hops agent list`. An instruction naming an existing agent is an edit; "delete" is a delete;
-   otherwise a new agent. With several candidates, ask which.
-2. **Create.** The description is the instruction; without one, ask what the agent should answer
-   and for whom. What it reads: the feature groups the request names, else the ones this
-   conversation made or explored; with none, the table piece runs first. Ask the name, proposing a
-   slug from the description (a letter first, then letters and digits).
-3. **The LLM.** `anthropic/claude-sonnet-5-5` unless the user names another model. Its API key is
-   a secret: ask for it as a credential (never in a message or with AskUserQuestion), saved as
-   `<provider>_api_key`; `hops secrets list` shows whether one is already saved under that name,
-   and one that is saved is used without asking.
-4. **Edit.** Ask what should change, in words, unless the instruction says it.
-5. **Delete.** Ask the user to confirm the exact name. Its chat app and uploaded code go with it.
-6. Spawn **hops-agent-builder** with the Agent tool and this prompt, then print what it returns:
-
-   ```
-   action: create | edit | delete
-   name: <name>
-   description: <the user's words>
-   change: <for an edit, the user's words>
-   reads: <feature groups, name:version, one per line>
-   model: <provider>/<model>
-   key_secret: <the secret's name>
-   where: <Hopsworks terminal | external client>
-   ```
