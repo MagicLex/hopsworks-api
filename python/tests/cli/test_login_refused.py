@@ -47,6 +47,7 @@ def _get_project(monkeypatch, error):
             host="h",
             api_key="k",
             project="blah",
+            project_id=None,
             internal=False,
             hostname_verification=False,
             api_key_source=None,
