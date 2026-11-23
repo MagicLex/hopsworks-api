@@ -603,6 +603,7 @@ def _failed(
     """
     ident = execution.id
     reason = None
+    egress = None
     tmp = tempfile.mkdtemp(prefix="hops-joblogs-")
     try:
         stdout_path, stderr_path = execution.download_logs(path=tmp)
@@ -614,7 +615,9 @@ def _failed(
             if text.strip():
                 click.echo(f"=== {stream}, last {LOG_TAIL} lines ===", err=True)
                 click.echo(text.rstrip("\n"), err=True)
-        reason = _pod_exit(stderr_path)
+            if stream == "stderr":
+                egress = _egress_reason(text)
+        reason = egress or _pod_exit(stderr_path)
     except Exception as exc:  # noqa: BLE001 - the failure is reported either way
         click.echo(f"(logs not readable: {exc})", err=True)
     finally:
@@ -625,6 +628,17 @@ def _failed(
         f"{name}{window}: execution #{ident} {_ended_as(execution)}{because}. "
         f"Full logs: hops job logs {name} --execution {ident} --stdout"
     )
+
+
+_EGRESS_PREFIX = "hopsworks egress: "
+
+
+def _egress_reason(tail: str) -> str | None:
+    """The text of the last ``hopsworks egress: `` line of a stderr tail, without the prefix."""
+    for line in reversed(tail.splitlines()):
+        if line.startswith(_EGRESS_PREFIX):
+            return line[len(_EGRESS_PREFIX) :].strip() or None
+    return None
 
 
 # The pod is gone once its execution ends, and the execution keeps no exit code. KubeJobsMonitor
