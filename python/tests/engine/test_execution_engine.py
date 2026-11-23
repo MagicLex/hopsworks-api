@@ -14,6 +14,7 @@
 #   limitations under the License.
 #
 
+import itertools
 import time
 from datetime import datetime, timedelta
 
@@ -22,6 +23,10 @@ from hopsworks_common import job
 from hopsworks_common.client import exceptions
 from hopsworks_common.core import dataset_api
 from hopsworks_common.engine import execution_engine
+
+
+# Far more HTTP calls than any wait makes: a wait that does not end fails instead of hanging.
+_CALL_BOUND = 1000
 
 
 class TestWaitUntilFinished:
@@ -36,19 +41,37 @@ class TestWaitUntilFinished:
         fake_time.sleep.side_effect = lambda seconds: now.__setitem__(
             0, now[0] + seconds
         )
+        fake_time.monotonic.side_effect = lambda: now[0]
         fake_datetime = mocker.Mock(wraps=datetime)
         fake_datetime.now.side_effect = lambda: start + timedelta(seconds=now[0])
         mocker.patch.object(execution_engine, "time", fake_time)
         mocker.patch.object(execution_engine, "datetime", fake_datetime)
         return now
 
-    def _run(self, mocker, job_type, body, existing, timeout=None):
-        """Wait on the execution the backend answers with `body`; the Logs dataset holds `existing`."""
+    def _run(self, mocker, job_type, body, existing, timeout=None, clock=None):
+        """Wait on the execution the backend answers with `body`; the Logs dataset holds `existing`.
+
+        A list of bodies answers one per call, the last one holds. With `clock`, each HTTP call
+        takes one second.
+        """
+        answers = body if isinstance(body, list) else [body]
+        bodies = itertools.chain(answers, itertools.repeat(answers[-1]))
+
+        calls = [0]
+
+        def call(answer):
+            calls[0] += 1
+            if calls[0] > _CALL_BOUND:
+                raise AssertionError(f"the wait made more than {_CALL_BOUND} calls")
+            if clock is not None:
+                clock[0] += 1
+            return answer
+
         client = mocker.patch("hopsworks_common.client._get_instance").return_value
         client._project_id = 2167
-        client._send_request.return_value = body
+        client._send_request.side_effect = lambda *args, **kwargs: call(next(bodies))
         mocker.patch.object(
-            dataset_api.DatasetApi, "exists", lambda self, path: path in existing
+            dataset_api.DatasetApi, "exists", lambda self, path: call(path in existing)
         )
         j = job.Job(
             id=1,
@@ -58,7 +81,7 @@ class TestWaitUntilFinished:
             job_type=job_type,
             creator=None,
         )
-        execution = mocker.Mock(id=body["id"])
+        execution = mocker.Mock(id=answers[0]["id"])
         return execution_engine.ExecutionEngine()._wait_until_finished(
             j, execution, timeout
         )
@@ -73,21 +96,88 @@ class TestWaitUntilFinished:
 
         assert clock[0] == 0
 
-    @pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "RAY", "INGESTION"])
     def test_other_jobs_without_their_logs_still_wait_for_them(
-        self, mocker, backend_fixtures, clock, job_type
+        self, mocker, backend_fixtures, clock
     ):
-        # Spark and Ray set the final status before they aggregate the logs, and
-        # multi-table ingestion merges its logs after the final state.
+        # Multi-table ingestion merges its logs after the final state.
         result = self._run(
             mocker,
-            job_type,
+            "INGESTION",
             backend_fixtures["execution"]["get_python_finished"]["response"],
             existing=set(),
         )
 
         assert result.final_status == "SUCCEEDED"
         assert clock[0] >= execution_engine._LOG_AGGREGATION_SECONDS
+
+    def test_the_log_wait_counts_the_time_of_its_calls(
+        self, mocker, backend_fixtures, clock, caplog
+    ):
+        finished = backend_fixtures["execution"]["get_python_finished"]["response"]
+        self._run(mocker, "INGESTION", finished, existing=set(), clock=clock)
+
+        # The first two calls, the budget, one last pass (3 s sleep, two calls), the flush.
+        budget = execution_engine._LOG_AGGREGATION_SECONDS
+        assert clock[0] <= 2 + budget + 5 + execution_engine._LOG_FLUSH_SECONDS
+        assert (
+            "Log aggregation did not finish within 360 s (state FINISHED); "
+            "the logs may be incomplete." in caplog.text
+        )
+
+    @pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "RAY"])
+    def test_an_operator_start_failure_without_logs_returns_at_once(
+        self, mocker, backend_fixtures, clock, job_type
+    ):
+        spark = backend_fixtures["execution"]["get_spark_finished"]["response"]
+        body = {**spark, "state": "FAILED", "finalStatus": "FAILED"}
+        with pytest.raises(exceptions.JobExecutionException, match="failed"):
+            self._run(mocker, job_type, body, existing=set())
+
+        assert clock[0] == 0
+
+    @pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "RAY"])
+    def test_a_skipped_run_with_stdout_only_returns_at_once(
+        self, mocker, backend_fixtures, clock, job_type
+    ):
+        spark = backend_fixtures["execution"]["get_spark_finished"]["response"]
+        result = self._run(mocker, job_type, spark, existing={spark["stdoutPath"]})
+
+        assert result.state == "FINISHED"
+        assert clock[0] == 0
+
+    # Ray, like Spark, sets its final status before AGGREGATING_LOGS (RayJobsMonitor).
+    @pytest.mark.parametrize("job_type", ["SPARK", "RAY"])
+    def test_a_wait_ends_when_the_state_leaves_aggregating_logs(
+        self, mocker, backend_fixtures, clock, job_type
+    ):
+        spark = backend_fixtures["execution"]["get_spark_finished"]["response"]
+        aggregating = {**spark, "state": "AGGREGATING_LOGS"}
+        result = self._run(
+            mocker,
+            job_type,
+            [aggregating, aggregating, spark],
+            existing={spark["stdoutPath"], spark["stderrPath"]},
+        )
+
+        assert result.state == "FINISHED"
+        assert clock[0] == 6
+
+    def test_a_spark_wait_stuck_in_aggregating_logs_ends_at_the_budget(
+        self, mocker, backend_fixtures, clock, caplog
+    ):
+        spark = backend_fixtures["execution"]["get_spark_finished"]["response"]
+        aggregating = {**spark, "state": "AGGREGATING_LOGS"}
+        existing = {spark["stdoutPath"], spark["stderrPath"]}
+        result = self._run(mocker, "SPARK", aggregating, existing, clock=clock)
+
+        assert result.state == "AGGREGATING_LOGS"
+        # The first call, the budget, one last pass (3 s sleep, one call).
+        budget = execution_engine._LOG_AGGREGATION_SECONDS
+        assert budget <= clock[0] <= 1 + budget + 4
+        assert (
+            "Log aggregation did not finish within 360 s (state AGGREGATING_LOGS); "
+            "the logs may be incomplete." in caplog.text
+        )
 
     def test_a_finished_python_job_with_its_logs_returns_at_once(
         self, mocker, backend_fixtures, clock
