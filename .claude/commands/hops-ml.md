@@ -69,7 +69,8 @@ python <slug>/set.py 'schema_version=1' 'system.name=<short title>' 'system.slug
 
 In a Hopsworks terminal (`$HOPSFS_USER_HOME_DIR` set), also list it in the project's ML systems:
 `hops factory system register <slug> --name '<short title>'`. Elsewhere the code has no home yet
-(no HopsFS mount, no repository until *Where the code goes*), so `/hops-build` registers it.
+(`<slug>/` is not under `/Projects/<project>`, even when a Hopsable sandbox mounts the project, and
+there is no repository until *Where the code goes*), so `/hops-build` registers it.
 
 **2. What type of system?** Recommend from the problem: **batch** when predictions are used on a
 schedule (lists, reports, dashboards); **real-time** when each prediction answers a request as it
@@ -127,7 +128,8 @@ source**, **upload files**, or **generate synthetic data** (when there is no dat
   the problem, `requirements.description+=' Starts from feature view <name>:<version>.'` (or
   model), and record the feature groups it reads as sources; `/hops-build` records it in its
   phase's block and skips that phase;
-- file: ask the path; upload it with `hops files upload <path> Resources/<slug>/data/`; record
+- file: ask the path; put it in `Resources/<slug>/data/` as the **hops** skill's *Project files* rule (in a Hopsable sandbox, `$HOPS_TEMPLATES/SKILL.md`) says
+  (a copy in the mount, else `hops files upload <path> Resources/<slug>/data/`); record
   `{name, kind: file, location, status: present}`;
 - synthetic: ask the shape (batch tables or a stream of events) and the story in one sentence;
   record `{name, kind: synthetic, shape, status: needs_generation}`, then
