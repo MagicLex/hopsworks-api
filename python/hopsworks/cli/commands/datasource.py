@@ -2002,15 +2002,17 @@ def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
     if not yes and not output.JSON_MODE:
         click.confirm(f"Delete connector '{name}'?", abort=True)
 
+    from hopsworks_common import events
     from hopsworks_common.core import rest
 
     try:
-        rest._send_request(
-            "DELETE",
-            rest._project_path(
-                "featurestores", getattr(fs, "id", None), "storageconnectors", name
-            ),
-        )
+        with events.tracked("datasource", "delete", name=name):
+            rest._send_request(
+                "DELETE",
+                rest._project_path(
+                    "featurestores", getattr(fs, "id", None), "storageconnectors", name
+                ),
+            )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not delete data source '{name}': {exc}"
@@ -2998,16 +3000,18 @@ def _test_connector(ctx: click.Context, body: dict[str, Any]) -> None:
 
 def _create_connector(ctx: click.Context, body: dict[str, Any]) -> None:
     fs = session.get_feature_store(ctx)
+    from hopsworks_common import events
     from hopsworks_common.core import rest
 
     try:
-        rest._send_request(
-            "POST",
-            rest._project_path(
-                "featurestores", getattr(fs, "id", None), "storageconnectors"
-            ),
-            json_body=body,
-        )
+        with events.tracked("datasource", "create", name=body.get("name")):
+            rest._send_request(
+                "POST",
+                rest._project_path(
+                    "featurestores", getattr(fs, "id", None), "storageconnectors"
+                ),
+                json_body=body,
+            )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(
             f"Could not create data source '{body.get('name', '?')}': {exc}"

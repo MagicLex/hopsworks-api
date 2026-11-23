@@ -24,7 +24,7 @@ import tempfile
 import warnings
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from hopsworks_common import client, constants
+from hopsworks_common import client, constants, events
 from hopsworks_common.client import exceptions
 from hopsworks_common.client.exceptions import FeatureStoreException
 from hopsworks_common.core.constants import HAS_NUMPY
@@ -135,6 +135,14 @@ class FeatureViewEngine:
             f"got {type(extra_filter).__name__}."
         )
 
+    @events.tracking(
+        "fv",
+        "create",
+        key=lambda self, feature_view_obj, *a, **k: {
+            "name": feature_view_obj.name,
+            "version": feature_view_obj.version,
+        },
+    )
     def _save(
         self, feature_view_obj: feature_view.FeatureView
     ) -> feature_view.FeatureView:
@@ -270,6 +278,14 @@ class FeatureViewEngine:
             fv = self._feature_view_api._get_by_name(name)
         return fv
 
+    @events.tracking(
+        "fv",
+        "delete",
+        key=lambda self, name, version=None, *a, **k: {
+            "name": name,
+            "version": version,
+        },
+    )
     def _delete(self, name: str, version: int | None = None, force: bool = False):
         if version:
             return self._feature_view_api._delete_by_name_version(name, version, force)
@@ -1118,10 +1134,21 @@ class FeatureViewEngine:
             for split in training_dataset_obj.splits
         ):
             training_dataset_obj.seed = secrets.randbits(31)
-        return self._feature_view_api._create_training_dataset(
-            feature_view_obj.name, feature_view_obj.version, training_dataset_obj
-        )
+        with events.tracked("td", "create", name=feature_view_obj.name) as change:
+            created = self._feature_view_api._create_training_dataset(
+                feature_view_obj.name, feature_view_obj.version, training_dataset_obj
+            )
+            change.key["version"] = getattr(created, "version", None)
+        return created
 
+    @events.tracking(
+        "td",
+        "delete",
+        key=lambda self, feature_view_obj, training_data_version=None, *a, **k: {
+            "name": feature_view_obj.name,
+            "version": training_data_version,
+        },
+    )
     def _delete_training_data(self, feature_view_obj, training_data_version=None):
         if training_data_version:
             self._feature_view_api._delete_training_data_version(
@@ -1132,6 +1159,14 @@ class FeatureViewEngine:
                 feature_view_obj.name, feature_view_obj.version
             )
 
+    @events.tracking(
+        "td",
+        "delete",
+        key=lambda self, feature_view_obj, training_data_version=None, *a, **k: {
+            "name": feature_view_obj.name,
+            "version": training_data_version,
+        },
+    )
     def _delete_training_dataset_only(
         self, feature_view_obj, training_data_version=None
     ):
