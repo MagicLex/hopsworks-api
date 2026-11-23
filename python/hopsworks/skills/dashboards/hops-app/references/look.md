@@ -49,6 +49,9 @@ primary series, `context` greys for comparison, `danger` for a breach.
 A part the skeleton lacks is composed from these tokens and the spacing scale, in `app.css`
 after the skeleton's rules.
 
+Text follows hops-design: it says what is, and every paragraph takes its container's width.
+`main` holds the only max width.
+
 ## The look check
 
 In Hopsable, the `look` tool renders the live app in headless Chromium at 600 and 900px wide
