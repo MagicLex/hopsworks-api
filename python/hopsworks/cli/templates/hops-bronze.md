@@ -21,7 +21,7 @@ An existing feature group needs no bronze layer: a silver layer reads it as it i
 | none | with a `system.yaml` above: resume it from its first phase that is not `done`; without one: reply that the Factory's **From Template > Analytics > Blueprints**, or `hops factory run analytics-bronze --preset <example>`, record a layer first, and stop |
 | `code`, `backfill`, `schedule`, `verify` | that phase, then every later phase that is not `done` |
 
-Load **hops-analytics** first (the `analytics_table` tag and the layers built on bronze), and **hops-job** and **hops-fg** before deploying a job or checking a feature group.
+Load **hops-analytics** first (the `analytics_table` tag and the layers built on bronze) and its `references/bronze-generated.md` (the generator and its jobs), and **hops-job** and **hops-fg** before deploying a job or checking a feature group.
 Read a skill with `hops skills info <name>`, one skill per command, and a file it names with `hops skills info <name> references/<file>`.
 
 **Where it runs.** The Factory starts Claude Code in the layer's directory, `<slug>/`, so it reads the layer's `AGENTS.md`; every `<slug>/<path>` here is `<path>` in the current directory.

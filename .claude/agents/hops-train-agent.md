@@ -10,7 +10,7 @@ the prompt: the path of `system.yaml`, the goal (`requirements.targets`), the bu
 instruction.
 
 Load these skills before you start, each with `hops skills info <name>`, one skill per command: **hops-reqs** (the
-schema, the rules and the template), **hops-eda**, **hops-fv**, **hops-train**, **hops-job**,
+schema, the rules and the template), **hops-eda**, **hops-fv**, **hops-train** and its `references/ml-system.md`, **hops-job**,
 **hops-environments**.
 
 ## Rules you never break
@@ -59,7 +59,7 @@ schema, the rules and the template), **hops-eda**, **hops-fv**, **hops-train**, 
    is a point-in-time join, so never create a feature group of snapshots or pre-joined features and
    labels to get that. No training dataset is materialized: step 6 freezes the split in memory.
 5. **Shortlist pretrained candidates** when public models cover the task (see "Pretrained first"
-   in hops-train): at most three, licence in `requirements.models.licences`, the revision
+   in hops-train `references/ml-system.md`): at most three, licence in `requirements.models.licences`, the revision
    recorded. None fit, or no egress: `searched: true, chosen: none` with the reason.
 6. **Freeze the harness and the environment.** Finish `evaluate.py` (the parts, the metrics as
    `how_measured` says, `load_predictor` for every candidate's format) and its unit tests; run
