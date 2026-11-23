@@ -697,3 +697,28 @@ def test_a_logging_job_goes_with_its_feature_view():
     views.clear()
     assert deleter.delete(asset) == "deleted"
     assert deleted == ["job", "job"]
+
+
+def test_register_takes_a_hopsfs_copy_for_code_outside_the_mount_and_git(
+    monkeypatch, logged_in, tmp_path
+):
+    from hopsworks.cli import session
+    from hopsworks.cli.commands import mlsystem
+
+    (tmp_path / "system.yaml").write_text("system: {slug: churn}\n")
+    project = mock.Mock()
+    project.name = "churndemo"
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
+    sent = mock.Mock(return_value={})
+    monkeypatch.setattr(ml_system_api, "_register", sent)
+    # A directory with no mount and no origin registers by the copy it names.
+    mlsystem.register(
+        mock.Mock(),
+        tmp_path,
+        "Churn",
+        None,
+        "/Projects/churndemo/Users/u/systems/churn",
+    )
+    assert sent.call_args.args[0] == "/Projects/churndemo/Users/u/systems/churn"
+    with pytest.raises(click.UsageError, match="folder of this project"):
+        mlsystem.register(mock.Mock(), tmp_path, "Churn", None, "/Projects/other/x")
