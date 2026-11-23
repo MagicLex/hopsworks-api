@@ -102,6 +102,7 @@ AGENTS = {
     "hops-model-builder": "opus",
     "hops-infer-builder": "opus",
     "hops-deploy-builder": "opus",
+    "hops-agent-builder": "opus",
 }
 # Spawned by /hops for one piece built outside an ML system; /hops-build builds its own.
 ONE_PIECE = {
@@ -110,6 +111,7 @@ ONE_PIECE = {
     "hops-model-builder",
     "hops-infer-builder",
     "hops-deploy-builder",
+    "hops-agent-builder",
 }
 
 
