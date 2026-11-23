@@ -153,7 +153,7 @@ hops semantic update sales --path Jupyter/analytics/dbt_v2     # a new root path
   Edits made in Jupyter, a terminal or the file browser are noticed by a staleness check that later queries run, at most every 30 seconds, and compile in the background; run `hops semantic compile` to see the result at once.
 - **Invalid builds never serve.** Queries keep the last valid build and log that the answer is stale. Fix the issues listed by `compile --wait` and compile again.
 - **Deployment modes.** `FOLLOW` (default) serves every new valid build, for a developer's own clone. `PINNED` (`--mode PINNED`) serves one build until `hops semantic promote <name> <build id>`, for a production project.
-- `--path` is relative to the project root; `/hopsfs/...` paths from a terminal and absolute `/Projects/<project>/...` paths also work.
+- `--path` is relative to the project root; `/hopsfs/...` paths from a terminal and absolute `/Projects/<backing name>/...` paths also work.
 - **UI editor.** **Edit definitions** on the semantic project's page edits the YAML in the browser and validates the unsaved buffers as a compile would; Save does not compile. A save is refused (412) when the file changed since it was opened, so an agent editing the same files never silently loses a human's edit, or the other way round. The editor is read only for a git-backed project (edit in git and pull), one compiled from `semantic_manifest.json`, and members who cannot write the root path or are not Data Owner or Data Scientist.
 
 ## Discover

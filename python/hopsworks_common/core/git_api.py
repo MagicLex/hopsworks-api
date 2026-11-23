@@ -76,7 +76,7 @@ class GitApi:
             url: URL to the git repository.
             path: Path in Hopsworks Filesystem to clone the repo to. Use
                 `project.home_path` to clone into your personal home directory
-                (e.g. ``/Projects/<project>/Users/<username>``).
+                (e.g. ``/Projects/<backing name>/Users/<username>``).
             provider: The git provider where the repo is currently hosted.
             branch: The branch to clone, defaults to the configured default branch.
 

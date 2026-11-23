@@ -19,7 +19,7 @@ Ray, or a feature pipeline), then write a DAG that launches them in order.
 
 - **DAG files must live in the project's `Airflow` dataset.** The scheduler only
   picks up files there. In the project that is the `Airflow` dataset, on disk
-  `/Projects/<project>/Airflow/`. A DAG anywhere else, including a Jupyter
+  `/Projects/<backing name>/Airflow/`. A DAG anywhere else, including a Jupyter
   working directory or `Resources`, is never scheduled.
 - **Only Hopsworks operators are supported.** There is no BashOperator,
   PythonOperator, KubernetesPodOperator or Docker task. Anything you want to run

@@ -517,7 +517,7 @@ class ModelServing:
 
             # Or an already-uploaded HopsFS path:
             my_transformer = ms.create_transformer(
-                script_file="/Projects/<project>/Resources/my_transformer.py"
+                script_file="/Projects/<backing name>/Resources/my_transformer.py"
             )
 
             # Or the Transformer class directly:
