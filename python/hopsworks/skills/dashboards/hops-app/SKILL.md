@@ -61,7 +61,7 @@ hops app logs <name>          # tail logs (a running app is directed to the live
 hops app delete <name> --yes  # non-interactive
 ```
 
-`hops app create <name> --path /Projects/<project>/Users/<user>/app.py --entrypoint-command "python app.py" --start`
+`hops app create <name> --path /Projects/<backing name>/Users/<user>/app.py --entrypoint-command "python app.py" --start`
 creates, starts, and waits for serving in one call. It takes a **HopsFS-absolute**
 path, while the SDK `create_app(app_path=...)` takes a **project-relative** one
 (`Users/<username>/app.py`); each surface rejects the other's form. Routing and

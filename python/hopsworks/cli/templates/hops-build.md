@@ -164,12 +164,12 @@ line why, so `verify` and the next run see what was not done.
   remote repository, or inside Hopsworks, run `hops factory system register <slug>` once at the
   start: it lists the system in the project's ML systems in the Hopsworks UI (from an external
   client it records the repository URL) and is a no-op refresh when the interview already
-  registered it. With `system.repo.url: local` and `<slug>/` outside `/Projects/<project>` (an
+  registered it. With `system.repo.url: local` and `<slug>/` outside `/Projects/<backing name>` (an
   external client, or a Hopsable sandbox whether or not it mounts the project) the code has no
   remote and no copy in HopsFS, so do not register at the start, where a plain register fails. It gets a copy
   in HopsFS instead: `hops files upload <slug> Users/<user>/systems/ --overwrite` (the `.git`
   directory too). On the system's first run, upload right after the first phase commit, then
-  register once with `--location /Projects/<project>/Users/<user>/systems/<slug>`, so the system
+  register once with `--location /Projects/<backing name>/Users/<user>/systems/<slug>`, so the system
   shows in the Hopsworks UI even when the run stops early. Upload once more after the run's last
   commit, before it stops: the app question, the pull request, the final report, a failure or an
   escalation. Never after each phase: an upload walks the whole directory, with requests per

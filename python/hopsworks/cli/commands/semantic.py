@@ -164,7 +164,7 @@ def list_cmd(ctx: click.Context) -> None:
     "root_path",
     required=True,
     help="Directory of the definitions (a dbt project's root), relative to the "
-    "project, under /hopsfs/, or /Projects/<project>/...",
+    "project, under /hopsfs/, or /Projects/<backing name>/...",
 )
 @click.option(
     "--format",
@@ -430,7 +430,7 @@ Examples:
     "--path",
     "root_path",
     help="HopsFS directory to write the scaffold to, relative to the project, under "
-    f"/hopsfs/, or /Projects/<project>/...; default {_SEMANTIC_DIR}/<name>.",
+    f"/hopsfs/, or /Projects/<backing name>/...; default {_SEMANTIC_DIR}/<name>.",
 )
 @click.option(
     "--repo",
@@ -2244,7 +2244,7 @@ def _write_local(directory: Path, files: dict[str, str]) -> Path:
 
 def _ensure_dir(datasets: Any, directory: str) -> None:
     parts = directory.strip("/").split("/")
-    # /Projects/<project> exists; each directory below it is created when missing.
+    # /Projects/<backing name> exists; each directory below it is created when missing.
     for depth in range(3, len(parts) + 1):
         current = "/" + "/".join(parts[:depth])
         if not datasets.exists(current):

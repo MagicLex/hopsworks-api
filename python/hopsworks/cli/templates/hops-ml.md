@@ -76,7 +76,7 @@ python <slug>/set.py 'schema_version=1' 'system.name=<short title>' 'system.slug
 
 In a Hopsworks terminal (`$HOPSFS_USER_HOME_DIR` set), also list it in the project's ML systems:
 `hops factory system register <slug> --name '<short title>'`. Elsewhere the code has no home yet
-(`<slug>/` is not under `/Projects/<project>`, even when a Hopsable sandbox mounts the project, and
+(`<slug>/` is not under `/Projects/<backing name>`, even when a Hopsable sandbox mounts the project, and
 there is no repository until *Where the code goes*), so `/hops-build` registers it.
 
 **2. What type of system?** Skipped when the default applies. Recommend from the problem: **batch** when predictions are used on a

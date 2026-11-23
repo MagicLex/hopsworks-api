@@ -688,7 +688,7 @@ class SemanticProject:
         This object is updated in place.
 
         Parameters:
-            root_path: Directory of the definitions, relative to the project, under `/hopsfs/`, or `/Projects/<project>/...`.
+            root_path: Directory of the definitions, relative to the project, under `/hopsfs/`, or `/Projects/<backing name>/...`.
             format: Format of the definitions; `AUTO` detects it from the files.
             deployment_mode: `FOLLOW` serves every new valid build; `PINNED` serves a build until another is promoted.
 

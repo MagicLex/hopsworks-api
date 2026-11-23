@@ -812,7 +812,7 @@ _OPTIONS = _Opt(
 )
 _KEY_PATH_HELP = (
     "Service-account key file, as a full HopsFS path "
-    "(/Projects/<project>/Resources/key.json)."
+    "(/Projects/<backing name>/Resources/key.json)."
 )
 
 _SPECS: dict[str, _Spec] = {

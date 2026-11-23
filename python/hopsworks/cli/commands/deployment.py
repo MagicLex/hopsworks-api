@@ -447,7 +447,7 @@ def deployment_create(
         except Exception as exc:  # noqa: BLE001
             raise click.ClickException(f"Could not upload predictor: {exc}") from exc
         script_file = uploaded or f"{dest_dir}/{Path(script_file).name}"
-        # Serving needs an absolute /Projects/<project>/... path; dataset
+        # Serving needs an absolute /Projects/<backing name>/... path; dataset
         # upload returns one relative to the project root.
         if not script_file.startswith("/"):
             script_file = f"/Projects/{project.backing_name}/{script_file}"

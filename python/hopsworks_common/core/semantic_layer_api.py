@@ -178,7 +178,7 @@ class SemanticLayerApi:
         Parameters:
             name: Name of the semantic project, unique in the Hopsworks project, lowercase letters, digits and underscores starting with a letter.
             root_path:
-                Directory of the definitions, relative to the project root, under `/hopsfs/` in a Hopsworks terminal, or an absolute `/Projects/<project>/...` path.
+                Directory of the definitions, relative to the project root, under `/hopsfs/` in a Hopsworks terminal, or an absolute `/Projects/<backing name>/...` path.
                 For a dbt project it is the directory holding `dbt_project.yml`.
             git_repository_id: Hopsworks git repository holding `root_path`, or `None` to detect it from the path.
             format: `DBT` for dbt project YAML, `NATIVE` for MetricFlow YAML, `MANIFEST_JSON` for a `semantic_manifest.json`, or `AUTO` to detect it from the files.

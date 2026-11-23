@@ -14,7 +14,7 @@ def test_a_local_repository_is_uploaded_before_it_is_registered():
         .split()
     )
     local = text.index(
-        "With `system.repo.url: local` and `<slug>/` outside `/Projects/<project>`"
+        "With `system.repo.url: local` and `<slug>/` outside `/Projects/<backing name>`"
     )
     upload = text.index("hops files upload <slug>", local)
     register = text.index("register once with `--location", local)
