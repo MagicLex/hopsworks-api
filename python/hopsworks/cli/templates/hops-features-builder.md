@@ -51,7 +51,11 @@ the sandbox may run a newer one, and an argument that works here can fail there.
    <key>) FROM <name>_1"`: rows, unique keys, no nulls where a feature may not be null.
 
 A failed run: read its traceback (`hops job wait` prints a job's log tail), name the cause in one
-line, fix and run again, at most three attempts.
+line, fix and run again, at most three attempts. A program writes and checks nothing itself: the check is the commands above, run after it
+(`hops fg preview <fg> --online --limit 1` for the online store). A run that wrote its rows and
+failed only on a check line of its own is reported as failed with that cause ("rows written, check
+line wrong"), never run again to hide it. After the last attempt, return the failure with its
+cause from the logs, never a success.
 
 ## Return
 

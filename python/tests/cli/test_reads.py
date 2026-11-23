@@ -583,6 +583,35 @@ def test_deployment_info_not_found(mock_project):
     assert "missing" in result.output
 
 
+def _watched(mock_project, statuses, restarts):
+    d = mock.MagicMock()
+    d.get_state.side_effect = [mock.MagicMock(status=s) for s in statuses]
+    d._serving_engine._serving_api._get_logs.side_effect = [
+        [mock.MagicMock(restart_count=r)] for r in restarts
+    ]
+    mock_project.get_model_serving.return_value.get_deployment.return_value = d
+    with mock.patch("time.sleep"), mock.patch("time.monotonic", side_effect=range(100)):
+        return CliRunner().invoke(cli, ["deployment", "info", "churn", "--stable", "3"])
+
+
+def test_deployment_info_stable_passes_when_running_without_restart(mock_project):
+    result = _watched(mock_project, ["Running"] * 3, [2, 2, 2])
+    assert result.exit_code == 0, result.output
+    assert "stayed Running" in result.output
+
+
+def test_deployment_info_stable_fails_on_a_restart(mock_project):
+    result = _watched(mock_project, ["Running"] * 3, [0, 1, 1])
+    assert result.exit_code == 1
+    assert "flapping" in result.output
+
+
+def test_deployment_info_stable_fails_when_not_running(mock_project):
+    result = _watched(mock_project, ["Running", "Starting"], [0, 0])
+    assert result.exit_code == 1
+    assert "is Starting, not Running" in result.output
+
+
 # --- job -------------------------------------------------------------------
 
 
