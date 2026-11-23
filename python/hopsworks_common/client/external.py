@@ -106,18 +106,23 @@ class Client(base.Client):
             # This should only happen due to the way of work of and in hopsworks.login:
             # It first initalizes a client, and then uses it to figure out which project to use.
             self._project_name = None
+            self._project_backing_name = None
             return
 
         self._provide_project(project)
 
-    def _provide_project(self, project, project_id=None):
+    def _provide_project(self, project, project_id=None, backing_name=None):
         self._project_name = project
         _logger.debug("Project name: %s", self._project_name)
         self._bind_session(project)
 
         if project_id is None:
-            project_id = self._get_project_info(project)["projectId"]
+            project_info = self._get_project_info(project)
+            project_id = project_info["projectId"]
+            backing_name = project_info.get("backingName")
         self._project_id = str(project_id)
+        # Older backends return no backingName; there the backing name is the project name.
+        self._project_backing_name = backing_name or project
         _logger.debug("Setting Project ID: %s", self._project_id)
 
         self._username = session_cache.get("username")

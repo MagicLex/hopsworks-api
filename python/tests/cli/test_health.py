@@ -122,6 +122,58 @@ def test_the_facts_hold_the_last_day_of_runs_and_the_pods(tmp_path, monkeypatch)
     }
 
 
+def test_app_pods_are_found_by_the_backends_deployment_name(tmp_path, monkeypatch):
+    # hopsworks-ee PythonAppServiceName.getDeploymentName: "pythonapp-" + the project
+    # namespace + "--" + the app name lowercased, [^a-z0-9-] as "-", trailing dashes
+    # dropped, cut at 63. Kubernetes cuts a pod's generated name base at 58 characters.
+    long_app = "Sales_Dashboard_" + "x" * 60
+    cases = [
+        (
+            {"name": "churn_fresh", "backing_name": "churn_fresh_2"},
+            "churn-fresh-2",
+            "Churn_Example_App!",
+            "pythonapp-churn-fresh-2--churn-example-app-67cb65cbd9-q4m8z",
+        ),
+        (
+            {"name": "Churn", "backing_name": "Churn_2", "project_namespace": None},
+            None,
+            "Churn_Example_App!",
+            "pythonapp-churn-2--churn-example-app-67cb65cbd9-q4m8z",
+        ),
+        (
+            {"name": "churn_fresh", "backing_name": "churn_fresh"},
+            "churn-fresh",
+            long_app,
+            ("pythonapp-churn-fresh--sales-dashboard-" + "x" * 60)[:58] + "q4m8z",
+        ),
+    ]
+    for names, namespace, app, pod in cases:
+        listed = json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {"name": pod},
+                        "spec": {},
+                        "status": {"phase": "Running", "containerStatuses": []},
+                    }
+                ]
+            }
+        )
+        monkeypatch.setattr(
+            health,
+            "_kubectl",
+            lambda *a, listed=listed: listed if a[0] == "get" else "",
+        )
+        project = _project(tmp_path)
+        for key, value in names.items():
+            setattr(project, key, value)
+        if namespace:
+            project.project_namespace = namespace
+        facts = health.collect(project, {"app": {"name": app}}, "churn-example")
+        [service] = facts["services"]
+        assert [p["pod"] for p in service["pods"]] == [pod], (names, app)
+
+
 def test_a_deleted_job_is_not_healthy(tmp_path, monkeypatch):
     monkeypatch.setattr(health, "_kubectl", lambda *a: "")
     project = _project(tmp_path)
@@ -155,3 +207,9 @@ def test_the_summary_keeps_only_the_tags_it_asked_for(monkeypatch):
     summary = health.summarize({"counts": {}})
     assert summary.startswith("<p>All <strong>good</strong>.</p>")
     assert "<script>" not in summary and "<img" not in summary
+
+
+def test_an_app_pod_prefix_without_namespace_or_backing_name_still_answers():
+    # A project read before its backing name is set carries backing_name None.
+    project = SimpleNamespace(name="churn", backing_name=None, project_namespace=None)
+    assert health._app_pod_prefix(project, "Dash").startswith("pythonapp-")

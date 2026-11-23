@@ -121,6 +121,7 @@ def _patch_client(
     client = mocker.Mock()
     client._is_external.return_value = is_external
     client.project_name = project_name
+    client._project_backing_name = project_name
     client._get_certs_folder.return_value = certs
     # The cluster serves no checkpoint interval: the table properties stay as the test sets them.
     _set_checkpoint_interval(client, None)
@@ -221,7 +222,9 @@ class TestDeltaEngine:
         # env should be set
         assert os.environ["PEMS_DIR"] == "/tmp/pems"
         assert os.environ["HOPSFS_CLOUD_DATANODE_HOSTNAME_OVERRIDE"] == "dn.example.com"
-        assert os.environ["LIBHDFS_DEFAULT_USER"] == f"{cl.project_name}__user1"
+        assert (
+            os.environ["LIBHDFS_DEFAULT_USER"] == f"{cl._project_backing_name}__user1"
+        )
 
     def test_setup_delta_rs_external_no_datanode_lb(self, mocker):
         # Arrange

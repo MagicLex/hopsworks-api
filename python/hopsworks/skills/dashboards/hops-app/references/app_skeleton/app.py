@@ -92,7 +92,7 @@ def _connection():
     verify = os.environ.get("HOPSWORKS_HOSTNAME_VERIFICATION", "true").lower() != "false"
     return project.get_trino_api().connect(
         catalog=PREDICTIONS["catalog"],
-        schema=f"{project.name.lower()}_featurestore",
+        schema=f"{getattr(project, 'backing_name', project.name).lower()}_featurestore",
         verify=verify,
     )
 

@@ -1337,6 +1337,9 @@ class TestSpark:
         fg.feature_store.project_id = project_id
 
         mock_common_client_get_instance.return_value._project_name = "test_project_name"
+        mock_common_client_get_instance.return_value._project_backing_name = (
+            "test_backing_name"
+        )
 
         df = pd.DataFrame(data={"col_0": [1, 2], "col_1": ["test_1", "test_2"]})
         spark_df = spark_engine._spark_session.createDataFrame(df)
@@ -1380,7 +1383,7 @@ class TestSpark:
             mock_spark_engine_serialize_to_avro.return_value.withColumn.return_value.writeStream.outputMode.return_value.format.return_value.option.call_args[
                 0
             ][1]
-            == f"/Projects/test_project_name/Resources/{self._get_spark_query_name(project_id, fg)}-checkpoint"
+            == f"/Projects/test_backing_name/Resources/{self._get_spark_query_name(project_id, fg)}-checkpoint"
         )
         assert (
             mock_spark_engine_serialize_to_avro.return_value.withColumn.return_value.writeStream.outputMode.return_value.format.return_value.option.return_value.options.call_args[
@@ -1463,6 +1466,9 @@ class TestSpark:
         fg.feature_store = mocker.Mock()
 
         mock_common_client_get_instance.return_value._project_name = "test_project_name"
+        mock_common_client_get_instance.return_value._project_backing_name = (
+            "test_backing_name"
+        )
 
         df = pd.DataFrame(data={"col_0": [1, 2], "col_1": ["test_1", "test_2"]})
         spark_df = spark_engine._spark_session.createDataFrame(df)
@@ -1506,7 +1512,7 @@ class TestSpark:
             mock_spark_engine_serialize_to_avro.return_value.withColumn.return_value.writeStream.outputMode.return_value.format.return_value.option.call_args[
                 0
             ][1]
-            == "/Projects/test_project_name/Resources/test_query_name-checkpoint"
+            == "/Projects/test_backing_name/Resources/test_query_name-checkpoint"
         )
         assert (
             mock_spark_engine_serialize_to_avro.return_value.withColumn.return_value.writeStream.outputMode.return_value.format.return_value.option.return_value.options.call_args[
@@ -1597,6 +1603,9 @@ class TestSpark:
         fg.feature_store.project_id = project_id
 
         mock_common_client_get_instance.return_value._project_name = "test_project_name"
+        mock_common_client_get_instance.return_value._project_backing_name = (
+            "test_backing_name"
+        )
 
         df = pd.DataFrame(data={"col_0": [1, 2], "col_1": ["test_1", "test_2"]})
         spark_df = spark_engine._spark_session.createDataFrame(df)
@@ -1725,6 +1734,9 @@ class TestSpark:
         fg.feature_store.project_id = project_id
 
         mock_common_client_get_instance.return_value._project_name = "test_project_name"
+        mock_common_client_get_instance.return_value._project_backing_name = (
+            "test_backing_name"
+        )
 
         df = pd.DataFrame(data={"col_0": [1, 2], "col_1": ["test_1", "test_2"]})
         spark_df = spark_engine._spark_session.createDataFrame(df)
@@ -1768,7 +1780,7 @@ class TestSpark:
             mock_spark_engine_serialize_to_avro.return_value.withColumn.return_value.writeStream.outputMode.return_value.format.return_value.option.call_args[
                 0
             ][1]
-            == f"/Projects/test_project_name/Resources/{self._get_spark_query_name(project_id, fg)}-checkpoint"
+            == f"/Projects/test_backing_name/Resources/{self._get_spark_query_name(project_id, fg)}-checkpoint"
         )
         assert (
             mock_spark_engine_serialize_to_avro.return_value.withColumn.return_value.writeStream.outputMode.return_value.format.return_value.option.return_value.options.call_args[
