@@ -114,7 +114,9 @@ def register(
         factory is not None and recorded.get("name") not in (None, factory)
     ):
         recorded = {}
-    if location is not None and not location.startswith(f"/Projects/{project.backing_name}/"):
+    if location is not None and not location.startswith(
+        f"/Projects/{project.backing_name}/"
+    ):
         raise click.UsageError(
             f"--location must be a folder of this project: /Projects/{project.backing_name}/..."
         )
@@ -668,7 +670,11 @@ def system_dir(slug: str) -> None:
     Args:
         slug: The system.
     """
-    click.echo(_require_path(slug))
+    path = _require_path(slug)
+    if output.JSON_MODE:
+        output.print_json({"path": str(path)})
+        return
+    click.echo(path)
 
 
 @system_group.command("write-doc")
