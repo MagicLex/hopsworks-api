@@ -120,17 +120,28 @@ def fg_info(
         featurestore: Pin lookup to this feature store by name.
     """
     fg = _get_fg(ctx, name, version, featurestore)
+    own_store = session.get_feature_store(ctx).name
+    store = getattr(fg, "feature_store_name", None)
+    shared = store is not None and store != own_store
     size_error = None
     try:
         size = _offline_size(session.get_project(ctx).get_dataset_api(), fg)
         size_label = f"{_human_bytes(size[0])} ({size[1]} files)" if size else "-"
     except click.ClickException as exc:
-        size, size_label, size_error = None, exc.message, exc.message
+        size, size_label = None, exc.message
+        if shared and versions.error_code(exc.__cause__) == str(
+            versions.DATASET_NOT_FOUND
+        ):
+            size_label = "unavailable (shared feature store)"
+        else:
+            size_error = exc.message
+    sql_table = _sql_table(fg, own_store)
     if output.JSON_MODE:
         error = {"offline_size_error": size_error} if size_error else {}
         output.print_json(
             {
                 **_fg_to_dict(fg),
+                "sql_table": sql_table,
                 "offline_size_bytes": size[0] if size else None,
                 **error,
             }
@@ -146,6 +157,7 @@ def fg_info(
         ["Type", _fg_type_label(fg)],
         ["Online", "yes" if getattr(fg, "online_enabled", False) else "no"],
         ["Table format", getattr(fg, "time_travel_format", None) or "-"],
+        ["SQL table", sql_table or "-"],
         [
             "Offline size",
             size_label,
@@ -430,6 +442,19 @@ def _get_fg(
     raise click.ClickException(
         f"Feature group '{name}' not found in any accessible feature store{suffix}"
     )
+
+
+def _sql_table(fg: Any, own_store: str) -> str | None:
+    """The table `hops sql` reads for this group, or None for an external or spine one.
+
+    A group in another project's store needs that store as its schema, quoted since a
+    generated store name can start with a digit.
+    """
+    if _fg_type_label(fg) in ("external", "spine"):
+        return None
+    table = f"{fg.name}_{fg.version}"
+    store = getattr(fg, "feature_store_name", None)
+    return table if not store or store == own_store else f'"{store}".{table}'
 
 
 def _offline_size(dataset_api: Any, fg: Any) -> tuple[int, int] | None:
