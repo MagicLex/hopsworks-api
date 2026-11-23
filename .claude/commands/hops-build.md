@@ -71,7 +71,7 @@ a question you are about to ask depends on.
   /sys/fs/cgroup/cpu.max`); `free` and `nproc` show the node's. Install a missing test tool such
   as pytest with `uv pip install`, never a library the pipelines import, and run it with `TZ=UTC`
   as jobs run (the Terminal's own zone is the user's). Otherwise it runs as a job. A run you start
-  waits with `--wait`, or `hops job wait <job>` for one already started; never poll `hops job history`.
+  waits with `--wait`, or `hops job wait <job> --timeout 840` for one already started; never poll `hops job history`.
 - **Lint before a phase is validated.** Before a phase's tests run, and before it is recorded
   `met`, run in the system directory `ruff format .` then `ruff check --fix .` (with
   `uv tool run ruff@0.15.6` when `ruff` is not installed; the rules are in `pyproject.toml`), fix by hand
