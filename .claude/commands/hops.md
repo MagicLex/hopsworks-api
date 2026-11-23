@@ -103,7 +103,7 @@ is the whole dispatch:
 | deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, `hops deployment predict <d>` for a known entity returns a prediction, and `hops deployment info <d> --stable 60` passes | **hops-deploy-builder** |
 | dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
 | app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (App below) |
-| agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, and its chat app `<a>_chat` | one question the data answers gets an answer whose trace has a tool call, and `hops app info <a>_chat` shows `State` `RUNNING` | **hops-agent-builder** (Agent below) |
+| agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, its chat app `<a>_chat`, and evaluation suite `<a>` with one run | one question the data answers gets an answer whose trace has a tool call, `hops app info <a>_chat` shows `State` `RUNNING`, and the suite's run has a pass rate | **hops-agent-builder** (Agent below) |
 | notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (Notebook below) |
 | analytics layer | bronze: a source; silver: feature groups with rows, used as bronze by name, never copied; gold: silver tables | the layer's tables with rows | `hops fg preview <table> --limit 1` for each table its `system.yaml` lists | `/hops-bronze` only for the example bronze of generated data, never when the request names a table or this conversation made one (that table is the bronze: `hops factory run analytics-silver` with it by name), then `/hops-silver`, `/hops-gold` |
 
@@ -113,7 +113,7 @@ is the whole dispatch:
    model" when a model exists is the inference piece alone. "Serve", "real-time", "an endpoint" or
    "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference. "An
    agent", "a chatbot", "an assistant", "a chat over my data" or a chat UI to talk to the data is the
-   agent piece, never an app that calls a model itself: the agent piece is traced.
+   agent piece, never an app that calls a model itself: the agent piece is traced and evaluated.
 2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
    inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
    `not listed`, not a count alone), the piece is not among them, and no earlier step of this
