@@ -580,7 +580,8 @@ _DEPLOY_PACKAGE = "package.json"
 _DEPLOY_LOCKFILE = "package-lock.json"
 _DEPLOY_PACKAGE_INSTALLED = ".app-package.installed"
 _DEPLOY_PORT = 8080
-_POLL_SECONDS = 3.0
+# The backend marks an app serving on its own monitor pass; a short poll adds little on top.
+_POLL_SECONDS = 0.5
 # A Hopsable sandbox's HopsFS mount: one copy through it replaces a REST call per file.
 _MOUNT_STATUS = "/run/hopsfs/status.json"
 
