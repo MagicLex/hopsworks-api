@@ -292,7 +292,8 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    slug from the description (a letter first, then letters and digits).
 3. **The LLM.** `anthropic/claude-sonnet-5-5` unless the user names another model. Its API key is
    a secret: ask for it as a credential (never in a message or with AskUserQuestion), saved as
-   `<provider>_api_key`; one already saved under that name is used without asking.
+   `<provider>_api_key`; `hops secrets list` shows whether one is already saved under that name,
+   and one that is saved is used without asking.
 4. **Edit.** Ask what should change, in words, unless the instruction says it.
 5. **Delete.** Ask the user to confirm the exact name. Its chat app and uploaded code go with it.
 6. Spawn **hops-agent-builder** with the Agent tool and this prompt, then print what it returns:
