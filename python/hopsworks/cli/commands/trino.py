@@ -496,6 +496,8 @@ def trino_catalog_create(
         featurestore_id=fs_id,
         scope=template.get("scope"),
     )
+    # Named before any further call, so a failure below still says which catalog exists now.
+    output.info("Created Trino catalog %s.", catalog["name"])
     capabilities = api.get_capabilities()
     if not capabilities.get("dynamicCatalogs"):
         _print_catalog(catalog)
