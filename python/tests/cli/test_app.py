@@ -9,7 +9,12 @@ import pytest
 from click.testing import CliRunner
 from hopsworks.cli.main import cli
 
-from tests.cli.conftest import PENDING_REASON, backend
+from tests.cli.conftest import (
+    PENDING_REASON,
+    Environments,
+    backend,
+    environment_refused,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +30,7 @@ def _fake_app(**overrides):
     a.state = overrides.get("state", "CREATED")
     a.serving = overrides.get("serving", False)
     a.environment = overrides.get("environment", "python-app-pipeline")
+    a.environment_name = overrides.get("environment_name", "python-app-pipeline")
     a.memory = overrides.get("memory", 2048)
     a.cores = overrides.get("cores", 1.0)
     a.app_path = overrides.get("app_path", "Resources/app.py")
@@ -909,6 +915,81 @@ def test_app_delete_force_is_accepted_and_does_nothing_more(mock_project):
     a.delete.assert_called_once()
 
 
+def _delete_as_scott(mock_project, env_name, *names, creator=None):
+    a = _fake_app(name="shop", environment_name=env_name)
+    mock_project.get_app_api.return_value.get_app.return_value = a
+    envs = Environments(mock_project, *names)
+    if creator is not None:
+        envs.envs[env_name].creator = creator
+    users_api = mock.MagicMock()
+    users_api._get_current_user.return_value.username = "scott"
+    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
+        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
+    return result, a, envs
+
+
+def test_app_delete_deletes_your_copy_of_its_environment(mock_project):
+    result, a, envs = _delete_as_scott(
+        mock_project, "shop-app-env-scott", "shop-app-env", "shop-app-env-scott"
+    )
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_called_once()
+    envs.envs["shop-app-env"].delete.assert_not_called()
+    assert "Deleted environment shop-app-env-scott" in result.output
+
+
+def test_app_delete_keeps_a_copy_of_your_name_someone_else_created(mock_project):
+    result, a, envs = _delete_as_scott(
+        mock_project, "shop-app-env-scott", "shop-app-env-scott", creator="alice"
+    )
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_not_called()
+    assert "Kept environment shop-app-env-scott: alice created it" in result.output
+
+
+def test_app_delete_warns_when_the_copy_cannot_go_since_the_app_is_gone(mock_project):
+    mock_project.get_environment_api.return_value.get_environment.side_effect = (
+        RuntimeError("503")
+    )
+    a = _fake_app(name="shop", environment_name="shop-app-env-scott")
+    mock_project.get_app_api.return_value.get_app.return_value = a
+    users_api = mock.MagicMock()
+    users_api._get_current_user.return_value.username = "scott"
+    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
+        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    assert "Kept environment shop-app-env-scott: could not delete it: 503" in (
+        result.output
+    )
+
+
+def test_app_delete_keeps_your_copy_while_another_app_runs_on_it(mock_project):
+    # `hops env install shop` makes shop-app-env-scott too, which another app may use.
+    other = _fake_app(name="dash", environment_name="shop-app-env-scott")
+    mock_project.get_app_api.return_value.get_apps.return_value = [other]
+    result, a, envs = _delete_as_scott(
+        mock_project, "shop-app-env-scott", "shop-app-env-scott"
+    )
+    assert result.exit_code == 0, result.output
+    a.delete.assert_called_once()
+    envs.envs["shop-app-env-scott"].delete.assert_not_called()
+    assert "Kept environment shop-app-env-scott: app dash runs on it." in result.output
+
+
+def test_app_delete_keeps_a_shared_environment_and_another_users_copy(mock_project):
+    for env_name in ("shop-app-env", "shop-app-env-alice"):
+        result, a, envs = _delete_as_scott(
+            mock_project, env_name, "shop-app-env", "shop-app-env-alice"
+        )
+        assert result.exit_code == 0, result.output
+        a.delete.assert_called_once()
+        for env in envs.envs.values():
+            env.delete.assert_not_called()
+
+
 def test_app_info_surfaces_not_found(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.get_app.side_effect = RuntimeError("404")
@@ -944,15 +1025,19 @@ def _deploy(
     *args,
     existing=None,
     polls=(),
-    remote=None,
+    installed=None,
     json_mode=False,
     hopsworks=None,
+    user="scott",
+    hopsfs=None,
 ):
     """Run `hops app deploy shop <root>` against fakes.
 
     `existing` is the app before the deploy, `polls` what each later `get_app`
-    returns, `remote` the text of the requirements uploaded last time, and
-    `hopsworks` the client (on host https://h).
+    returns, `installed` the record of the last finished install (environment,
+    then requirements), and `hopsworks` the client (on host https://h). What the
+    deploy records is in `dataset_api.records`; the files it uploaded are in
+    `dataset_api.hopsfs`, which a second deploy takes as `hopsfs`.
     """
     if hopsworks is None:
         hopsworks = mock.MagicMock(_verify=False)
@@ -960,16 +1045,32 @@ def _deploy(
     apps = mock_project.get_app_api.return_value
     apps.get_app.return_value = existing
     dataset_api = mock_project.get_dataset_api.return_value
+    record = "Users/scott/apps/shop/.app-requirements.installed"
+    files = dict(hopsfs or {})
+    if installed is not None:
+        files[record] = installed
     present = {"Users/scott"}
-    if remote is not None:
-        present.add("Users/scott/apps/shop/app-requirements.txt")
-    dataset_api.exists.side_effect = present.__contains__
+    dataset_api.exists.side_effect = lambda path: path in present or path in files
     dataset_api.mkdir.side_effect = present.add
-    dataset_api.read_content.return_value = (
-        mock.MagicMock(content=remote.encode()) if remote is not None else None
+    dataset_api.read_content.side_effect = lambda path: (
+        mock.MagicMock(content=files[path].encode()) if path in files else None
     )
+    dataset_api.records = []
+    dataset_api.hopsfs = files
+
+    def upload(local_path, upload_path, overwrite):
+        import os
+
+        with open(local_path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+        files[f"{upload_path}/{os.path.basename(local_path)}"] = text
+        if local_path.endswith(".app-requirements.installed"):
+            dataset_api.records.append(text)
+
+    dataset_api.upload.side_effect = upload
+    username = user
     user = mock.MagicMock()
-    user.username = "scott"
+    user.username = username
     users_api = mock.MagicMock()
     users_api._get_current_user.return_value = user
     argv = [
@@ -1142,33 +1243,219 @@ def test_deploy_skips_the_install_when_the_requirements_did_not_change(
     mock_project, tmp_path
 ):
     root = _app_dir(tmp_path, requirements="polars==1.0\n")
-    env_api = mock_project.get_environment_api.return_value
-    clone = env_api.get_environment.return_value
+    envs = Environments(mock_project, "shop-app-env")
     result, _, _ = _deploy(
         mock_project,
         root,
         existing=_app(3, env="shop-app-env"),
         polls=[_app(4, env="shop-app-env")],
-        remote="polars==1.0\n",
+        installed="shop-app-env\npolars==1.0\n",
     )
     assert result.exit_code == 0, result.output
-    clone.install_requirements.assert_not_called()
-    env_api.create_environment.assert_not_called()
+    envs.envs["shop-app-env"].install_requirements.assert_not_called()
+    envs.api.create_environment.assert_not_called()
+
+
+def test_deploy_installs_again_when_the_environment_lost_a_recorded_library(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n# plots\nScikit_Learn>=1.5\n")
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].library_names = ["polars", "pandas"]
+    result, _, _ = _deploy(
+        mock_project,
+        root,
+        existing=_app(3, env="shop-app-env"),
+        polls=[_app(4, env="shop-app-env")],
+        installed="shop-app-env\npolars==1.0\n# plots\nScikit_Learn>=1.5\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "lacks scikit-learn" in result.output
+    envs.envs["shop-app-env"].install_requirements.assert_called_once()
 
 
 def test_deploy_reinstalls_changed_requirements(mock_project, tmp_path):
     root = _app_dir(tmp_path, requirements="polars==1.1\n")
-    env_api = mock_project.get_environment_api.return_value
-    clone = env_api.get_environment.return_value
+    envs = Environments(mock_project, "shop-app-env")
     result, _, _ = _deploy(
         mock_project,
         root,
         existing=_app(3, env="shop-app-env"),
         polls=[_app(4, env="shop-app-env")],
-        remote="polars==1.0\n",
+        installed="shop-app-env\npolars==1.0\n",
     )
     assert result.exit_code == 0, result.output
-    clone.install_requirements.assert_called_once()
+    envs.envs["shop-app-env"].install_requirements.assert_called_once()
+
+
+def test_deploy_into_a_shared_app_environment_clones_your_own_copy(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+    result, apps, _ = _deploy(
+        mock_project, root, polls=[_app(1, env="shop-app-env-scott")]
+    )
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once_with(
+        "shop-app-env-scott",
+        source_environment_name="shop-app-env",
+        await_creation=False,
+    )
+    envs.envs["shop-app-env-scott"].install_requirements.assert_called_once_with(
+        "/Projects/demo/Users/scott/apps/shop/app-requirements.txt",
+        await_installation=True,
+    )
+    assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env-scott"
+
+
+def test_deploy_reuses_your_copy(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.1\n")
+    envs = Environments(mock_project, "shop-app-env", "shop-app-env-scott")
+    running = _app(3, env="shop-app-env-scott")
+    result, apps, dataset_api = _deploy(
+        mock_project,
+        root,
+        existing=running,
+        polls=[_app(4, env="shop-app-env-scott")],
+        installed="shop-app-env-scott\npolars==1.0\n",
+    )
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_not_called()
+    envs.envs["shop-app-env"].install_requirements.assert_not_called()
+    envs.envs["shop-app-env-scott"].install_requirements.assert_called_once()
+    running.redeploy.assert_called_once_with(await_serving=False)
+    assert dataset_api.records == ["shop-app-env-scott\npolars==1.1\n"]
+
+
+def test_deploy_an_app_on_a_shared_environment_says_how_to_move_to_the_copy(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.1\n")
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+    running = _app(3, env="shop-app-env")
+    result, _, _ = _deploy(
+        mock_project, root, existing=running, installed="shop-app-env\npolars==1.0\n"
+    )
+    assert result.exit_code == 1
+    assert "they are in your copy 'shop-app-env-scott'" in result.output
+    assert "ask before doing either" in result.output
+    assert "--env" not in result.output
+    envs.envs["shop-app-env-scott"].install_requirements.assert_called_once()
+    running.redeploy.assert_not_called()
+
+
+def test_deploy_records_the_install_and_the_next_deploy_skips_it(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+    result, _, dataset_api = _deploy(
+        mock_project, root, polls=[_app(1, env="shop-app-env-scott")]
+    )
+    assert result.exit_code == 0, result.output
+    assert dataset_api.records == ["shop-app-env-scott\npolars==1.0\n"]
+
+    result, _, _ = _deploy(
+        mock_project,
+        root,
+        existing=_app(1, env="shop-app-env-scott"),
+        polls=[_app(2, env="shop-app-env-scott")],
+        installed=dataset_api.records[0],
+    )
+    assert result.exit_code == 0, result.output
+    envs.envs["shop-app-env-scott"].install_requirements.assert_called_once()
+
+
+def test_a_failed_install_into_the_copy_is_installed_again_on_redeploy(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project, "shop-app-env", "shop-app-env-scott")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+    copy = envs.envs["shop-app-env-scott"]
+    copy.install_requirements.side_effect = [RuntimeError("pip failed"), None]
+    result, apps, dataset_api = _deploy(mock_project, root)
+    assert result.exit_code == 1
+    assert dataset_api.records == []
+    apps.create_app.assert_not_called()
+
+    result, apps, dataset_api = _deploy(
+        mock_project,
+        root,
+        polls=[_app(1, env="shop-app-env-scott")],
+        hopsfs=dataset_api.hopsfs,
+    )
+    assert result.exit_code == 0, result.output
+    assert copy.install_requirements.call_count == 2
+    assert apps.create_app.call_args.kwargs["environment"] == "shop-app-env-scott"
+
+
+def test_a_failed_clone_is_deleted_and_cloned_again_on_redeploy(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+
+    from hopsworks_common.command import Command
+
+    def clone(name, **kwargs):
+        half = envs.add(name)
+        half.commands = [Command(status="FAILED", op="CREATE")]
+        half.delete.side_effect = lambda: envs.envs.pop(name)
+        return half
+
+    envs.api.create_environment.side_effect = clone
+    envs.api.await_creation.side_effect = RuntimeError("build failed")
+    result, _, dataset_api = _deploy(mock_project, root)
+    assert result.exit_code == 1
+    assert "Could not clone environment 'shop-app-env' to 'shop-app-env-scott'" in (
+        result.output
+    )
+    assert "shop-app-env-scott" not in envs.envs
+    assert dataset_api.records == []
+
+    envs.api.create_environment.side_effect = lambda name, **kwargs: envs.add(name)
+    envs.api.await_creation.side_effect = None
+    result, _, _ = _deploy(
+        mock_project,
+        root,
+        polls=[_app(1, env="shop-app-env-scott")],
+        hopsfs=dataset_api.hopsfs,
+    )
+    assert result.exit_code == 0, result.output
+    envs.envs["shop-app-env-scott"].install_requirements.assert_called_once()
+
+
+def test_deploy_refuses_a_copy_name_over_the_hopsworks_limit(mock_project, tmp_path):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused()
+    result, _, _ = _deploy(mock_project, root, user="s" * 120)
+    assert result.exit_code == 1
+    assert "over the 128 Hopsworks allows" in result.output
+    envs.api.create_environment.assert_not_called()
+
+
+def test_deploy_any_other_install_refusal_is_reported_without_a_copy(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="polars==1.0\n")
+    envs = Environments(mock_project, "shop-app-env")
+    envs.envs["shop-app-env"].install_requirements.side_effect = environment_refused(
+        300019
+    )
+    result, apps, _ = _deploy(mock_project, root)
+    assert result.exit_code == 1
+    assert "Could not install into environment 'shop-app-env'" in result.output
+    envs.api.create_environment.assert_not_called()
+    apps.create_app.assert_not_called()
 
 
 def test_deploy_json_lists_every_file_with_its_sha256(mock_project, tmp_path):
