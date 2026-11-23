@@ -190,7 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     predict = evaluate.load_predictor(model.download())
 
     started = time.monotonic()
-    fv.init_batch_scoring(training_dataset_version=training["harness"]["training_dataset_version"])
+    # The transformation statistics of the training data this model was fit on.
+    fv.init_batch_scoring(training_dataset_version=model.training_dataset_version)
     batch = fv.get_batch_data(start_time=begin, end_time=finish, primary_key=True)
     key_columns = [c for c in batch.columns if c == entity or c.endswith("_" + entity)]
     scores = predict(batch.drop(columns=key_columns))
