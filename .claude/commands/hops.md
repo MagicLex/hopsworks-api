@@ -27,6 +27,16 @@ Already known, no need to look again:
   tables <source>` call; on a source read in place, `hops datasource preview` is only for finding
   the table a request asks for without naming it. Never loop a preview over every table of a
   source: each one is a read, and a source holds tables the user did not ask about.
+- Once a source is connected and the request names no table, ask one question with
+  `AskUserQuestion`, never a second one for the tables: **Preview all tables** (up to five;
+  picking it previews each, as the rule above says, with no table picker after; on a source read
+  in place its option text says it adds a feature group per table), **Preview one: `<table>`**
+  (one option per likely table, at most two) and **Tell me what this data is about** (a few lines
+  in the chat on which tables the source holds, what each holds and how they join, from `hops
+  datasource tables` and a `--limit 1` read per table, at most five, for its columns; those reads
+  also show in the Preview list).
+  A source with more than five tables previews or describes the five its names point to, and
+  says which.
 - A next-step offer (Explore, Pieces step 6) always has these two options: **Build a data
   pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
   **Explore it in a notebook** (a notebook over the table). The other one or two options are what
