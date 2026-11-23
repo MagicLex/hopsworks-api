@@ -60,7 +60,7 @@ hops datasource tables <connector>                     # a CRM's resources (acco
 hops datasource preview <connector> --table account    # its inferred schema and sampled rows
 ```
 
-Preview only the tables the request names; the listing above is the one call that shows the rest. A loop of previews over every table reads tables nobody asked about, one call each.
+Preview only the tables the request names; the listing above is the one call that shows the rest. These sources cannot be mounted (`hops fg create-external` refuses a CRM source), so `hops datasource preview` reads a named table's rows here. A named table of a SQL, warehouse or object-store source is mounted instead (Mount a table as an external feature group) and read with `hops fg preview <fg> --limit 20`. A loop of previews over every table reads tables nobody asked about, one call each.
 
 `StorageConnector.get_data(data_source)` fetches one resource and starts one job per call.
 `StorageConnector.get_data_batch(data_sources)` fetches several resources with ONE job that processes them sequentially in a single container — prefer it whenever you preview more than one resource.
