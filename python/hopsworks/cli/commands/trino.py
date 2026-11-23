@@ -15,6 +15,7 @@ per-command, e.g. ``--catalog iceberg`` for Iceberg feature groups, or
 from __future__ import annotations
 
 import contextlib
+import re
 from typing import TYPE_CHECKING, Any
 
 import click
@@ -118,6 +119,20 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+_MISSING_TABLE = re.compile(r"Table '(?:[^.']+\.)*([^.']+)' does not exist")
+
+
+def _table_hint(exc: Exception) -> str:
+    """Name the versioned table a missing feature group name most likely meant."""
+    if getattr(exc, "error_name", None) != "TABLE_NOT_FOUND":
+        return ""
+    match = _MISSING_TABLE.search(str(exc))
+    if not match or re.search(r"_\d+$", match.group(1)):
+        return ""
+    name = match.group(1)
+    return f". A feature group is the table <name>_<version>, such as {name}_1."
+
+
 def _execute(
     ctx: click.Context,
     sql: str,
@@ -135,7 +150,9 @@ def _execute(
         try:
             cur.execute(sql)
         except Exception as exc:  # noqa: BLE001 - the driver raises a mix of types
-            raise click.ClickException(f"Could not run the query: {exc}") from exc
+            raise click.ClickException(
+                f"Could not run the query: {exc}{_table_hint(exc)}"
+            ) from exc
         if cur.description is None:
             # Statement that returned no rowset (e.g. CREATE/INSERT). Most users
             # don't run these from the CLI, but report the rowcount if the
