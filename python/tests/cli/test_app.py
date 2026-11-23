@@ -372,7 +372,9 @@ def test_app_create_forwards_args(mock_project):
         [
             "app",
             "create",
-            "dash", "--app-kind", "STREAMLIT",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
             "--path",
             "Resources/dash.py",
             "--memory",
@@ -404,7 +406,16 @@ def test_app_create_leaves_out_unset_memory_and_cores(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
-        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/dash.py"]
+        cli,
+        [
+            "app",
+            "create",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
+            "--path",
+            "Resources/dash.py",
+        ],
     )
     assert result.exit_code == 0, result.output
     kwargs = apps.create_app.call_args.kwargs
@@ -417,7 +428,16 @@ def test_app_create_no_db_access(mock_project):
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
         cli,
-        ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/dash.py", "--no-db-access"],
+        [
+            "app",
+            "create",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
+            "--path",
+            "Resources/dash.py",
+            "--no-db-access",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert apps.create_app.call_args.kwargs["db_access"] is False
@@ -431,7 +451,9 @@ def test_app_create_idle_scale_to_zero_forwards_the_timeouts(mock_project):
         [
             "app",
             "create",
-            "dash", "--app-kind", "STREAMLIT",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--idle-scale-to-zero",
@@ -455,7 +477,9 @@ def test_app_create_idle_timeouts_reject_the_option_off(mock_project):
         [
             "app",
             "create",
-            "dash", "--app-kind", "STREAMLIT",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--no-idle-scale-to-zero",
@@ -476,7 +500,9 @@ def test_app_create_idle_timeouts_alone_are_forwarded(mock_project):
         [
             "app",
             "create",
-            "dash", "--app-kind", "STREAMLIT",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--idle-cooldown-seconds",
@@ -493,7 +519,16 @@ def test_app_create_leaves_idle_scale_to_zero_to_the_cluster_default(mock_projec
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
-        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/app.py"]
+        cli,
+        [
+            "app",
+            "create",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
+            "--path",
+            "Resources/app.py",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert "idle_scale_to_zero" not in apps.create_app.call_args.kwargs
@@ -507,7 +542,9 @@ def test_app_create_no_idle_scale_to_zero_opts_out(mock_project):
         [
             "app",
             "create",
-            "dash", "--app-kind", "STREAMLIT",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--no-idle-scale-to-zero",
@@ -536,7 +573,16 @@ def test_app_create_defaults_to_db_access(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
-        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/dash.py"]
+        cli,
+        [
+            "app",
+            "create",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
+            "--path",
+            "Resources/dash.py",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert "db_access" not in apps.create_app.call_args.kwargs
@@ -718,7 +764,9 @@ def test_app_create_custom_git_forwards_args(mock_project):
 
 
 def test_app_create_streamlit_requires_path(mock_project):
-    result = CliRunner().invoke(cli, ["app", "create", "dash", "--app-kind", "STREAMLIT"])
+    result = CliRunner().invoke(
+        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT"]
+    )
     assert result.exit_code != 0
     assert "Streamlit apps require --path" in result.output
 
@@ -735,7 +783,9 @@ def test_app_create_streamlit_git_requires_script(mock_project):
         [
             "app",
             "create",
-            "dash", "--app-kind", "STREAMLIT",
+            "dash",
+            "--app-kind",
+            "STREAMLIT",
             "--git-url",
             "https://github.com/gibchikafa/appshopsworkstests.git",
             "--git-provider",
@@ -756,7 +806,9 @@ def test_app_create_with_start_triggers_run(mock_project):
             [
                 "app",
                 "create",
-                "dash", "--app-kind", "STREAMLIT",
+                "dash",
+                "--app-kind",
+                "STREAMLIT",
                 "--path",
                 "Resources/dash.py",
                 "--start",
@@ -925,81 +977,6 @@ def test_app_delete_force_is_accepted_and_does_nothing_more(mock_project):
     assert result.exit_code == 0, result.output
     a.stop.assert_not_called()
     a.delete.assert_called_once()
-
-
-def _delete_as_scott(mock_project, env_name, *names, creator=None):
-    a = _fake_app(name="shop", environment_name=env_name)
-    mock_project.get_app_api.return_value.get_app.return_value = a
-    envs = Environments(mock_project, *names)
-    if creator is not None:
-        envs.envs[env_name].creator = creator
-    users_api = mock.MagicMock()
-    users_api._get_current_user.return_value.username = "scott"
-    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
-        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
-    return result, a, envs
-
-
-def test_app_delete_deletes_your_copy_of_its_environment(mock_project):
-    result, a, envs = _delete_as_scott(
-        mock_project, "shop-app-env-scott", "shop-app-env", "shop-app-env-scott"
-    )
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_called_once()
-    envs.envs["shop-app-env"].delete.assert_not_called()
-    assert "Deleted environment shop-app-env-scott" in result.output
-
-
-def test_app_delete_keeps_a_copy_of_your_name_someone_else_created(mock_project):
-    result, a, envs = _delete_as_scott(
-        mock_project, "shop-app-env-scott", "shop-app-env-scott", creator="alice"
-    )
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_not_called()
-    assert "Kept environment shop-app-env-scott: alice created it" in result.output
-
-
-def test_app_delete_warns_when_the_copy_cannot_go_since_the_app_is_gone(mock_project):
-    mock_project.get_environment_api.return_value.get_environment.side_effect = (
-        RuntimeError("503")
-    )
-    a = _fake_app(name="shop", environment_name="shop-app-env-scott")
-    mock_project.get_app_api.return_value.get_app.return_value = a
-    users_api = mock.MagicMock()
-    users_api._get_current_user.return_value.username = "scott"
-    with mock.patch("hopsworks.get_users_api", return_value=users_api, create=True):
-        result = CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"])
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    assert "Kept environment shop-app-env-scott: could not delete it: 503" in (
-        result.output
-    )
-
-
-def test_app_delete_keeps_your_copy_while_another_app_runs_on_it(mock_project):
-    # `hops env install shop` makes shop-app-env-scott too, which another app may use.
-    other = _fake_app(name="dash", environment_name="shop-app-env-scott")
-    mock_project.get_app_api.return_value.get_apps.return_value = [other]
-    result, a, envs = _delete_as_scott(
-        mock_project, "shop-app-env-scott", "shop-app-env-scott"
-    )
-    assert result.exit_code == 0, result.output
-    a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_not_called()
-    assert "Kept environment shop-app-env-scott: app dash runs on it." in result.output
-
-
-def test_app_delete_keeps_a_shared_environment_and_another_users_copy(mock_project):
-    for env_name in ("shop-app-env", "shop-app-env-alice"):
-        result, a, envs = _delete_as_scott(
-            mock_project, env_name, "shop-app-env", "shop-app-env-alice"
-        )
-        assert result.exit_code == 0, result.output
-        a.delete.assert_called_once()
-        for env in envs.envs.values():
-            env.delete.assert_not_called()
 
 
 def test_app_info_surfaces_not_found(mock_project):
@@ -1243,6 +1220,7 @@ def test_deploy_clones_and_installs_the_requirements(mock_project, tmp_path):
     env_api.create_environment.assert_called_once_with(
         "shop-app-env",
         base_environment_name="python-agent-pipeline",
+        created_for_app="shop",
         await_creation=True,
     )
     clone.install_requirements.assert_called_once_with(
@@ -1315,6 +1293,7 @@ def test_deploy_into_a_shared_app_environment_clones_your_own_copy(
     envs.api.create_environment.assert_called_once_with(
         "shop-app-env-scott",
         source_environment_name="shop-app-env",
+        created_for_app="shop",
         await_creation=False,
     )
     envs.envs["shop-app-env-scott"].install_requirements.assert_called_once_with(
@@ -1666,6 +1645,7 @@ def test_prepare_env_clones_and_installs_and_the_deploy_skips_the_install(
     envs.api.create_environment.assert_called_once_with(
         "shop-app-env",
         base_environment_name="python-agent-pipeline",
+        created_for_app="shop",
         await_creation=True,
     )
     envs.envs["shop-app-env"].install_requirements.assert_called_once_with(
@@ -1699,6 +1679,7 @@ def test_prepare_env_installs_into_your_copy_of_a_shared_environment(
     envs.api.create_environment.assert_called_once_with(
         "shop-app-env-scott",
         source_environment_name="shop-app-env",
+        created_for_app="shop",
         await_creation=False,
     )
     copy = envs.envs["shop-app-env-scott"]
@@ -1770,25 +1751,25 @@ def test_deploy_fails_after_600_s_beside_a_running_prepare_env(mock_project, tmp
     apps.create_app.assert_not_called()
 
 
+def _delete_shop(mock_project):
+    a = _fake_app(name="shop", environment_name="shop-app-env-scott")
+    mock_project.get_app_api.return_value.get_app.return_value = a
+    return CliRunner().invoke(cli, ["app", "delete", "shop", "--yes"]), a
+
+
 def test_app_delete_waits_for_a_running_prepare_env(mock_project):
     with _env_held(release_after=30):
-        result, a, envs = _delete_as_scott(
-            mock_project, "shop-app-env-scott", "shop-app-env-scott"
-        )
+        result, a = _delete_shop(mock_project)
     assert result.exit_code == 0, result.output
     assert "Waited 30 s for the environment of app shop" in result.output
     a.delete.assert_called_once()
-    envs.envs["shop-app-env-scott"].delete.assert_called_once()
 
 
 def test_app_delete_fails_after_600_s_beside_a_running_prepare_env(mock_project):
     with _env_held():
-        result, a, envs = _delete_as_scott(
-            mock_project, "shop-app-env-scott", "shop-app-env-scott"
-        )
+        result, a = _delete_shop(mock_project)
     assert result.exit_code == 1
     assert "still holds its environment after 600 s: run this delete again" in (
         result.output
     )
     a.delete.assert_not_called()
-    envs.envs["shop-app-env-scott"].delete.assert_not_called()
