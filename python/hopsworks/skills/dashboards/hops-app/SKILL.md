@@ -158,7 +158,7 @@ app.redeploy()                # re-clone / re-read the source and restart
 app.stop()
 app.delete()
 
-apps.get_apps()               # list; each has .name, .state, .serving
+apps.get_apps()               # list; each has .job_id, .name, .state, .serving
 app = apps.get_app("my_dashboard")
 ```
 
