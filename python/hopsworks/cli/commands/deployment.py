@@ -782,9 +782,10 @@ def deployment_platform_group() -> None:
 def deployment_platform_list(ctx: click.Context) -> None:
     """List the deployments that answer every user.
 
+    \f
     Args:
         ctx: Click context.
-    """
+    """  # noqa: D301
     from hopsworks_common.core import rest
 
     session.get_project(ctx)
