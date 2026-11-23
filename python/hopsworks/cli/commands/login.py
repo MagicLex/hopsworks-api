@@ -71,7 +71,9 @@ def login_cmd(
             hostname_verification=cfg.hostname_verification,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Could not log in: {exc}") from exc
+        raise click.ClickException(
+            f"Could not log in: {auth.login_failure(exc)}"
+        ) from exc
 
     project_name = getattr(project_obj, "name", project or None)
 
