@@ -202,3 +202,20 @@ def test_sql_through_the_cli_prints_the_pending_message(mock_project):
     assert result.output.strip() == (
         "Error: Trino access for this project is still being set up; retry in 2 s"
     )
+
+
+@pytest.mark.parametrize(
+    ("args", "sql"),
+    [
+        (["schemas", "2yck__pg"], 'SHOW SCHEMAS FROM "2yck__pg"'),
+        (["tables", "2yck__pg.public"], 'SHOW TABLES FROM "2yck__pg"."public"'),
+        (["tables", "public"], 'SHOW TABLES FROM "public"'),
+        (["columns", "2yck__pg.public.t"], 'DESCRIBE "2yck__pg"."public"."t"'),
+        (["schemas", '"2yck__pg"'], 'SHOW SCHEMAS FROM "2yck__pg"'),
+    ],
+)
+def test_catalog_and_schema_names_are_quoted(args, sql):
+    with mock.patch.object(trino, "_execute") as execute:
+        result = CliRunner().invoke(cli, ["trino", *args])
+    assert result.exit_code == 0, result.output
+    assert execute.call_args.args[1] == sql
