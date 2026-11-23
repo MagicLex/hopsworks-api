@@ -74,8 +74,6 @@ _VERIFY_HELP = (
     "HOPSWORKS_HOSTNAME_VERIFICATION overrides it."
 )
 
-# RESTCodes.ApiKeyErrorCode: the key carries none of the scopes the endpoint accepts.
-_NO_VALID_SCOPE = 320004
 # RESTCodes.SchematizedTagErrorCode: the tag's schema is not defined on the cluster.
 _TAG_SCHEMA_NOT_DEFINED = 370000
 # RESTCodes.ProjectErrorCode: the caller's project role does not allow the action.
@@ -158,6 +156,12 @@ def _explain_rest_error(
 
     if isinstance(exc, exceptions.SemanticLayerException):
         return str(exc)
+    # The SDK wraps some refusals in its own exception, e.g. ProjectException
+    # ("Could not find project") around a key without the PROJECT scope.
+    if not isinstance(exc, exceptions.RestAPIError) and isinstance(
+        getattr(exc, "__cause__", None), exceptions.RestAPIError
+    ):
+        exc = exc.__cause__
     if not isinstance(exc, exceptions.RestAPIError):
         return None
     response = exc.response
@@ -174,7 +178,7 @@ def _explain_rest_error(
         or getattr(response, "reason", "")
         or ""
     )
-    if code == _NO_VALID_SCOPE:
+    if code == auth.NO_VALID_SCOPE:
         wanted = re.search(r"\[([^\]]+)\]", detail)
         scopes = [s.strip() for s in wanted.group(1).split(",")] if wanted else []
         if len(scopes) == 1:

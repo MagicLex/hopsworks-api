@@ -41,6 +41,10 @@ scalar serving path. `create` requires the model name as the positional and the
 deployment name via `--name`; recreate over a stale deployment with
 `hops deployment delete <name> --yes --force` first (there is no TTY in a job/terminal).
 
+## Change a deployment's environment variables
+
+`hops deployment env|set-env|versions|rollback <name>` and `predict ... --via-api --timing --json`: read [references/set-env.md](references/set-env.md) first.
+
 ## Ask the user (only when state is ambiguous)
 
 - **Resources:** CPU cores, memory, GPUs for the predictor (requests vs limits).

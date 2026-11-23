@@ -64,6 +64,7 @@ def test_no_group_is_named_by_a_verb():
         "sql",
         "context",
         "sync",
+        "env",
         "export",
         "dashboard",
     }
