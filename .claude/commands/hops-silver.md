@@ -21,7 +21,7 @@ Already known, no need to look again before the first question:
 
 When every phase is `done` and the spec differs from `outputs.applied_spec`, a bare `/hops-silver <slug>` also runs `apply`.
 
-Load **hops-analytics** first: its `SKILL.md` (the tag, the tasks, the settings, the engine, incremental processing, lineage, partitioning, schedule, the phases) and `references/silver-tasks.md` are what this builder runs on, and **hops-partitioning** for the design.
+Load **hops-analytics** first: its `SKILL.md` (the tag, the tasks, the settings, the engine, incremental processing, lineage, partitioning, schedule) and `references/silver-tasks.md` (the tasks and the build phases) are what this builder runs on, and **hops-partitioning** for the design.
 Load **hops-dbt** for a `dbt_trino` engine and **hops-spark** for `pyspark`, and **hops-job** and **hops-fg** before deploying the job or creating a feature group.
 Read a skill with `hops skills info <name>`, one skill per command, and a file it names with `hops skills info <name> references/<file>`.
 
