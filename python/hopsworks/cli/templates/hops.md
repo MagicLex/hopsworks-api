@@ -61,8 +61,8 @@ is the whole dispatch:
 | --- | --- | --- | --- | --- |
 | table | nothing, or a data source | feature group `<t>` with rows | `hops fg preview <t> --limit 1` prints a row | **hops-data-builder** |
 | features | feature groups with rows, or a data source | feature group `<f>` with rows, job `<f>-features` | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
-| model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>` | **hops-model-builder** |
-| inference | model `<m>` on a feature view | feature group `<m>_predictions` with rows, job `<m>-score` | `hops fg preview <m>_predictions --limit 1` prints a row | **hops-infer-builder** |
+| model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>`; a model the user names is made, whatever its view | **hops-model-builder** |
+| inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
 | dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
 | app | what it reads: feature groups, a model or a deployment | app `<a>` serving | `hops app info <a>` shows `State` `RUNNING` | **hops-app-builder** (App below) |
 | notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell, and no cell raised | you, no builder (Notebook below) |
@@ -94,7 +94,7 @@ Ask only what the request leaves open, in one `AskUserQuestion` call. Every prom
 | hops-data-builder | `name`, `rows` (10000 unless the user said), `columns` (name and type, one per line), `story` (what the question should find), `source` (`synthetic` or a data source) |
 | hops-features-builder | `name`, `sources` (feature groups or a data source), `features` (name, meaning, type), `grain` (the key and the event time), `schedule` (a Quartz cron, or none) |
 | hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, or none), `metric` |
-| hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `schedule` |
+| hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `population` (the entities to score, such as open deals, and the feature group that lists them), `schedule` |
 
 ## Status
 
