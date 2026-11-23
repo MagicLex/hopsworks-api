@@ -96,6 +96,16 @@ class Environment:
         return self._preinstalled
 
     @property
+    def library_versions(self) -> dict[str, str] | None:
+        """Each library installed in the environment with its version; `None` when the response carried none."""
+        if not isinstance(self._libraries, dict):
+            return None
+        return {
+            item.get("library"): item.get("version")
+            for item in self._libraries.get("items") or []
+        }
+
+    @property
     def library_names(self) -> list[str] | None:
         """Names of the libraries installed in the environment; `None` when the response carried none."""
         if not isinstance(self._libraries, dict):
