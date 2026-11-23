@@ -194,3 +194,11 @@ def test_preview_rows_flattens_the_rows_the_backend_nests():
     }
     assert _preview_rows(nested) == [{"id": "387", "city": "Paris"}]
     assert _preview_rows(None) == []
+
+
+def test_create_external_refuses_empty_path(mock_project):
+    result, create = _create(mock_project, ["--path", "", "--data-format", "csv"])
+    assert result.exit_code == 2
+    assert "--path is empty" in result.output
+    assert "hops datasource tables src" in result.output
+    create.assert_not_called()
