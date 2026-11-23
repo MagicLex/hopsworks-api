@@ -57,7 +57,7 @@ Once the job is deployed, tag it with the group it writes, which is how the line
 
 Load **hops-data-sources** the same way: mount the table as an external feature group when the
 source holds it already, else ingest it. A HubSpot, Salesforce or Shopify source is always ingested
-with `hops fg ingest ... --no-statistics`: a mounted CRM group cannot be read. A Google
+with `hops fg ingest ... --primary-key <key> --no-statistics` (a Salesforce table's `Id` is `id`): a mounted CRM group cannot be read. A Google
 Analytics source reads its report sync (google-sources.md). The source is read only through Hopsworks: list tables with
 `hops datasource tables <ds> --database <db>`, write a query mount against the source's `schema.table`
 (not the `--database` name), and never open a database driver with a credential from a secret. A
