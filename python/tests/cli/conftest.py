@@ -118,7 +118,7 @@ PENDING_REASON = (
 @pytest.fixture
 def unschedulable():
     """The KubeMonitorDTO of a job execution whose pod Kubernetes cannot place."""
-    return backend("execution_queued")["kubeMonitor"]
+    return execution("get_python_queued")["kubeMonitor"]
 
 
 @pytest.fixture

@@ -509,8 +509,8 @@ def _follow(
         kube = state in _STARTING
         watch.see(state, waits.kube_reason(body.get("kubeMonitor")) if kube else None)
         if state in _STARTED:
-            # A reason from before the pod ran does not explain how it ended.
-            started, watch.last_reason = True, None
+            started = True
+            watch.forget_reason()
         # Spark and Ray set the final status before they aggregate the logs, and a Spark
         # execution's success reads the final status: only a final state ends the wait.
         if state in final:
