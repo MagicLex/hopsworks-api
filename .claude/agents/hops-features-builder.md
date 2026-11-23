@@ -51,7 +51,7 @@ the sandbox may run a newer one, and an argument that works here can fail there.
 
    Once the job is deployed, tag it with the group it writes, which is how the lineage map draws the line (a piece has no `system.yaml`): `hops job tag add <name>-features hopsable_writes --value '{"feature_groups": ["<name>"]}'`. When the cluster has no `hopsable_writes` tag schema (HTTP 404, error 370000), say once that an admin creates it and go on: the tag is not a check.
 
-   A run you start waits with `--wait`, or `hops job wait <name>-features` for one already
+   A run you start waits with `--wait`, or `hops job wait <name>-features --timeout 840` for one already
    started; never poll `hops job history`. Arguments carry no spaces.
 5. **Check.** Only after the backfill succeeded (chain it with `&&`, never `;`): `hops fg preview
    <name> --limit 5` and `hops sql "SELECT count(*), count(DISTINCT <key>), count(*) - count(<f>)
