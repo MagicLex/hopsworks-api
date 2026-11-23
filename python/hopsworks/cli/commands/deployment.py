@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -243,8 +244,8 @@ def _schema_label(d: Any) -> str:
         return "-"
     try:
         schema = d.schema
-    except Exception:  # noqa: BLE001 - info must not fail on a missing file
-        return "unreadable"
+    except Exception as exc:  # noqa: BLE001 - info must not fail on a missing file
+        return "-" if versions.not_found(exc) else f"could not be read: {exc}"
     if schema is None:
         return "-"
     return "inferred" if schema.inferred else "manual"
@@ -402,6 +403,16 @@ def deployment_create(
         cores: CPU cores per instance; None keeps the backend's default resources.
         memory: Memory per instance in MB; None keeps the backend's default resources.
     """
+    deploy_name = name or model_name
+    # The backend's rule (hopsworks-ee ServingUtil): no leading digit ("Serving name cannot start
+    # with a number"), then letters and digits only ("Serving name must follow regex [a-zA-Z0-9]+").
+    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9]*", deploy_name):
+        kept = re.sub(r"[^a-zA-Z0-9]", "", deploy_name)
+        suggested = f"m{kept}" if kept[:1].isdigit() else kept or "<name>"
+        raise click.UsageError(
+            f"Deployment name '{deploy_name}' must be a letter first, then letters and digits "
+            f"([a-zA-Z][a-zA-Z0-9]*): pass --name {suggested}."
+        )
     project = session.get_project(ctx)
     mr = project.get_model_registry()
     try:
@@ -413,7 +424,6 @@ def deployment_create(
     if model is None:
         raise click.ClickException(f"Model '{model_name}' not found.")
 
-    deploy_name = name or model_name
     if default_predictor is None and not script_file:
         default_predictor = _serves_by_default(model, serving_tool) or None
     # Upload a local predictor to HopsFS (the backend needs a HopsFS path);
@@ -473,8 +483,14 @@ def _serves_by_default(model: Any, serving_tool: str | None) -> bool:
         return False
     try:
         return model.get_feature_view(init=False) is not None
-    except Exception:  # noqa: BLE001 - a model may have no feature view in its provenance
-        return False
+    except Exception as exc:  # noqa: BLE001
+        if versions.not_found(exc):
+            return False
+        # Never a predictor picked on a read that failed for another reason.
+        raise click.ClickException(
+            f"The model's feature view could not be read: {exc}. Pass --default-predictor or "
+            "--no-default-predictor to choose without it."
+        ) from exc
 
 
 def _resources(cores: float | None, memory: int | None) -> Any:
