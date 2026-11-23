@@ -106,7 +106,7 @@ Load **hops-dbt** and **hops-spark**.
 
 ```bash
 hops job deploy <slug>-batch-features $P/batch_features.py --env dbt-pipeline --args "--system <slug>" --run --wait
-hops job schedule <slug>-batch-features "0 0 3 * * ?"     # daily, after the day closes
+hops job schedule set <slug>-batch-features "0 0 3 * * ?"     # daily, after the day closes
 ```
 
 The batch job runs `dbt compile` and `dbt build` (the models' data tests), then
@@ -182,7 +182,7 @@ JavaScript page from `static/`, with no build step and no CDN. Deploy it as
 ```bash
 hops app create <slug>-app --path /Projects/<project>/<system dir>/debitcard/app/app.py \
   --app-kind custom --entrypoint-command "python app.py" --app-port 8080 \
-  --readiness-probe-path /health --environment <slug>-app-env --start
+  --readiness-probe-path /health --env <slug>-app-env --start
 ```
 
 The app loads the latest `card_fraud_model` with its `model.py` and, every few

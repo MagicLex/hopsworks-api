@@ -5,7 +5,7 @@ Semantic projects and metrics carry schematised tags, as feature groups and jobs
 ```bash
 hops semantic tag set sales ownership '{"owner": "finance", "certified": true}'
 hops semantic tag list sales
-hops semantic tag get sales ownership
+hops semantic tag info sales ownership
 hops semantic tag delete sales ownership
 hops search --type metric --tag ownership:owner=finance        # tag filters work on metrics and semantic projects
 ```
