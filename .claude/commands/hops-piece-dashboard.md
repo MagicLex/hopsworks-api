@@ -21,7 +21,7 @@ builder runs its program where it runs.
    request as its description. A Superset dashboard goes to create. Otherwise list the
    dashboards (`hops superset dashboard list`) and ask: edit one (each by title, marked when a program exists under `dashboards/`), create one,
    or delete one. With none, go to create.
-2. **Create.** The feature groups are the ones the request names or this conversation just made;
+2. **Create.** After a metrics piece of this turn (semantic project `<s>`), ask in one `ask_user` call which of its metrics (multi-select, `hops semantic metrics <s>`), the dimension to group by and the title, then run `hops semantic dashboard <s> --metrics <m1,m2> --group-by <dim> --title "<title>"` (the **hops-semantic** skill, Dashboards) and print its URL; no builder. Otherwise the feature groups are the ones the request names or this conversation just made;
    with neither, `hops fg list` and ask which to chart (multi-select; a group that is online only
    cannot be charted, since Superset reads the offline store). Read their columns with
    `hops fg feature list <name>`, then ask in one `ask_user` call, two questions: which charts to
