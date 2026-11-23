@@ -29,7 +29,12 @@ switch it to `<v>` in place (step 4), never accept it as it is.
      `parent_feature_group`, and `hops fg info <fg>` shows `Online yes` for each. An offline one
      stops the run with one line naming the command that turns it online in place and copies its
      rows, `hops fg update <fg> --version <v> --online`: the user's group changes only when they
-     agree, so the caller asks. Never set `online_enabled` on the object or make a new version.
+     agree, so the caller asks. Never set `online_enabled` on the object or make a new version,
+     and never copy the group, its rows or the view under another name (a `<fg>_online` group,
+     a new view, retrained models, a backfill job): a copy of the user's asset that gets around
+     this rule is the same refusal. The only path is that one command, after the user agreed.
+   - What you serve is the model the prompt names, as registered. Never re-run a sweep or retrain
+     the user did not ask for.
 2. **The entity to check with.** `known_entity` from the prompt, or one key read from the online
    store: `hops fg preview <the view's parent feature group> --online --limit 1` prints a row with
    its primary key. Never a guessed or made-up key.
@@ -53,19 +58,29 @@ switch it to `<v>` in place (step 4), never accept it as it is.
    dep.save(await_update=900)
    ```
 
-5. **Exit check.** One prediction for the known entity returns a value:
+5. **Exit check.** One prediction for the known entity returns a value, then the deployment stays
+   up, each command alone:
 
    ```bash
    hops deployment predict <name> --data '{"instances": [{"<key>": <known_entity>}]}'
+   hops deployment info <name> --stable 60
    ```
 
-   The check is that answer, never a flag the deployment reports about itself.
+   The check is that answer, never a flag the deployment reports about itself. `--stable 60`
+   fails when the deployment leaves Running or a container restarts within 60 s: one answer from a
+   pod that then crashes is a flapping deployment, not a served one.
 
-A failed start or predict: `hops deployment logs <name>`, name the cause in one line, fix and try
-again, at most three attempts.
+A failed start, predict or stable check: `hops deployment logs <name>`, name the cause in one line,
+fix and try again, at most three attempts. A restart is never a fix by itself: restarting and
+calling it fine hides the cause, and the run passes only when the whole exit check passes after a
+change you can name.
 
 ## Return
 
 A few lines: the deployment and the model version it serves, the entity checked and its
 prediction, and as the last line: `Deployment <name> RUNNING, serving <m>:<v>. It holds cluster
 resources: stop it with hops deployment stop <name>.`
+
+When the exit check still fails after the third attempt, never that line: the last line is
+`Deployment <name> FAILED: <the check that failed>: <the cause from the logs>.`, and the
+deployment is stopped (`hops deployment stop <name>`) so it holds no resources while broken.

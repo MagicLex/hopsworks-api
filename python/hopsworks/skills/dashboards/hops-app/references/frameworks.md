@@ -32,6 +32,53 @@ st.subheader("Amount Distribution")
 st.bar_chart(df["amount"].value_counts().head(20))
 ```
 
+### Streamlit theme
+
+A Streamlit app renders as a bare default page unless it is themed with the
+[hops-design](../../hops-design/SKILL.md) tokens. `.streamlit/config.toml` must sit in the same
+directory as the app script, not in `~/.streamlit/`: Streamlit reads config from the script's
+own directory (and CWD), so an app under `customer_spend_fti/app.py` needs
+`customer_spend_fti/.streamlit/config.toml`. Copy it per app directory.
+
+```toml
+[server]
+fileWatcherType = "none"   # REQUIRED on HopsFS/FUSE: the watcher stats the
+headless = true            # script over FUSE on the event loop and blocks the
+runOnSave = false          # readiness probe, making the managed app flap
+                           # serving<->running. Without this the app never holds.
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#1EB182"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F7F7"
+textColor = "#252525"
+font = "sans serif"
+```
+
+A plain title, and tabular numbers in metrics, injected once at the top of the app. No banner,
+gradient or emoji:
+
+```python
+st.set_page_config(page_title="Customer spend", layout="wide")
+st.markdown(
+    """
+    <style>
+      div[data-testid="stMetricValue"] {font-variant-numeric: tabular-nums;}
+      div[data-testid="stMetricLabel"] {color: #737373;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.title("Customer spend")
+```
+
+A full dashboard (statistics, monitoring history, data sample) is in
+[monitoring_dashboard.md](monitoring_dashboard.md).
+
 ## Flask, Gradio and Node.js (5.2+)
 
 Flask: an `app` object in the file; routes at `/` and `/health`; the app is served

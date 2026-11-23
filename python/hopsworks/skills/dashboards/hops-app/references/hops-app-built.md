@@ -70,7 +70,8 @@ it, and returns once the new execution serves, the URL on the last line. A
 failure exits non-zero and names the next step. `--env` picks another
 environment, `--timeout` the seconds to wait (600), `--check <route>` fetches one
 route of the deployed app through the Hopsworks proxy and fails the deploy on a
-non-2xx answer, and `--json` prints the app and each file's sha256.
+non-2xx answer, or on an HTML page for an `api/` route (a 502 or 503 is asked
+again for up to 60 s, while a model deployment behind the app starts), and `--json` prints the app and each file's sha256.
 
 **Smoke tests** go to the deployed app with `hops app deploy <name> <dir> --check
 <route>`, one API route that reads data (`api/top`): it passes through the proxy
