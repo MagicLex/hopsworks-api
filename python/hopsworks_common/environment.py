@@ -164,7 +164,7 @@ class Environment:
         library_name = os.path.basename(path)
 
         _client = client._get_instance()
-        path = util._convert_to_abs(path, _client._project_name)
+        path = util._convert_to_abs(path, _client._project_backing_name)
 
         library_spec = {
             "dependencyUrl": path,
@@ -221,7 +221,7 @@ class Environment:
         library_name = os.path.basename(path)
 
         _client = client._get_instance()
-        path = util._convert_to_abs(path, _client._project_name)
+        path = util._convert_to_abs(path, _client._project_backing_name)
 
         library_spec = {
             "dependencyUrl": path,
@@ -719,7 +719,7 @@ class Environment:
                 request[content_key] = f.read()
             return
         _client = client._get_instance()
-        request[path_key] = util._convert_to_abs(path, _client._project_name)
+        request[path_key] = util._convert_to_abs(path, _client._project_backing_name)
 
     @public
     @usage._method_logger

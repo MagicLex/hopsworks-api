@@ -697,7 +697,7 @@ def app_deploy(
         used = _deploy_environment(
             project.get_environment_api(),
             env_name,
-            f"/Projects/{project.name}/{requirements_remote}",
+            f"/Projects/{project.backing_name}/{requirements_remote}",
             installed != (env_name, wanted),
             copy,
             wanted,
@@ -789,7 +789,7 @@ def _deploy_target(
     """Where `hops app deploy` puts the app and the environment it runs in; prepare-env resolves through here too."""
     username = env_commands.current_username()
     remote_dir = f"Users/{username}/apps/{name}"
-    app_path = f"/Projects/{project.name}/{remote_dir}/app.py"
+    app_path = f"/Projects/{project.backing_name}/{remote_dir}/app.py"
     env_name = environment or (
         f"{name}-app-env" if has_requirements else _DEPLOY_BASE_ENV
     )
@@ -945,7 +945,7 @@ def _prepare_env(ctx: click.Context, name: str, local_dir: str) -> None:
     used = _deploy_environment(
         project.get_environment_api(),
         env_name,
-        f"/Projects/{project.name}/{remote_dir}/{_DEPLOY_REQUIREMENTS}",
+        f"/Projects/{project.backing_name}/{remote_dir}/{_DEPLOY_REQUIREMENTS}",
         installed != (env_name, wanted),
         copy,
         wanted,
