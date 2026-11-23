@@ -56,7 +56,7 @@ Once the job is deployed, tag it with the group it writes, which is how the line
 ## Rows from a source (`source: <data source>`)
 
 Load **hops-data-sources** the same way: mount the table as an external feature group when the
-source holds it already, else ingest it. A HubSpot, Salesforce or Shopify source is always ingested
+source holds it already, else ingest it; with `ingest: yes` always ingest it with `hops fg ingest ... --primary-key <primary_key> --event-time <event_time> --no-statistics` (`--event-time` whenever the table has a time column: without it the semantic layer gets no measures). A key or event time the prompt lacks comes from `hops datasource infer-metadata <ds> <table>` (hops-data-sources, Infer metadata); when it fails (520012: no platform intelligence key), from the columns `hops datasource preview <ds> --table <t>` shows: the id column the table is named after, and its timestamp column. `--table` takes the name as `hops datasource tables` lists it, schema included (`public.<t>`); with several databases, `--database` is the one whose `hops datasource tables` lists the named tables. A HubSpot, Salesforce or Shopify source is always ingested
 with `hops fg ingest ... --primary-key <key> --no-statistics` (a Salesforce table's `Id` is `id`): a mounted CRM group cannot be read. A Google
 Analytics source reads its report sync (google-sources.md). The source is read only through Hopsworks: list tables with
 `hops datasource tables <ds> --database <db>`, write a query mount against the source's `schema.table`

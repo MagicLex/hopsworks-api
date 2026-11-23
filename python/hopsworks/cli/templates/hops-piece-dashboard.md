@@ -11,7 +11,7 @@ You are running `/hops-piece-dashboard` with arguments: `$ARGUMENTS`, reached fr
 `hops superset` and the SDK reach Superset from anywhere, through the Hopsworks proxy, so the
 builder runs its program where it runs.
 
-1. A request for a new dashboard ("a dashboard of my orders") first asks the kind, in one
+1. After a metrics piece of this turn, go to create: the dashboard is a Superset dashboard on its metrics. Otherwise a request for a new dashboard ("a dashboard of my orders") first asks the kind, in one
    `AskUserQuestion` question, unless the request names Superset or an app: **An app
    (Recommended)**, a page of charts served by Hopsworks, lighter and quicker to build and change;
    **A Superset dashboard**, charts in Superset over the offline store, heavier; **Explain the
@@ -21,7 +21,7 @@ builder runs its program where it runs.
    request as its description. A Superset dashboard goes to create. Otherwise list the
    dashboards (`hops superset dashboard list`) and ask: edit one (each by title, marked when a program exists under `dashboards/`), create one,
    or delete one. With none, go to create.
-2. **Create.** The feature groups are the ones the request names or this conversation just made;
+2. **Create.** After a metrics piece of this turn (semantic project `<s>`), ask in one `ask_user` call which of its metrics (multi-select, `hops semantic metrics <s>`), the dimension to group by and the title, then run `hops semantic dashboard <s> --metrics <m1,m2> --group-by <dim> --title "<title>"` (the **hops-semantic** skill, Dashboards) and print its URL; no builder. Otherwise the feature groups are the ones the request names or this conversation just made;
    with neither, `hops fg list` and ask which to chart (multi-select; a group that is online only
    cannot be charted, since Superset reads the offline store). Read their columns with
    `hops fg feature list <name>`, then ask in one `ask_user` call, two questions: which charts to
