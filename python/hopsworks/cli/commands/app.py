@@ -116,6 +116,7 @@ def app_info(ctx: click.Context, name: str) -> None:
         ["Monitoring routes", _monitoring_routes_text(a)],
         ["Description", getattr(a, "description", None) or "-"],
         ["URL", getattr(a, "app_url", None) or "-"],
+        ["Public link", "on" if getattr(a, "public_access", False) else "off"],
     ]
     output.print_table(["FIELD", "VALUE"], rows)
 
@@ -1708,6 +1709,7 @@ def _app_to_dict(a: Any) -> dict[str, Any]:
         },
         "description": getattr(a, "description", None),
         "app_url": getattr(a, "app_url", None),
+        "public_access": bool(getattr(a, "public_access", False)),
     }
 
 
