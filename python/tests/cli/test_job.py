@@ -10,9 +10,10 @@ from click.testing import CliRunner
 from hopsworks.cli import session, waits
 from hopsworks.cli.commands import job as job_cmd
 from hopsworks.cli.main import cli
+from hopsworks_common.client.exceptions import RestAPIError
 from hopsworks_common.execution import Execution
 
-from tests.cli.conftest import backend, execution
+from tests.cli.conftest import FIXTURES, PENDING_REASON, backend, execution
 
 
 def _project(created: list):
@@ -79,32 +80,50 @@ def test_logs_download_into_the_given_dir_not_the_working_directory(
     assert "working directory" not in done.output
 
 
+def test_kube_reason_names_why_a_pod_is_not_scheduled(unschedulable):
+    assert waits.kube_reason(unschedulable) == PENDING_REASON
+
+
 def test_kube_reason_is_the_newest_warning_event(unschedulable):
-    assert (
-        waits.kube_reason(unschedulable)
-        == "FailedScheduling: 0/5 nodes are available: 3 Insufficient memory."
+    pod = unschedulable["job"]["pods"]["items"][0]
+    older = {**pod["events"]["items"][0], "age": "3m", "message": "0/6 nodes: older"}
+    pod["events"]["items"].insert(0, older)
+    assert waits.kube_reason(unschedulable) == PENDING_REASON
+
+
+def test_kube_reason_falls_back_to_the_condition_of_a_pod_not_ready(unschedulable):
+    unschedulable["job"]["pods"]["items"][0]["events"] = {"items": []}
+    assert waits.kube_reason(unschedulable) == PENDING_REASON.removeprefix(
+        "FailedScheduling: "
     )
 
 
-def test_kube_reason_falls_back_to_an_unmet_pod_condition(unschedulable):
-    pod = unschedulable["job"]["pods"][0]
-    monitor = {"deployment": {"pods": [{**pod, "events": []}]}}
-    assert (
-        waits.kube_reason(monitor) == "0/5 nodes are available: 3 Insufficient memory."
-    )
-
-
-def test_kube_reason_keeps_a_message_that_names_its_reason():
+def test_kube_reason_keeps_a_message_that_names_its_reason(unschedulable):
     event = {"type": "Warning", "reason": "BackOff", "message": "BackOff pulling image"}
-    assert waits.kube_reason({"deployment": {"events": [event]}}) == (
-        "BackOff pulling image"
-    )
+    unschedulable["job"]["pods"]["items"][0]["events"] = {"items": [event]}
+    assert waits.kube_reason(unschedulable) == "BackOff pulling image"
 
 
 def test_kube_reason_without_a_reason():
     assert waits.kube_reason(None) is None
     assert waits.kube_reason({}) is None
-    assert waits.kube_reason({"deployment": {"pods": [{"name": "p"}]}}) is None
+    # A Python job's execution once its pod is gone, and a Python App's execution.
+    assert waits.kube_reason(execution("get_python_failed")["kubeMonitor"]) is None
+    assert waits.kube_reason(backend("execution_app_running")["kubeMonitor"]) is None
+
+
+# The backend's answer to an expansion it does not know, as captured.
+NOT_FOUND = {
+    "errorCode": 120004,
+    "usrMsg": "HTTP 404 Not Found",
+    "errorMsg": "Web application exception occurred",
+}
+
+
+def _rest_error(status: int, body: dict) -> RestAPIError:
+    response = mock.Mock(status_code=status, reason="", content=b"")
+    response.json.return_value = body
+    return RestAPIError("https://h/hopsworks-api/api/project", response)
 
 
 STDOUT = execution("get_python_failed")["stdoutPath"]
@@ -166,6 +185,8 @@ def _wait(
         # CLI's own polls are recorded.
         if headers is None:
             expands.append((query_params or {}).get("expand"))
+            if expands[-1] not in (None, "kube_monitor"):
+                raise _rest_error(404, NOT_FOUND)
         # The SDK's own wait polls on: the last state holds.
         last[0] = next(polls, last[0])
         body = {**_body(last[0]), "id": 7}
@@ -189,16 +210,15 @@ def test_a_wait_prints_each_state_once_with_the_pod_reason(
         monitor=unschedulable,
     )
     assert result.exit_code == 0, result.output
-    reason = "FailedScheduling: 0/5 nodes are available: 3 Insufficient memory."
     lines = [line for line in result.output.splitlines() if "execution #7:" in line]
     assert lines == [
-        f"etl: execution #7: INITIALIZING: {reason} (0 s)",
-        f"etl: execution #7: QUEUED: {reason} (3 s)",
+        f"etl: execution #7: INITIALIZING: {PENDING_REASON} (0 s)",
+        f"etl: execution #7: QUEUED: {PENDING_REASON} (3 s)",
         "etl: execution #7: RUNNING (9 s)",
         "etl: execution #7: FINISHED (15 s)",
     ]
     # The pod's reasons are asked for only while the execution waits for its pod.
-    assert [e is not None for e in expands] == [True, True, True, True, False, False]
+    assert expands == [*["kube_monitor"] * 4, None, None]
 
 
 def test_a_wait_stuck_before_running_names_the_state_and_leaves_it(
@@ -209,8 +229,8 @@ def test_a_wait_stuck_before_running_names_the_state_and_leaves_it(
     )
     assert result.exit_code == 1
     assert (
-        "etl: execution #7 still QUEUED after 60 s: FailedScheduling: 0/5 nodes are "
-        "available: 3 Insufficient memory. The execution is left as is" in result.output
+        f"etl: execution #7 still QUEUED after 60 s: {PENDING_REASON.rstrip('.')}. "
+        "The execution is left as is" in result.output
     )
     started.stop.assert_not_called()
 
@@ -250,6 +270,20 @@ def test_a_queue_timeout_ends_the_wait_at_once_and_is_named(
     assert "etl: execution #7: QUEUE_TIMEOUT (3 s)" in result.output
     assert "etl: execution #7 QUEUE_TIMEOUT. Full logs" in result.output
     assert "left as is" not in result.output
+
+
+def test_a_python_job_that_never_ran_keeps_the_last_reason(
+    mock_project, hopsfs, clock, unschedulable
+):
+    result, _, _ = _wait(
+        mock_project, ["QUEUED", "QUEUE_TIMEOUT"], monitor=unschedulable
+    )
+    assert result.exit_code == 1
+    assert f"QUEUED: {PENDING_REASON}" in result.output
+    assert (
+        f"etl: execution #7 QUEUE_TIMEOUT: {PENDING_REASON.rstrip('.')}. Full logs"
+        in result.output
+    )
 
 
 def test_a_failed_execution_without_stdout_reports_at_once(mock_project, hopsfs, clock):
@@ -357,13 +391,74 @@ def test_a_spark_final_status_that_never_comes_is_named(mock_project, hopsfs, cl
     )
 
 
-def test_execution_json_falls_back_when_the_backend_refuses_the_kube_monitor():
-    # The backend answers 404 to expand=kubeMonitor once the execution's pod is gone.
+def test_a_failure_after_the_pod_ran_is_not_blamed_on_its_scheduling(
+    mock_project, hopsfs, clock, unschedulable
+):
+    hopsfs.files[STDERR] = ("Traceback\nZeroDivisionError: division by zero\n", 1)
+    result, _, _ = _wait(
+        mock_project, ["QUEUED", "RUNNING", "FAILED"], monitor=unschedulable
+    )
+    assert result.exit_code == 1
+    assert f"QUEUED: {PENDING_REASON}" in result.output
+    assert "etl: execution #7 FAILED. Full logs" in result.output
+    error = result.output[result.output.index("Error:") :]
+    assert "FailedScheduling" not in error
+
+
+def test_a_failed_execution_names_the_oom_kill_the_backend_recorded(
+    mock_project, hopsfs, clock
+):
+    # The backend's summary heads stderr.log, above more container log lines than the tail shows.
+    summary = (FIXTURES / "stderr_oomkilled.txt").read_text()
+    rows = "".join(f"row {n}\n" for n in range(2 * job_cmd.LOG_TAIL))
+    hopsfs.files[STDERR] = (summary + rows, 1)
+    result, _, _ = _wait(mock_project, ["RUNNING", "FAILED"])
+    assert result.exit_code == 1
+    assert "etl: execution #7 FAILED: OOMKilled (exit code 137). Full logs" in (
+        result.output
+    )
+
+
+def test_a_failed_execution_names_a_container_that_never_started(
+    mock_project, hopsfs, clock
+):
+    # KubeJobsMonitor's line after a container-waiting timeout.
+    line = 'Job failed with: ErrImagePull - pull access denied for "etl:1"\n'
+    hopsfs.files[STDERR] = (line, 1)
+    result, _, _ = _wait(mock_project, ["RUNNING", "FAILED"])
+    assert (
+        'etl: execution #7 FAILED: ErrImagePull: pull access denied for "etl:1". Full'
+        in result.output
+    )
+
+
+def test_a_failed_execution_without_the_backend_summary_names_only_its_state(
+    mock_project, hopsfs, clock
+):
+    hopsfs.files[STDERR] = ("Traceback\nValueError: bad row\n", 1)
+    result, _, _ = _wait(mock_project, ["RUNNING", "FAILED"])
+    assert "etl: execution #7 FAILED. Full logs" in result.output
+
+
+def test_execution_json_falls_back_when_the_backend_has_no_kube_monitor():
     fake = mock.MagicMock(_project_id=7)
-    fake._send_request.side_effect = [Exception("404"), {"state": "FINISHED"}]
+    fake._send_request.side_effect = [
+        _rest_error(404, NOT_FOUND),
+        {"state": "FINISHED"},
+    ]
     with mock.patch("hopsworks_common.client._get_instance", return_value=fake):
         assert job_cmd._execution_json("train", 3, kube=True) == {"state": "FINISHED"}
     first, second = fake._send_request.call_args_list
-    assert first.kwargs == {"query_params": {"expand": "kubeMonitor"}}
+    assert first.kwargs == {"query_params": {"expand": "kube_monitor"}}
     assert second.args == ("GET", ["project", 7, "jobs", "train", "executions", 3])
     assert second.kwargs == {}
+
+
+def test_execution_json_lets_any_other_error_through():
+    fake = mock.MagicMock(_project_id=7)
+    fake._send_request.side_effect = [_rest_error(500, {"errorMsg": "boom"})]
+    with (
+        mock.patch("hopsworks_common.client._get_instance", return_value=fake),
+        pytest.raises(RestAPIError),
+    ):
+        job_cmd._execution_json("train", 3, kube=True)

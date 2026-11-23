@@ -79,7 +79,7 @@ def test_a_rejected_save_reports_the_data_source_error_once(connector):
 
 
 def test_a_password_alone_keeps_what_is_bound(connector, monkeypatch):
-    monkeypatch.setattr(ds, "_interactive", lambda: False)
+    monkeypatch.setattr(ds.output, "no_input", lambda: True)
 
     result = _run(["set", "oracle-sales", "--password", "lion"])
 
@@ -267,7 +267,7 @@ def test_a_wallet_password_alone_rotates_that_of_the_bound_wallet(connector):
 
 
 def test_a_bound_password_needs_no_new_one_off_a_terminal(connector, monkeypatch):
-    monkeypatch.setattr(ds, "_interactive", lambda: False)
+    monkeypatch.setattr(ds.output, "no_input", lambda: True)
     connector.user_credentials = {
         "status": "VALID",
         "password_secret_name": "ds_oracle_sales_67_password",
@@ -281,7 +281,7 @@ def test_a_bound_password_needs_no_new_one_off_a_terminal(connector, monkeypatch
 
 
 def test_a_missing_password_is_an_error_off_a_terminal(connector, monkeypatch):
-    monkeypatch.setattr(ds, "_interactive", lambda: False)
+    monkeypatch.setattr(ds.output, "no_input", lambda: True)
 
     result = _run(["set", "oracle-sales", "--user", "u"])
 
@@ -317,7 +317,7 @@ def test_show_prints_names_only(connector):
     assert "ds_oracle_sales_67_password" in result.output
 
 
-def test_delete_asks_then_removes(connector):
+def test_delete_asks_then_removes(connector, tty):
     result = _run(["delete", "oracle-sales"], input="y\n")
 
     assert result.exit_code == 0, result.output

@@ -21,6 +21,7 @@ import json
 import humps
 from hopsworks_apigen import public
 from hopsworks_common import client, constants, usage, util
+from hopsworks_common.app import absolute_url
 from hopsworks_common.core import execution_api, execution_pod_log
 from hopsworks_common.engine import execution_engine
 
@@ -242,14 +243,7 @@ class Execution:
             and isinstance(self._monitoring, dict)
             and self._monitoring.get("appUrl")
         ):
-            _client = client._get_instance()
-            base_url = _client._base_url.rstrip("/")
-            app_url = str(self._monitoring["appUrl"]).lstrip("/")
-            if app_url.startswith(("http://", "https://")):
-                return app_url
-            if app_url.startswith("hopsworks-api/"):
-                return base_url + "/" + app_url
-            return base_url + "/hopsworks-api/" + app_url
+            return absolute_url(str(self._monitoring["appUrl"]))
         return None
 
     @public

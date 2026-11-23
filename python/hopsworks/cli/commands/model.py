@@ -428,8 +428,8 @@ def model_delete(ctx: click.Context, name: str, version: int, yes: bool) -> None
         yes: Skip confirmation when True.
     """
     model = _get_model(ctx, name, version)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete model '{name}' v{version}?", abort=True)
+    if not yes:
+        output.confirm(f"Delete model '{name}' v{version}?")
     try:
         model.delete()
     except Exception as exc:  # noqa: BLE001
