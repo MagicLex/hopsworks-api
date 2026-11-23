@@ -146,6 +146,8 @@ def test_app_create_drops_unsupported_kwargs(mock_project):
             "app",
             "create",
             "legacy",
+            "--app-kind",
+            "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--app-base-path",
@@ -352,7 +354,7 @@ def test_app_create_forwards_args(mock_project):
         [
             "app",
             "create",
-            "dash",
+            "dash", "--app-kind", "STREAMLIT",
             "--path",
             "Resources/dash.py",
             "--memory",
@@ -384,7 +386,7 @@ def test_app_create_leaves_out_unset_memory_and_cores(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
-        cli, ["app", "create", "dash", "--path", "Resources/dash.py"]
+        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/dash.py"]
     )
     assert result.exit_code == 0, result.output
     kwargs = apps.create_app.call_args.kwargs
@@ -397,7 +399,7 @@ def test_app_create_no_db_access(mock_project):
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
         cli,
-        ["app", "create", "dash", "--path", "Resources/dash.py", "--no-db-access"],
+        ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/dash.py", "--no-db-access"],
     )
     assert result.exit_code == 0, result.output
     assert apps.create_app.call_args.kwargs["db_access"] is False
@@ -411,7 +413,7 @@ def test_app_create_idle_scale_to_zero_forwards_the_timeouts(mock_project):
         [
             "app",
             "create",
-            "dash",
+            "dash", "--app-kind", "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--idle-scale-to-zero",
@@ -435,7 +437,7 @@ def test_app_create_idle_timeouts_reject_the_option_off(mock_project):
         [
             "app",
             "create",
-            "dash",
+            "dash", "--app-kind", "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--no-idle-scale-to-zero",
@@ -456,7 +458,7 @@ def test_app_create_idle_timeouts_alone_are_forwarded(mock_project):
         [
             "app",
             "create",
-            "dash",
+            "dash", "--app-kind", "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--idle-cooldown-seconds",
@@ -473,7 +475,7 @@ def test_app_create_leaves_idle_scale_to_zero_to_the_cluster_default(mock_projec
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
-        cli, ["app", "create", "dash", "--path", "Resources/app.py"]
+        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/app.py"]
     )
     assert result.exit_code == 0, result.output
     assert "idle_scale_to_zero" not in apps.create_app.call_args.kwargs
@@ -487,7 +489,7 @@ def test_app_create_no_idle_scale_to_zero_opts_out(mock_project):
         [
             "app",
             "create",
-            "dash",
+            "dash", "--app-kind", "STREAMLIT",
             "--path",
             "Resources/app.py",
             "--no-idle-scale-to-zero",
@@ -516,7 +518,7 @@ def test_app_create_defaults_to_db_access(mock_project):
     apps = mock_project.get_app_api.return_value
     apps.create_app.return_value = _fake_app(name="dash")
     result = CliRunner().invoke(
-        cli, ["app", "create", "dash", "--path", "Resources/dash.py"]
+        cli, ["app", "create", "dash", "--app-kind", "STREAMLIT", "--path", "Resources/dash.py"]
     )
     assert result.exit_code == 0, result.output
     assert "db_access" not in apps.create_app.call_args.kwargs
@@ -698,7 +700,7 @@ def test_app_create_custom_git_forwards_args(mock_project):
 
 
 def test_app_create_streamlit_requires_path(mock_project):
-    result = CliRunner().invoke(cli, ["app", "create", "dash"])
+    result = CliRunner().invoke(cli, ["app", "create", "dash", "--app-kind", "STREAMLIT"])
     assert result.exit_code != 0
     assert "Streamlit apps require --path" in result.output
 
@@ -715,7 +717,7 @@ def test_app_create_streamlit_git_requires_script(mock_project):
         [
             "app",
             "create",
-            "dash",
+            "dash", "--app-kind", "STREAMLIT",
             "--git-url",
             "https://github.com/gibchikafa/appshopsworkstests.git",
             "--git-provider",
@@ -736,7 +738,7 @@ def test_app_create_with_start_triggers_run(mock_project):
             [
                 "app",
                 "create",
-                "dash",
+                "dash", "--app-kind", "STREAMLIT",
                 "--path",
                 "Resources/dash.py",
                 "--start",
@@ -1300,3 +1302,13 @@ def test_deploy_names_the_stuck_state_and_reason_on_timeout(mock_project, tmp_pa
         f"App shop still INITIALIZING after 30 s: {PENDING_REASON.rstrip('.')}. "
         "Read `hops app logs shop`, or raise --timeout." in result.output
     )
+
+
+def test_app_create_defaults_to_a_custom_app(mock_project):
+    apps = mock_project.get_app_api.return_value
+    apps.create_app.return_value = _fake_app(name="dash")
+    result = CliRunner().invoke(
+        cli, ["app", "create", "dash", "--entrypoint-command", "python app.py"]
+    )
+    assert result.exit_code == 0, result.output
+    assert apps.create_app.call_args.kwargs["app_kind"] == "CUSTOM"
