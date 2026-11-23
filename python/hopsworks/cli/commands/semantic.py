@@ -49,7 +49,10 @@ if TYPE_CHECKING:
 
 @click.group("semantic")
 def semantic_group() -> None:
-    """Semantic Layer: metrics over feature groups, compiled from YAML and queried."""
+    """Metrics over feature groups, compiled from YAML.
+
+    Semantic Layer: metrics over feature groups, compiled from YAML and queried.
+    """
 
 
 def _api(ctx: click.Context) -> Any:
@@ -117,8 +120,11 @@ _URL_LOGIN = re.compile(r"(?<=://)[^/\s@]+@")
 @semantic_group.command("list")
 @click.pass_context
 def list_cmd(ctx: click.Context) -> None:
-    """List the project's semantic projects with their current and newest builds.
+    """List the project's semantic projects.
 
+    List the project's semantic projects with their current and newest builds.
+
+    \f
     Args:
         ctx: Click context.
     """
@@ -194,8 +200,11 @@ def create_cmd(
     mode: str,
     tags: dict[str, Any] | None,
 ) -> None:
-    """Register a directory of semantic definitions and start its first compile.
+    """Register a directory of definitions and compile.
 
+    Register a directory of semantic definitions and start its first compile.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -229,8 +238,11 @@ def create_cmd(
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def delete_cmd(ctx: click.Context, name: str, yes: bool) -> None:
-    """Delete a semantic project and its builds; the YAML files stay in place.
+    """Delete a semantic project and its builds.
 
+    Delete a semantic project and its builds; the YAML files stay in place.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -245,12 +257,15 @@ def delete_cmd(ctx: click.Context, name: str, yes: bool) -> None:
     output.success("Deleted semantic project %s.", name)
 
 
-@semantic_group.command("show")
+@semantic_group.command("info")
 @click.argument("name")
 @click.pass_context
-def show_cmd(ctx: click.Context, name: str) -> None:
-    """Show a semantic project's settings, the build that answers queries, and whether it is stale.
+def info_cmd(ctx: click.Context, name: str) -> None:
+    """Show a semantic project's settings and build.
 
+    Show a semantic project's settings, the build that answers queries, and whether it is stale.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -317,10 +332,13 @@ def update_cmd(
     fmt: str | None,
     mode: str | None,
 ) -> None:
-    """Change a semantic project's root path, format or deployment mode.
+    """Change a project's root path, format or mode.
+
+    Change a semantic project's root path, format or deployment mode.
 
     A new root path or format compiles the definitions again in the background.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -359,11 +377,14 @@ def update_cmd(
 def transfer_ownership_cmd(
     ctx: click.Context, name: str, email: str, yes: bool
 ) -> None:
-    """Hand a semantic project over to another Data Owner, as whom its export jobs then run.
+    """Hand a semantic project to another Data Owner.
+
+    Hand a semantic project over to another Data Owner, as whom its export jobs then run.
 
     You must be a Data Owner whose project role allows Semantic layer: Create & edit;
     the new owner must be a Data Owner whose role allows Semantic layer: Run exports.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -457,7 +478,9 @@ def init_cmd(
     tags: dict[str, Any] | None,
     yes: bool,
 ) -> None:
-    """Scaffold a dbt project over feature groups, register it as a semantic project, and compile it.
+    """Scaffold, register and compile a dbt project.
+
+    Scaffold a dbt project over feature groups, register it as a semantic project, and compile it.
 
     Each --from-fg feature group becomes a semantic model: its primary key the primary
     entity, its event time the time dimension (day grain), its string features
@@ -468,6 +491,7 @@ def init_cmd(
     recompiles it and each build records its commit. Hopsworks clones with the GitHub token
     registered in your account; when there is none, init registers `gh auth token`, after asking.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name, also the dbt project's name.
@@ -496,7 +520,7 @@ def init_cmd(
     api = _api(ctx)
     if api.get_project(name) is not None:
         raise click.ClickException(
-            f"Semantic project '{name}' already exists; `hops semantic show {name}` shows it."
+            f"Semantic project '{name}' already exists; `hops semantic info {name}` shows it."
         )
     # Checked before anything is created, so a refused registration leaves no files, clone or repository.
     missing = sorted(api._mandatory_tags() - set(tags or {}))
@@ -550,7 +574,7 @@ def init_cmd(
             for k, v in (tags or {}).items()
         )
         raise click.ClickException(
-            f"Registering {name} failed: {exc}. The definitions are in {path}; once the cause is "
+            f"Could not register {name}: {exc}. The definitions are in {path}; once the cause is "
             f"fixed, register them with `hops semantic create {name} --path {shlex.quote(path)}"
             f" --format {fmt}{tag_args}`."
         ) from exc
@@ -599,7 +623,10 @@ def init_cmd(
 
 @semantic_group.group("tag")
 def tag_group() -> None:
-    """Schematised tags on a semantic project; a metric's tags are set in its definition."""
+    """Schematised tags on a semantic project.
+
+    Schematised tags on a semantic project; a metric's tags are set in its definition.
+    """
 
 
 @tag_group.command("list")
@@ -608,6 +635,7 @@ def tag_group() -> None:
 def tag_list_cmd(ctx: click.Context, name: str) -> None:
     """List the tags attached to a semantic project.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -622,13 +650,14 @@ def tag_list_cmd(ctx: click.Context, name: str) -> None:
     )
 
 
-@tag_group.command("get")
+@tag_group.command("info")
 @click.argument("name")
 @click.argument("tag")
 @click.pass_context
-def tag_get_cmd(ctx: click.Context, name: str, tag: str) -> None:
+def tag_info_cmd(ctx: click.Context, name: str, tag: str) -> None:
     """Print the value of one tag of a semantic project, as JSON.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -648,6 +677,7 @@ def tag_get_cmd(ctx: click.Context, name: str, tag: str) -> None:
 def tag_set_cmd(ctx: click.Context, name: str, tag: str, value: str) -> None:
     """Attach a tag to a semantic project, or replace its value.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -669,6 +699,7 @@ def tag_set_cmd(ctx: click.Context, name: str, tag: str, value: str) -> None:
 def tag_delete_cmd(ctx: click.Context, name: str, tag: str) -> None:
     """Remove a tag from a semantic project.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -725,17 +756,20 @@ def _render_build(build: SemanticBuild) -> None:
 @semantic_group.command("compile")
 @click.argument("name")
 @click.option(
-    "--wait",
+    "--wait/--no-wait",
     "--fail-on-error",
     "wait",
-    is_flag=True,
+    default=False,
     help="Wait for the compile, show its issues, and exit 1 when the build is "
     "INVALID or FAILED. --fail-on-error is the same flag.",
 )
 @click.pass_context
 def compile_cmd(ctx: click.Context, name: str, wait: bool) -> None:
-    """Compile a semantic project's definitions into a new build.
+    """Compile definitions into a new build.
 
+    Compile a semantic project's definitions into a new build.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -760,8 +794,11 @@ def compile_cmd(ctx: click.Context, name: str, wait: bool) -> None:
 @click.argument("name")
 @click.pass_context
 def builds_cmd(ctx: click.Context, name: str) -> None:
-    """List a semantic project's builds, newest first; * marks the one answering queries.
+    """List a semantic project's builds, newest first.
 
+    List a semantic project's builds, newest first; * marks the one answering queries.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -805,8 +842,11 @@ def builds_cmd(ctx: click.Context, name: str) -> None:
 @click.argument("build_id", type=int)
 @click.pass_context
 def build_cmd(ctx: click.Context, name: str, build_id: int) -> None:
-    """Show one build with its validation issues, each at its file and line.
+    """Show one build and its validation issues.
 
+    Show one build with its validation issues, each at its file and line.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -822,6 +862,7 @@ def build_cmd(ctx: click.Context, name: str, build_id: int) -> None:
 def promote_cmd(ctx: click.Context, name: str, build_id: int) -> None:
     """Make a valid build the one that answers queries.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -859,8 +900,11 @@ def promote_cmd(ctx: click.Context, name: str, build_id: int) -> None:
 def metrics_cmd(
     ctx: click.Context, name: str, group_by: list[str] | None, tags: tuple[str, ...]
 ) -> None:
-    """List the metrics of a semantic project's current build, with the tag schemas each sets.
+    """List the metrics of the current build.
 
+    List the metrics of a semantic project's current build, with the tag schemas each sets.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -895,8 +939,11 @@ def metrics_cmd(
 @click.argument("name")
 @click.pass_context
 def saved_queries_cmd(ctx: click.Context, name: str) -> None:
-    """List the saved queries of a semantic project's current build; run one with --saved-query on query or sql.
+    """List the saved queries of the current build.
 
+    List the saved queries of a semantic project's current build; run one with --saved-query on query or sql.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -931,6 +978,7 @@ def saved_queries_cmd(ctx: click.Context, name: str) -> None:
 def dimensions_cmd(ctx: click.Context, name: str, metrics: list[str] | None) -> None:
     """List the dimensions metrics can be grouped by.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -964,8 +1012,11 @@ def dimensions_cmd(ctx: click.Context, name: str, metrics: list[str] | None) -> 
 )
 @click.pass_context
 def entities_cmd(ctx: click.Context, name: str, metrics: list[str] | None) -> None:
-    """List the entities: the keys that join semantic models, and group-bys too.
+    """List the entities of a semantic project.
 
+    List the entities: the keys that join semantic models, and group-bys too.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1001,8 +1052,11 @@ def dimension_values_cmd(
     metrics: list[str] | None,
     limit: int,
 ) -> None:
-    """List the distinct values of a dimension, read on the query engine as you.
+    """List the distinct values of a dimension.
 
+    List the distinct values of a dimension, read on the query engine as you.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1133,8 +1187,11 @@ def sql_cmd(
     start_time: str | None,
     end_time: str | None,
 ) -> None:
-    """Print the SQL a metric query or a saved query compiles to, without running it.
+    """Print the SQL of a metric or saved query.
 
+    Print the SQL a metric query or a saved query compiles to, without running it.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1195,8 +1252,11 @@ def query_cmd(
     explain: bool,
     no_cache: bool,
 ) -> None:
-    """Run a metric query or a saved query as you on the query engine and print the rows.
+    """Run a metric query or a saved query.
 
+    Run a metric query or a saved query as you on the query engine and print the rows.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1294,12 +1354,15 @@ def dashboard_cmd(
     saved_query: str | None,
     title: str | None,
 ) -> None:
-    """Build a Superset dashboard of metrics, or of a saved query, on your semantic connection in Superset, and print its URL.
+    """Build a Superset dashboard of metrics.
+
+    Build a Superset dashboard of metrics, or of a saved query, on your semantic connection in Superset, and print its URL.
 
     Needs semantic dashboards on. The dashboard has a line chart per
     metric over metric_time, a big number for the first metric, a breakdown table and
     native filters, and you own it.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1354,10 +1417,13 @@ def history_cmd(
     status: tuple[str, ...],
     limit: int,
 ) -> None:
-    """List the most recent queries run on a semantic project, newest first, over every API.
+    """List the latest queries run on a project.
+
+    List the most recent queries run on a semantic project, newest first, over every API.
 
     Members see their own queries, Data Owners everyone's.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1440,15 +1506,21 @@ def _history_query(request: Any) -> str:
 
 @semantic_group.group("export")
 def export_group() -> None:
-    """Exports: feature groups that jobs fill with a saved query's rows, defined under the saved query's exports: in the YAML."""
+    """Exports of saved queries into feature groups.
+
+    Exports: feature groups that jobs fill with a saved query's rows, defined under the saved query's exports: in the YAML.
+    """
 
 
 @export_group.command("list")
 @click.argument("name")
 @click.pass_context
 def export_list_cmd(ctx: click.Context, name: str) -> None:
-    """List the exports of a semantic project's current build, with each one's last run.
+    """List the exports of the current build.
 
+    List the exports of a semantic project's current build, with each one's last run.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1489,11 +1561,16 @@ def export_list_cmd(ctx: click.Context, name: str) -> None:
 @export_group.command("run")
 @click.argument("name")
 @click.argument("export")
-@click.option("--wait", is_flag=True, help="Wait for the run and print its outcome.")
+@click.option(
+    "--wait/--no-wait", default=False, help="Wait for the run and print its outcome."
+)
 @click.pass_context
 def export_run_cmd(ctx: click.Context, name: str, export: str, wait: bool) -> None:
-    """Run an export now through its job, outside its schedule; needs the Data Owner role.
+    """Run an export now, outside its schedule.
 
+    Run an export now through its job, outside its schedule; needs the Data Owner role.
+
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1505,7 +1582,7 @@ def export_run_cmd(ctx: click.Context, name: str, export: str, wait: bool) -> No
         execution = sp.run_export(export, wait=wait)
     except JobExecutionException as exc:
         raise click.ClickException(
-            f"The run of export {export} failed: {exc}. "
+            f"Could not run export {export}: {exc}. "
             f"`hops semantic export list {name}` says why."
         ) from exc
     outcome = (
@@ -1537,13 +1614,16 @@ def export_run_cmd(ctx: click.Context, name: str, export: str, wait: bool) -> No
 @click.option("--ca-path", help="File to write the cluster's CA certificate to.")
 @click.pass_context
 def connect_cmd(ctx: click.Context, name: str, ca_path: str | None) -> None:
-    """Print how a dbt Semantic Layer client reaches a semantic project: the URLs, and export lines for dbt-sl-sdk.
+    """Print how a dbt Semantic Layer client connects.
+
+    Print how a dbt Semantic Layer client reaches a semantic project: the URLs, and export lines for dbt-sl-sdk.
 
     The export lines go to stdout and the rest to stderr, so
     `eval "$(hops semantic connect sales)"` sets the variables. The client also needs
     the Hopsworks host and an API key with the FEATURESTORE and TRINO scopes.
     GraphQL serves metadata and compileSql; queries run over Arrow Flight SQL (ADBC, JDBC).
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1595,7 +1675,9 @@ def _await_serving(sp: SemanticProject, build_id: int) -> int:
 def test_cmd(
     ctx: click.Context, name: str, metrics: list[str] | None, no_compile: bool
 ) -> None:
-    """Compile, then run every metric once on the query engine; exit 1 if anything fails.
+    """Compile, then run every metric once.
+
+    Compile, then run every metric once on the query engine; exit 1 if anything fails.
 
     A compile checks the definitions against the feature groups; running each metric's
     SQL as you also catches what only the query engine sees, such as a type it cannot
@@ -1606,6 +1688,7 @@ def test_cmd(
     The metrics run on the build just compiled, so the command exits 1 when that build does not answer queries: a PINNED project before its promote, or a gateway still serving the previous build.
     --no-compile tests the build that answers queries now.
 
+    \f
     Args:
         ctx: Click context.
         name: Semantic project name.
@@ -1692,7 +1775,10 @@ def test_cmd(
 
 @semantic_group.group("time-spine")
 def time_spine_group() -> None:
-    """Time spine feature groups, which cumulative metrics, offsets and custom granularities join to."""
+    """Time spine feature groups.
+
+    Time spine feature groups, which cumulative metrics, offsets and custom granularities join to.
+    """
 
 
 def _parse_custom(
@@ -1750,11 +1836,14 @@ def time_spine_create_cmd(
     grain: str,
     custom: dict[str, str] | None,
 ) -> None:
-    """Write the time spine feature group time_spine_<grain>, version 1: one row per period from --start through --end.
+    """Write the time spine feature group.
+
+    Write the time spine feature group time_spine_<grain>, version 1: one row per period from --start through --end.
 
     A semantic project's time spine model at that grain binds it by name. On an
     existing spine the rows are inserted, so a wider range extends it.
 
+    \f
     Args:
         ctx: Click context.
         start: First day of the spine.
@@ -2167,7 +2256,7 @@ def _write_scaffold(ctx: click.Context, path: str, files: dict[str, str]) -> str
     absolute = posixpath.normpath(_api(ctx)._absolute_path(path))
     if absolute.count("/") < 3:
         raise click.ClickException(
-            f"--path {path} names no directory inside a project's dataset."
+            f"Path {path} names no directory inside a project's dataset."
         )
     datasets = session.get_project(ctx).get_dataset_api()
     if datasets.exists(absolute):
@@ -2202,7 +2291,7 @@ def _checked(args: list[str], cwd: str | Path | None = None) -> str:
     proc = _sh(args, cwd=cwd)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
-        raise click.ClickException(f"`{' '.join(args[:3])}` failed: {detail}")
+        raise click.ClickException(f"Could not run `{' '.join(args[:3])}`: {detail}")
     return proc.stdout.strip()
 
 
@@ -2226,7 +2315,7 @@ def _clone(
             else ""
         )
         detail = _URL_LOGIN.sub("", str(exc))
-        raise click.ClickException(f"Cloning {url} failed: {detail}.{resume}") from exc
+        raise click.ClickException(f"Could not clone {url}: {detail}.{resume}") from exc
 
 
 def _free_repo_name(owner: str, name: str, datasets: Any, parent: str) -> str:
@@ -2251,7 +2340,7 @@ def _new_repo(
     status = _sh(["gh", "auth", "status"])
     if status.returncode != 0:
         raise click.ClickException(
-            "--repo new needs the GitHub CLI logged in, and `gh auth status` failed: "
+            "Option --repo new needs the GitHub CLI logged in, and `gh auth status` says: "
             f"{(status.stderr or status.stdout).strip()} Log in with `gh auth login` "
             "(`github-login` in a Hopsworks terminal) and run init again."
         )
@@ -2265,7 +2354,7 @@ def _new_repo(
     if not yes and output.JSON_MODE:
         # JSON mode cannot ask, and creating a repository or storing a token needs consent.
         raise click.ClickException(
-            "--repo new creates a GitHub repository and may register your GitHub token; "
+            "Option --repo new creates a GitHub repository and may register your GitHub token; "
             "with --json, pass --yes to confirm both."
         )
     if not yes:
@@ -2285,7 +2374,7 @@ def _new_repo(
         token = _sh(["gh", "auth", "token"])
         if token.returncode != 0 or not token.stdout.strip():
             raise click.ClickException(
-                f"`gh auth token` failed: {token.stderr.strip()}"
+                f"Could not read the GitHub token with `gh auth token`: {token.stderr.strip()}"
             )
         git_cmd.register_provider("GitHub", owner, token.stdout.strip(), "github.com")
         output.info(

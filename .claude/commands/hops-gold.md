@@ -29,6 +29,7 @@ Find a skill at `.claude/skills/<name>/` in the repository, else `~/.claude/skil
 
 ## Rules
 
+- **The project is the truth.** Before you resume, run `hops factory system plan <slug>`: a table or job it lists as missing was deleted after the phase that recorded it was `done`, so set that phase back to `pending` and resume from it. A phase is never redone for a table or job that exists and is current.
 - **Change requests.** The Factory and `hops factory run <factory> <slug> --change <id>` record a change to the system as a `changes` entry with `status: pending`, holding its `label`, `answers` and `instructions`. Before anything else, carry out each pending one, oldest first: follow its `instructions` with its `answers`, then set its `status: done` and `finished` (UTC), or `status: failed` with a `reason` you also report, and commit `[<slug>] <label>`. Delete a job or a feature group only with `hops factory system delete-assets <slug> --job <name> --table <name>:<version>`, before removing it from `system.yaml`: it refuses what the system reads, what another system names, and anything neither in this `system.yaml` nor carrying the slug.
 - **A cloned factory's additions.** `system.yaml`'s `factory` block names the factory that created the system. When it has `instructions`, a project factory cloned from a built-in one added them: follow them as well as this command, and treat `requirements.extra` as further requirements the user gave.
 - **system.yaml is the record.** Set `layer.status` to `building` when you start and `built` or `failed` when you end, and each mart's `status` (`draft`, `building`, `built`, `failed`) and phases (`status`, `started`, `finished`, UTC from `date -u`) as they run, and `progress.now` to one line naming the mart and what you are doing. The Factory reads it every few seconds.
@@ -88,7 +89,7 @@ Fix and rerun until the checks pass; record the counts and the reconciliation in
 
 ### schedule
 
-Schedule each job with catch-up (`hops job schedule <job> "<cron>" --start-time <end of the backfill> --catchup --max-catchup-runs <48 hourly, 14 daily, 4 weekly>`) and, with a receiver configured (`hops alert receiver list`), a failure alert (`hops alert job create <job> --receiver <receiver> --status failed --severity critical`).
+Schedule each job with catch-up (`hops job schedule set <job> "<cron>" --start-time <end of the backfill> --catchup --max-catchup-runs <48 hourly, 14 daily, 4 weekly>`) and, with a receiver configured (`hops alert receiver list`), a failure alert (`hops job alert create <job> --receiver <receiver> --status failed --severity critical`).
 Tag every gold feature group `analytics_table` with `{"layer": "gold", "lifecycle": "<layer.lifecycle>"}`.
 Apply `access` and `share`: share the feature groups with the projects named (`hops files share` of the feature store dataset, or ask how when the requirement names rows or columns rather than projects).
 

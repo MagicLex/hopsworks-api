@@ -21,7 +21,7 @@ from hopsworks.cli import output, session
 
 @click.group("env")
 def env_group() -> None:
-    """Python environment commands (list, libraries, clone, install)."""
+    """Python environments jobs, apps and deployments run in."""
 
 
 def _api(ctx: click.Context) -> Any:
@@ -41,6 +41,7 @@ def _row(env: Any) -> dict[str, Any]:
 def env_list(ctx: click.Context) -> None:
     """List Python environments in the current project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -71,11 +72,14 @@ def _canonical(name: str) -> str:
 )
 @click.pass_context
 def env_libraries(ctx: click.Context, env_name: str, diff: bool) -> None:
-    """List the Python libraries installed in ENV_NAME, with their versions.
+    """List the Python libraries of ENV_NAME.
 
-    ``--diff`` compares them with the Python running this command (the Terminal's), so a
+    List the Python libraries installed in ENV_NAME, with their versions.
+
+    `--diff` compares them with the Python running this command (the Terminal's), so a
     program can be run here instead of as a job when the libraries it imports match.
 
+    \f
     Args:
         ctx: Click context.
         env_name: Environment to list.
@@ -155,6 +159,7 @@ def env_clone(
     several minutes — the new environment is built from the base image
     and any post-install steps run before the call returns.
 
+    \f
     Args:
         ctx: Click context.
         new_name: Name for the new environment.
@@ -175,7 +180,9 @@ def env_clone(
             await_creation=True,
         )
     except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
-        raise click.ClickException(f"Clone failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not clone environment '{source}' to '{new_name}': {exc}"
+        ) from exc
     payload = _row(env)
     if output.JSON_MODE:
         output.print_json(payload)
@@ -219,14 +226,15 @@ def env_install(
 ) -> None:
     """Install a requirements.txt into ENV_NAME.
 
-    ``--file`` is either a local file — uploaded to HopsFS first, since the
+    `--file` is either a local file — uploaded to HopsFS first, since the
     backend can only read paths inside the project — or a path that already
-    exists in the project (e.g. ``Users/<username>/requirements.txt``).
+    exists in the project (e.g. `Users/<username>/requirements.txt`).
 
     Blocks until the install completes. This usually takes several
     minutes — conda/pip resolves the dependencies and the resulting
     libraries are committed to the environment image.
 
+    \f
     Args:
         ctx: Click context.
         env_name: Environment to install into.
@@ -239,7 +247,9 @@ def env_install(
     try:
         env = api.get_environment(env_name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Lookup failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find environment '{env_name}': {exc}"
+        ) from exc
     if env is None:
         raise click.ClickException(
             f"No environment named '{env_name}'. Run `hops env list` to see what exists."
@@ -274,7 +284,9 @@ def env_install(
     try:
         env.install_requirements(remote_path, await_installation=True)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Install failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not install into environment '{env_name}': {exc}"
+        ) from exc
     if output.JSON_MODE:
         output.print_json({"environment": env_name, "installed": remote_path})
     else:
