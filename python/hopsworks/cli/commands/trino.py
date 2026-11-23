@@ -6,7 +6,7 @@ fetches the per-project user's password from the Hopsworks Secrets storage,
 and configures TLS, so the CLI just wraps the resulting DBAPI connection.
 
 Defaults: ``--catalog delta`` (the format feature groups are created in) and
-``--schema <project>_featurestore`` (the project's feature store), so
+``--schema <backing name>_featurestore`` (the project's feature store), so
 ``hops sql "SELECT * FROM <fg>_<version>"`` reads a feature group. Override
 per-command, e.g. ``--catalog iceberg`` for Iceberg feature groups, or
 ``--catalog hive`` / ``--catalog system`` for the built-in catalogs.

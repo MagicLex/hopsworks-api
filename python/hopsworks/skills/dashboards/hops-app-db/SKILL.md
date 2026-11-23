@@ -64,7 +64,7 @@ the project's Trino coordinator, so an app in any language can read the
 | `TRINO_HOST` / `TRINO_PORT` | internal DNS name and HTTPS port (`8443`) of the Trino coordinator |
 | `TRINO_USER` | `<project>__<username>` of the person who **started** the app (the HDFS username, two underscores) |
 | `TRINO_PASSWORD_SECRET_NAME` | name of the **Hopsworks secret** holding that user's Trino password (same string as `TRINO_USER`) |
-| `TRINO_SCHEMA` | `<project>_featurestore`, the project's offline feature store schema |
+| `TRINO_SCHEMA` | `<backing name>_featurestore`, the project's offline feature store schema (the backing name can differ from the display name) |
 
 There is deliberately **no `TRINO_CATALOG`**: the catalog depends on each feature
 group's format, so pick it in the app.

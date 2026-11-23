@@ -35,7 +35,8 @@ and **hops-agent-chat** before step 4.
 
        ```python
        conn = project.get_trino_api().connect(
-           catalog="delta", schema=f"{project.name.lower()}_featurestore")
+           catalog="delta",
+           schema=f"{getattr(project, 'backing_name', project.name).lower()}_featurestore")
        cur = conn.cursor(); cur.execute("SELECT ... FROM <fg>_<version> ... LIMIT 20")
        rows = cur.fetchall(); conn.close()
        ```

@@ -133,7 +133,7 @@ Feature groups are **not** exposed as Superset-native tables. They are queried
 through the Trino database connection with this naming pattern:
 
 ```
-<catalog>.<project>_featurestore.<feature_group>_<version>   # catalog = delta | hudi | iceberg
+<catalog>.<backing name>_featurestore.<feature_group>_<version>   # catalog = delta | hudi | iceberg
 ```
 
 Example (project `af`, feature group `customers` v1):
@@ -144,7 +144,8 @@ SELECT * FROM delta.af_featurestore.customers_1
 
 Rules:
 - Catalog is the FG's table format: `delta` (the default), `hudi`, or `iceberg` (`hops fg info` shows it).
-- Schema is `<project>_featurestore` (project name is lowercase).
+- Schema is the project's feature store, `<backing name>_featurestore` (lowercase; the backing name
+  can differ from the display name, `project.get_feature_store().name` reads it).
 - Table name is `<fg_name>_<version>` — the version suffix is required.
 - The Trino DB connection in Superset defaults its catalog to `hive`, so you
   **must** fully qualify with the catalog or the query resolves to the wrong one.
