@@ -212,8 +212,13 @@ class Client:
                     deadline=deadline,
                 )
 
-            if response.status_code == 401 and self.REST_ENDPOINT in os.environ:
-                # refresh token and retry request - only on hopsworks
+            if (
+                response.status_code == 401
+                and self.REST_ENDPOINT in os.environ
+                and isinstance(self._auth, auth.BearerAuth)
+            ):
+                # refresh token and retry request - only on hopsworks. An API key does not expire into a
+                # new token.jwt, so its 401 (a deleted key, for one) is raised as the backend reports it.
                 refreshed = self._retry_token_expired(
                     request,
                     stream,
