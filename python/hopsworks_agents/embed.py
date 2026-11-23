@@ -250,6 +250,9 @@ def _predict(project: str, deployment: str, body: dict, deadline_s: float) -> di
         except (RestAPIError, requests.HTTPError) as exc:
             response = exc.response
             status = getattr(response, "status_code", None)
+            if status == 404:
+                # A deployment taken off the platform answers its id with 404: the next call resolves the route again.
+                _routes.pop((project, deployment), None)
             if status != 429:
                 raise EmbedError(
                     f"Embedding deployment {deployment!r} answered HTTP {status}: not retried."

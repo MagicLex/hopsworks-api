@@ -339,3 +339,14 @@ def test_another_failure_of_the_platform_list_is_not_hidden(wire):
         embed.embed_query("q")
     assert wire.sent == []
     assert wire.lookups == [["serving", "platform"]]
+
+
+def test_a_404_from_a_platform_route_resolves_the_route_again_on_the_next_call(wire):
+    wire.platform = [_platform()]
+    wire.script.append(_response(404, {"errorCode": 240085}))
+    with pytest.raises(embed.EmbedError, match="HTTP 404"):
+        embed.embed_query("q")
+    wire.platform = []
+    wire.script.append(_ok())
+    embed.embed_query("q")
+    assert wire.sent[1][0].endswith("/v1/back/embedder/v1/models/embedder:predict")
