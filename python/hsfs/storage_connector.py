@@ -89,6 +89,7 @@ class StorageConnector(ABC):
     OPENSEARCH = "OPENSEARCH"
     CRM = "CRM"
     GOOGLE_SHEETS = "GOOGLE_SHEETS"
+    GOOGLE_DRIVE = "GOOGLE_DRIVE"
     REST = "REST"
     ORACLE = "ORACLE"
     CLICKHOUSE = "CLICKHOUSE"
@@ -131,6 +132,7 @@ class StorageConnector(ABC):
         OUTLOOK: "featurestoreOutlookConnectorDTO",
         CRM: "featurestoreCRMConnectorDTO",
         GOOGLE_SHEETS: "featurestoreGoogleSheetsConnectorDTO",
+        GOOGLE_DRIVE: "featurestoreGoogleDriveConnectorDTO",
         UNITY_CATALOG: "featurestoreUnityCatalogConnectorDTO",
         REST: "featurestoreRESTConnectorDTO",
     }
@@ -4026,7 +4028,7 @@ class SqlConnector(StorageConnector):
             user: The database username, stored in your account as an env var when you save it.
             password: The database password, stored in your account as a secret when you save it.
             wallet_path:
-                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<project>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
+                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<backing name>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
                 The wallet has to be in HopsFS for the test to read it.
                 Defaults to the wallet already bound.
             wallet_password: The password of the wallet, when it has one.
@@ -4102,7 +4104,7 @@ class SqlConnector(StorageConnector):
             user: The database username, stored in your account as an env var.
             password: The database password, stored in your account as a secret.
             wallet_path:
-                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<project>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
+                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<backing name>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
                 A wallet anywhere else is refused.
                 Defaults to the wallet already bound; to drop a bound wallet, call `delete_credentials()` first.
             wallet_password: The password of the wallet, when it has one.
@@ -6984,6 +6986,28 @@ class GlueConnector(StorageConnector):
 
 
 @public
+class GoogleDriveConnector(StorageConnector):
+    """A Google Drive data source linked to a Google sign-in.
+
+    Hopsworks copies the picked files into a project dataset itself and holds the Google token, so the connector carries no credential.
+    """
+
+    type = StorageConnector.GOOGLE_DRIVE
+
+    def __init__(
+        self,
+        id: int | None,
+        name: str,
+        featurestore_id: int,
+        description: str | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(id, name, description, featurestore_id)
+
+    def spark_options(self) -> dict[str, Any]:
+        return {}
+
+
 class GoogleSheetsConnector(StorageConnector):
     """A Google Sheets storage connector authenticated by a GCP service-account keyfile.
 

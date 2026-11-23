@@ -37,7 +37,7 @@ unedited.
 The scripts import each other by module name from their directory, so a job
 runs its script in place from HopsFS rather than uploaded on its own: pass
 `hops job deploy` the script's HopsFS path,
-`hdfs:///Projects/<project>/<the system directory below /hopsfs/>/debitcard/<script>`,
+`hdfs:///Projects/<backing name>/<the system directory below /hopsfs/>/debitcard/<script>`,
 never the local file, which `hops job deploy` would upload alone to
 `Resources/jobs/<name>`. The app reads the deployment's name from `DEPLOYMENT` and
 the streaming jobs' from `JOBS`; its defaults are this example's names.
@@ -80,7 +80,7 @@ while the history and the batch features are written, and training finds them
 ready.
 
 ```bash
-P=hdfs:///Projects/<project>/<system dir>/debitcard
+P=hdfs:///Projects/<backing name>/<system dir>/debitcard
 hops job deploy <slug>-data $P/generate_data.py --env <slug>-jobs-env --args "--system <slug>" --run
 hops job deploy <slug>-transactions $P/transaction_stream.py --env <slug>-jobs-env --args "--system <slug>" --run
 hops job deploy <slug>-streaming-features $P/streaming_features.py --type pyspark \
@@ -106,7 +106,7 @@ Load **hops-dbt** and **hops-spark**.
 
 ```bash
 hops job deploy <slug>-batch-features $P/batch_features.py --env dbt-pipeline --args "--system <slug>" --run --wait
-hops job schedule <slug>-batch-features "0 0 3 * * ?"     # daily, after the day closes
+hops job schedule set <slug>-batch-features "0 0 3 * * ?"     # daily, after the day closes
 ```
 
 The batch job runs `dbt compile` and `dbt build` (the models' data tests), then
@@ -180,9 +180,9 @@ JavaScript page from `static/`, with no build step and no CDN. Deploy it as
 **hops-app** says, from its HopsFS path:
 
 ```bash
-hops app create <slug>-app --path /Projects/<project>/<system dir>/debitcard/app/app.py \
+hops app create <slug>-app --path /Projects/<backing name>/<system dir>/debitcard/app/app.py \
   --app-kind custom --entrypoint-command "python app.py" --app-port 8080 \
-  --readiness-probe-path /health --environment <slug>-app-env --start
+  --readiness-probe-path /health --env <slug>-app-env --start
 ```
 
 The app loads the latest `card_fraud_model` with its `model.py` and, every few

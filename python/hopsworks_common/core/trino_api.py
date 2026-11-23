@@ -27,32 +27,46 @@ from typing import TYPE_CHECKING, Any
 
 from hopsworks_apigen import public
 from hopsworks_common import client, usage
-from hopsworks_common.client.exceptions import TrinoException
+from hopsworks_common.client.exceptions import (
+    RestAPIError,
+    TrinoAccountPendingError,
+    TrinoException,
+)
 from hopsworks_common.core import project_api, secret_api
 from hopsworks_common.core.constants import HAS_TRINO
 from hopsworks_common.core.variable_api import VariableApi
 from hopsworks_common.decorators import _uses_trino
 
 
-if HAS_TRINO:
-    from trino.auth import BasicAuthentication
-    from trino.constants import (
-        DEFAULT_CATALOG,
-        DEFAULT_MAX_ATTEMPTS,
-        DEFAULT_REQUEST_TIMEOUT,
-        DEFAULT_SCHEMA,
-    )
-    from trino.dbapi import connect as _trino_connect
-    from trino.sqlalchemy import URL
-    from trino.transaction import IsolationLevel
+_TRINO_CONSTANTS = (
+    "DEFAULT_CATALOG",
+    "DEFAULT_SCHEMA",
+    "DEFAULT_MAX_ATTEMPTS",
+    "DEFAULT_REQUEST_TIMEOUT",
+)
 
-    AUTOCOMMIT = IsolationLevel.AUTOCOMMIT
-else:
-    DEFAULT_CATALOG = None
-    DEFAULT_SCHEMA = None
-    DEFAULT_MAX_ATTEMPTS = None
-    DEFAULT_REQUEST_TIMEOUT = None
-    AUTOCOMMIT = None
+
+def _trino_connect(*args: Any, **kwargs: Any) -> Connection:
+    from trino.dbapi import connect
+
+    return connect(*args, **kwargs)
+
+
+def __getattr__(name: str) -> Any:
+    # trino and sqlalchemy cost ~50 ms to import, paid by every `import hopsworks`: they load on first use.
+    if name in _TRINO_CONSTANTS:
+        if not HAS_TRINO:
+            return None
+        from trino import constants
+
+        return getattr(constants, name)
+    if name == "AUTOCOMMIT":
+        if not HAS_TRINO:
+            return None
+        from trino.transaction import IsolationLevel
+
+        return IsolationLevel.AUTOCOMMIT
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if TYPE_CHECKING:
@@ -65,6 +79,9 @@ _logger = logging.getLogger(__name__)
 
 TRINO_SERVICE_NAME = "coordinator.trino.service"
 TRINO_PORT = 8443
+UNKNOWN_ROUTE_ERROR_CODE = 120004
+ACCOUNT_PENDING_ERROR_CODE = 540025
+DEFAULT_RETRY_AFTER = 2
 DEFAULT_SOURCE = "hopsworks-trino-python-client"
 DEFAULT_SQLALCHEMY_SOURCE = "hopsworks-trino-sqlalchemy"
 HTTPS = "https"
@@ -121,8 +138,12 @@ class TrinoApi:
         if project is None:
             _client = client._get_instance()
             self.project_name = _client._project_name
+            self.project_backing_name = _client._project_backing_name
+            self._project_id = _client._project_id
         else:
             self.project_name = project.name
+            self.project_backing_name = project.backing_name
+            self._project_id = project.id
 
     def _get_ca_chain_path(self, verify: bool | str) -> bool | str:
         """Get the SSL certificate or pass through a custom verify value.
@@ -187,7 +208,10 @@ class TrinoApi:
         return TRINO_PORT
 
     def _get_password(self, user: str) -> str:
-        """Retrieve the password for the given user from secrets storage.
+        """Retrieve the password for the given user.
+
+        Asks the project's Trino credentials endpoint first. A server without the endpoint
+        (404 with error code 120004) is read through the user's secret as before.
 
         Parameters:
             user: The username for which to retrieve the password.
@@ -196,9 +220,23 @@ class TrinoApi:
             The password for the given user.
 
         Raises:
+            hopsworks_common.client.exceptions.TrinoAccountPendingError:
+                If the Trino account of the project member is still being set up.
             hopsworks_common.client.exceptions.TrinoException:
                 If the password cannot be retrieved.
         """
+        _client = client._get_instance()
+        try:
+            credentials = _client._send_request(
+                "GET", ["project", self._project_id, "trino", "credentials"]
+            )
+            return credentials["password"]
+        except RestAPIError as e:
+            status = e.response.status_code
+            if status == 409 and e.error_code == ACCOUNT_PENDING_ERROR_CODE:
+                raise TrinoAccountPendingError(self._retry_after(e.response)) from e
+            if not (status == 404 and e.error_code == UNKNOWN_ROUTE_ERROR_CODE):
+                raise
         secret = self._secret_api.get_secret(user)
         if secret is None:
             raise TrinoException(
@@ -206,6 +244,13 @@ class TrinoApi:
                 "Ensure that the secret exists and is accessible."
             )
         return secret.value
+
+    @staticmethod
+    def _retry_after(response) -> int:
+        try:
+            return int(response.headers.get("Retry-After"))
+        except (TypeError, ValueError):
+            return DEFAULT_RETRY_AFTER
 
     @public
     @usage._method_logger
@@ -225,7 +270,7 @@ class TrinoApi:
             raise TrinoException(
                 "Client could not determine username for the current project user."
             )
-        user = f"{self.project_name}__{username}"
+        user = f"{self.project_backing_name}__{username}"
         password = self._get_password(user)
         return user, password
 
@@ -235,8 +280,8 @@ class TrinoApi:
     def connect(
         self,
         source: str = DEFAULT_SOURCE,
-        catalog: str = DEFAULT_CATALOG,
-        schema: str = DEFAULT_SCHEMA,
+        catalog: str | None = None,
+        schema: str | None = None,
         verify: bool | str = True,
         **kwargs: Any,
     ) -> Connection:
@@ -247,8 +292,8 @@ class TrinoApi:
 
         Parameters:
             source: Source identifier for Trino queries.
-            catalog: Trino catalog to connect to.
-            schema: Database schema within the catalog.
+            catalog: Trino catalog to connect to; defaults to the Trino client's default catalog.
+            schema: Database schema within the catalog; defaults to the Trino client's default schema.
             verify: Whether to verify SSL certificates.
                     Set verify="/path/to/cert.crt" if you want to verify the ssl cert.
 
@@ -275,6 +320,9 @@ class TrinoApi:
                 print(row)
             ```
         """
+        from trino import constants
+        from trino.auth import BasicAuthentication
+
         host = self.get_host()
         port = self.get_port()
 
@@ -285,8 +333,8 @@ class TrinoApi:
             host=host,
             port=port,
             user=user,
-            catalog=catalog,
-            schema=schema,
+            catalog=constants.DEFAULT_CATALOG if catalog is None else catalog,
+            schema=constants.DEFAULT_SCHEMA if schema is None else schema,
             source=source,
             auth=basic_auth,
             http_scheme=HTTPS,
@@ -300,8 +348,8 @@ class TrinoApi:
     def create_engine(
         self,
         source: str = DEFAULT_SQLALCHEMY_SOURCE,
-        catalog: str = DEFAULT_CATALOG,
-        schema: str = DEFAULT_SCHEMA,
+        catalog: str | None = None,
+        schema: str | None = None,
         verify: bool | str = True,
         **kwargs: Any,
     ) -> Engine:
@@ -313,8 +361,8 @@ class TrinoApi:
 
         Parameters:
             source: Source identifier for Trino queries.
-            catalog: Trino catalog to connect to.
-            schema: Database schema within the catalog.
+            catalog: Trino catalog to connect to; defaults to the Trino client's default catalog.
+            schema: Database schema within the catalog; defaults to the Trino client's default schema.
             verify: Whether to verify SSL certificates.
                     Set verify="/path/to/cert.crt" if you want to verify the ssl cert.
 
@@ -342,6 +390,9 @@ class TrinoApi:
             ```
         """
         from sqlalchemy import create_engine
+        from trino import constants
+        from trino.auth import BasicAuthentication
+        from trino.sqlalchemy import URL
 
         host = self.get_host()
         port = self.get_port()
@@ -353,8 +404,8 @@ class TrinoApi:
             host=host,
             port=port,
             user=user,
-            catalog=catalog,
-            schema=schema,
+            catalog=constants.DEFAULT_CATALOG if catalog is None else catalog,
+            schema=constants.DEFAULT_SCHEMA if schema is None else schema,
         )
         connect_args = {
             "auth": basic_auth,

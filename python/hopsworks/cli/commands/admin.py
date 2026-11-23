@@ -44,7 +44,7 @@ _HEADERS = {
 
 @click.group("admin")
 def admin_group() -> None:
-    """Platform administration commands (needs the HOPS_ADMIN role)."""
+    """Platform administration (needs the HOPS_ADMIN role)."""
 
 
 def _money(value: float | None) -> str:
@@ -115,7 +115,9 @@ def _table_row(row: Any, by: str) -> list[str]:
 )
 @click.pass_context
 def admin_costs(ctx: click.Context, window: str, by: str) -> None:
-    """Show the Kubernetes cost of each namespace or department over a recent window.
+    """Show Kubernetes cost per namespace or department.
+
+    The cost covers a recent window.
 
     Each project runs in its own namespace. Costs come from OpenCost; week,
     month and year also read the daily history Hopsworks has recorded so far.
@@ -130,13 +132,14 @@ def admin_costs(ctx: click.Context, window: str, by: str) -> None:
     or are shared by projects of different departments, show as one
     "Not a project" row.
 
+    \f
     Args:
         ctx: Click context.
         window: One of hour, day, week, month, year.
         by: One of namespace, department.
     """
     import hopsworks
-    from hopsworks.cli.main import _NO_VALID_SCOPE
+    from hopsworks.cli.auth import NO_VALID_SCOPE
 
     session.get_project(ctx)
     missing_admin_scope = False
@@ -148,7 +151,7 @@ def admin_costs(ctx: click.Context, window: str, by: str) -> None:
             costs = api.get_namespace_costs(window)
     except RestAPIError as exc:
         # error_code is set only when the response has a JSON body.
-        if getattr(exc, "error_code", None) != _NO_VALID_SCOPE:
+        if getattr(exc, "error_code", None) != NO_VALID_SCOPE:
             raise click.ClickException(f"Could not get {by} costs: {exc}") from exc
         missing_admin_scope = True
     except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types

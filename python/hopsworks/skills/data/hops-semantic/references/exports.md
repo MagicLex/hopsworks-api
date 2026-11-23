@@ -70,7 +70,7 @@ The history's `served_from` shows it on every surface. `"useExports": false` in 
 ```bash
 hops semantic export list sales                                   # schedule, lookback, last status, run, rows and message
 hops semantic export run sales revenue_by_country_daily --wait    # run now (Data Owner), then print the outcome
-hops semantic show sales                                          # owner: the member the export jobs run as
+hops semantic info sales                                          # owner: the member the export jobs run as
 hops semantic transfer-ownership sales carol@example.com --yes    # hand the semantic project to another Data Owner
 ```
 

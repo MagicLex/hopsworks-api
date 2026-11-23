@@ -44,7 +44,7 @@ whole process, so they run there, as one job of their own, while the streaming
 jobs start:
 
 ```bash
-hops job deploy <slug>-tests hdfs:///Projects/<project>/<system dir>/tests/run_unit.py \
+hops job deploy <slug>-tests hdfs:///Projects/<backing name>/<system dir>/tests/run_unit.py \
   --env <slug>-jobs-env --run --wait
 ```
 
@@ -54,7 +54,7 @@ deployment's request shape, so the benchmark runs unedited.
 The scripts import the `ccfraud` package from the directory above them
 (`<slug>/`), so a job runs a script in place from HopsFS rather than uploaded on
 its own: pass `hops job deploy` the script's HopsFS path,
-`hdfs:///Projects/<project>/<the system directory below /hopsfs/>/ccfraud/<script>`,
+`hdfs:///Projects/<backing name>/<the system directory below /hopsfs/>/ccfraud/<script>`,
 never the local file, which `hops job deploy` would upload alone to
 `Resources/jobs/<name>`. In `app/app.py` set `DEPLOYMENT` to the deployment's
 name and `JOBS` to `["<slug>-streaming-aggs", "<slug>-transactions"]`. The page
@@ -100,7 +100,7 @@ Give `<slug>-datamart`, `<slug>-features` and `<slug>-backfill-aggs` 8192 MB, as
 the history ends at the last midnight, where the live stream takes over.
 
 ```bash
-P=hdfs:///Projects/<project>/<system dir>/ccfraud
+P=hdfs:///Projects/<backing name>/<system dir>/ccfraud
 hops job deploy <slug>-datamart $P/1_data_generator.py --env <slug>-jobs-env \
   --args "--mode backfill --start-date <start> --end-date <end>" --run --wait
 hops job deploy <slug>-features $P/3-batch-feature-pipeline.py --env <slug>-jobs-env \

@@ -73,6 +73,28 @@ class TestFeatureGroupApi:
             fg_mod.SpineGroup,
         ]
 
+    def test_get_all_reads_only_the_items_of_the_envelope(
+        self, mocker, backend_fixtures
+    ):
+        fg_api = feature_group_api.FeatureGroupApi()
+        client_mock = Mock()
+        client_mock._send_request.return_value = backend_fixtures["feature_group"][
+            "get"
+        ]["response"]
+        mocker.patch("hopsworks_common.client._get_instance", return_value=client_mock)
+        mocker.patch("hsfs.engine._get_instance")
+
+        assert fg_api._get_all(99) == []
+
+    def test_get_all_of_an_empty_store_is_empty_and_quiet(self, mocker, caplog):
+        fg_api = feature_group_api.FeatureGroupApi()
+        client_mock = Mock()
+        client_mock._send_request.return_value = {"type": "featuregroupDTO"}
+        mocker.patch("hopsworks_common.client._get_instance", return_value=client_mock)
+
+        assert fg_api._get_all(99) == []
+        assert "Skipping feature group" not in caplog.text
+
     def test_check_features(self, mocker, backend_fixtures):
         # Arrange
         fg_api = feature_group_api.FeatureGroupApi()
