@@ -539,17 +539,7 @@ def init_cmd(
         path, git_repository_id = clone.path, clone.id
     else:
         feature_groups = [fg_cmd._get_fg(ctx, *_fg_ref(ref)) for ref in from_fg]
-        # The semantic layer reads cached and stream feature groups through their offline table only.
-        tableless = [
-            f"{fg.name} version {fg.version}"
-            for fg in feature_groups
-            if fg_cmd._fg_type_label(fg) in ("external", "spine")
-        ]
-        if tableless:
-            raise click.ClickException(
-                f"{', '.join(tableless)}: semantic models read only feature groups with an "
-                "offline table, and external feature groups and spine groups have none."
-            )
+        _refuse_unreadable(ctx, feature_groups)
         files = _scaffold(
             name,
             feature_groups,
@@ -1960,6 +1950,46 @@ _ELEMENT_KEYWORDS = frozenset(
     null on or right select union using where with
     """.split()  # noqa: SIM905
 )
+
+
+def _refuse_unreadable(ctx: click.Context, feature_groups: list[Any]) -> None:
+    """Exit naming each group the semantic layer cannot read, and what makes it readable.
+
+    Cached and stream groups are read through their offline table. An external group is read
+    through a SYNCED Trino catalog of its data source, and only when it names a table.
+    """
+    refused = []
+    catalogs = None
+    for fg in feature_groups:
+        label = fg_cmd._fg_type_label(fg)
+        ref = f"{fg.name} version {fg.version}"
+        if label == "spine":
+            refused.append(f"{ref} is a spine group, which has no table")
+        elif label == "external":
+            source = fg_cmd._source_to_dict(fg) or {}
+            if not source.get("table") or source.get("query") or source.get("path"):
+                refused.append(
+                    f"{ref} reads a query or a path, not a table: ingest it with `hops fg ingest`"
+                )
+                continue
+            if catalogs is None:
+                catalogs = _mounted_sources(ctx)
+            if source.get("connector") not in catalogs:
+                refused.append(
+                    f"{ref} reads data source {source.get('connector')}, which has no Trino catalog: "
+                    f"`hops trino catalog create {source.get('connector')}`"
+                )
+    if refused:
+        raise click.ClickException("; ".join(refused) + ".")
+
+
+def _mounted_sources(ctx: click.Context) -> set[str]:
+    """The data sources with a SYNCED project Trino catalog."""
+    return {
+        c.get("dataSourceName")
+        for c in session.get_project(ctx).get_trino_catalog_api().get_catalogs()
+        if c.get("status") == "SYNCED" and c.get("scope") != "PRIVATE"
+    }
 
 
 def _fg_ref(ref: str) -> tuple[str, int | None]:

@@ -753,19 +753,89 @@ class TestInitInAFolder:
         assert result.exit_code == 1
         assert "unknown column" in result.output
 
-    def test_an_external_feature_group_is_refused(self, sl, datasets, mocker):
-        external = mock.MagicMock(name="ExternalFeatureGroup")
-        external.__class__ = type("ExternalFeatureGroup", (), {})
-        external.name, external.version = "crm_accounts", 1
-        mocker.patch.object(fg_cmd, "_get_fg", return_value=external)
+    @staticmethod
+    def _external(mocker, catalogs, **source):
+        class ExternalFeatureGroup(SimpleNamespace):
+            pass
 
-        result = _run("sales", "--from-fg", "crm_accounts")
+        external = ExternalFeatureGroup(**vars(ORDERS))
+        external.data_source = SimpleNamespace(
+            storage_connector=SimpleNamespace(name="neon_pg"),
+            query=source.get("query"),
+            path=None,
+            database="neondb",
+            group="public",
+            table=source.get("table"),
+        )
+        mocker.patch.object(fg_cmd, "_get_fg", return_value=external)
+        sl_project = semantic.session.get_project(None)
+        sl_project.get_trino_catalog_api.return_value.get_catalogs.return_value = (
+            catalogs
+        )
+
+    def test_an_external_feature_group_on_a_query_is_refused(
+        self, sl, datasets, mocker
+    ):
+        self._external(mocker, [], query="SELECT 1")
+
+        result = _run("sales", "--from-fg", "orders")
 
         assert result.exit_code == 1
-        assert "crm_accounts version 1" in result.output
-        assert "offline table" in result.output
+        assert "orders version 1 reads a query or a path" in result.output
         datasets.upload.assert_not_called()
         sl.create_project.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "catalogs",
+        [
+            [],
+            [
+                {
+                    "dataSourceName": "neon_pg",
+                    "status": "PENDING_SYNC",
+                    "scope": "PROJECT",
+                }
+            ],
+            [{"dataSourceName": "neon_pg", "status": "SYNCED", "scope": "PRIVATE"}],
+            [{"dataSourceName": "other", "status": "SYNCED", "scope": "PROJECT"}],
+        ],
+    )
+    def test_an_external_feature_group_without_a_synced_catalog_names_the_command(
+        self, sl, datasets, mocker, catalogs
+    ):
+        self._external(mocker, catalogs, table="public.orders")
+
+        result = _run("sales", "--from-fg", "orders")
+
+        assert result.exit_code == 1
+        assert "hops trino catalog create neon_pg" in result.output
+        datasets.upload.assert_not_called()
+        sl.create_project.assert_not_called()
+
+    def test_an_external_feature_group_with_a_synced_catalog_is_scaffolded(
+        self, sl, datasets, mocker
+    ):
+        self._external(
+            mocker,
+            [{"dataSourceName": "neon_pg", "status": "SYNCED", "scope": "PROJECT"}],
+            table="public.orders",
+        )
+
+        _run("sales", "--from-fg", "orders")
+
+        datasets.upload.assert_called()
+
+    def test_a_spine_group_is_refused(self, sl, datasets, mocker):
+        spine = mock.MagicMock(name="SpineGroup")
+        spine.__class__ = type("SpineGroup", (), {})
+        spine.name, spine.version = "spine_days", 1
+        mocker.patch.object(fg_cmd, "_get_fg", return_value=spine)
+
+        result = _run("sales", "--from-fg", "spine_days")
+
+        assert result.exit_code == 1
+        assert "spine_days version 1 is a spine group" in result.output
+        datasets.upload.assert_not_called()
 
     def test_a_bad_version_is_a_usage_error(self, sl, datasets, feature_groups):
         result = _run("sales", "--from-fg", "orders:latest")
