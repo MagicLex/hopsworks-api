@@ -27,7 +27,7 @@ Leaves:
 - Data: `insert`, `read`, `preview`, `lookup`, `query`, `predict`, `search`, `derive`, `compute`, `backfill`.
 - Transfer: `transfer`, `upload`, `download`, `import`, `export`, `clone`, `push`, `pull`, `mirror`, `share`, `unshare`, `install`, `register`.
 - Domain: `init`, `create-external`, `ingest`, `infer-metadata`, `test-access`, `validate`, `trigger`, `use`, `mkdir`, `acquire`, `release`, `renew`, `write-doc`, `delete-assets`, `plan`, `filter`, `sync`, `resync`, `copy`, `index`, `set-folder`, `reset-script`, `set-env`, `rollback`.
-- Views: `env`, `versions`, `lineage`, `logs`, `history`, `runs`, `schema`, `columns`, `tables`, `databases`, `catalogs`, `schemas`, `triggered`, `url`, `dir`, `status`, `costs`, `labels`, `drives`, `folders`, `sync-jobs`, `audit`.
+- Views: `env`, `versions`, `lineage`, `logs`, `history`, `runs`, `schema`, `columns`, `tables`, `databases`, `catalogs`, `schemas`, `triggered`, `url`, `dir`, `status`, `costs`, `labels`, `drives`, `folders`, `sync-jobs`, `audit`, `usage`.
 - Top level: `setup`, `login`, `logout`, `context`, `sql`, `score`, `update`.
 
 ## Not used
