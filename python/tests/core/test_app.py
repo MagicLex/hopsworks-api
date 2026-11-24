@@ -126,7 +126,7 @@ class TestApp:
             app_url="pythonapp/proj/my_app/",
         )
 
-        assert app.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert app.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
     def test_app_url_when_serving_with_prefixed_path(self, mocker):
         mock_client = mocker.patch("hopsworks_common.client._get_instance")
@@ -139,7 +139,13 @@ class TestApp:
             app_url="/hopsworks-api/pythonapp/proj/my_app/",
         )
 
-        assert app.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert app.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
+
+    def test_app_url_keeps_a_port_that_is_not_the_default(self, mocker):
+        mock_client = mocker.patch("hopsworks_common.client._get_instance")
+        mock_client.return_value._base_url = "https://10.1.2.3:8443/"
+        app = App(name="my_app", serving=True, app_url="pythonapp/proj/my_app/")
+        assert app.app_url == "https://10.1.2.3:8443/hopsworks-api/pythonapp/proj/my_app/"
 
     def test_app_url_when_not_serving(self, mocker):
         mocker.patch("hopsworks_common.client._get_instance")
@@ -161,7 +167,7 @@ class TestApp:
         assert app.app_url is None
 
     def test_run_waits_for_serving(self, mocker):
-        mocker.patch("hopsworks_common.client._get_instance")
+        mocker.patch("hopsworks_common.client._get_instance").return_value._base_url = "https://myhost:443"
         mocker.patch("hopsworks_common.app.time.sleep")
         mock_api = mocker.patch(
             "hopsworks_common.core.app_api.AppApi",
@@ -203,7 +209,7 @@ class TestApp:
         assert "App failed to start" in str(e_info.value)
 
     def test_redeploy_waits_for_serving(self, mocker):
-        mocker.patch("hopsworks_common.client._get_instance")
+        mocker.patch("hopsworks_common.client._get_instance").return_value._base_url = "https://myhost:443"
         mocker.patch("hopsworks_common.app.time.sleep")
         mock_api = mocker.patch(
             "hopsworks_common.core.app_api.AppApi",
@@ -450,7 +456,7 @@ class TestApp:
 
         # base_url + project + app + token, with project/app/token URL-encoded.
         assert app.public_url == (
-            "https://myhost:443/hopsworks-api/pythonapp/proj/my%20app"
+            "https://myhost/hopsworks-api/pythonapp/proj/my%20app"
             "/__public?t=tok%20en%2F%2B"
         )
 
@@ -470,7 +476,7 @@ class TestApp:
         assert app.public_access is True
         assert (
             url
-            == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/__public?t=tok"
+            == "https://myhost/hopsworks-api/pythonapp/proj/my_app/__public?t=tok"
         )
 
     def test_make_private_clears_state(self, mocker):
