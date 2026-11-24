@@ -112,6 +112,7 @@ def wire(monkeypatch):
         return {"projectId": 1, "projectName": "serving", "backingName": "back"}
 
     route._send_request.side_effect = lookup
+    route._is_external.return_value = False
     with (
         mock.patch("hopsworks_common.client._get_instance", return_value=route),
         mock.patch("hopsworks_common.client.istio._get_instance", return_value=client),
@@ -370,3 +371,26 @@ def test_a_404_from_a_platform_route_resolves_the_route_again_on_the_next_call(w
     wire.script.append(_ok())
     embed.embed_query("q")
     assert wire.sent[1][0].endswith("/v1/back/embedder/v1/models/embedder:predict")
+
+
+def test_an_external_client_uses_the_platform_rest_route_even_with_istio_configured(wire):
+    """A sandbox is an external client: the ingress may be unreachable from it (hopsable-1's tunnel forwards Hopsworks only)."""
+    wire.platform = [_platform()]
+    calls = []
+    rest = mock.MagicMock()
+    rest._is_external.return_value = True
+    rest._send_request.side_effect = lambda method, path, **kw: (
+        wire.platform
+        if path == ["serving", "platform"]
+        else calls.append(path)
+        or {"predictions": [{"model": MODEL, "data": [{"index": 0, "embedding": [1.0]}]}]}
+    )
+    istio = mock.MagicMock()
+    with (
+        mock.patch("hopsworks_common.client._get_instance", return_value=rest),
+        mock.patch("hopsworks_common.client.istio._get_instance", return_value=istio),
+    ):
+        assert embed.embed_query("q") == [1.0]
+    assert calls == [["serving", "platform", "99:predict"]]
+    istio._send_request.assert_not_called()
+    assert wire.sent == []
