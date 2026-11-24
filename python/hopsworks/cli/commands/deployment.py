@@ -1675,3 +1675,113 @@ def deployment_rollback(
 
 
 # endregion
+
+
+@deployment_group.group("platform")
+def deployment_platform_group() -> None:
+    """Deployments an administrator opened to every user.
+
+    \f
+    A platform deployment answers the predict calls of any user, each under
+    the caller's own key and a per-caller rate; `hops fg embed` and agent
+    search use one without project membership.
+    """
+
+
+@deployment_platform_group.command("list")
+@click.pass_context
+def deployment_platform_list(ctx: click.Context) -> None:
+    """List the deployments that answer every user.
+
+    \f
+    Args:
+        ctx: Click context.
+    """  # noqa: D301
+    from hopsworks_common.core import rest
+
+    session.get_project(ctx)
+    try:
+        listed = rest._send_request("GET", ["serving", "platform"]) or []
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not list platform deployments: {exc}"
+        ) from exc
+    if output.JSON_MODE:
+        output.print_json(listed)
+        return
+    output.print_table(
+        ["ID", "NAME", "PROJECT", "PROJECT ID", "MODEL", "VERSION", "RATE/S", "BURST"],
+        [
+            [
+                d.get("id"),
+                d.get("name"),
+                d.get("projectName"),
+                d.get("projectId"),
+                d.get("modelName") or "-",
+                d.get("modelVersion") or "-",
+                d.get("rate"),
+                d.get("burst"),
+            ]
+            for d in listed
+        ],
+    )
+
+
+@deployment_platform_group.command("set")
+@click.argument("serving_id", type=int)
+@click.option(
+    "--on/--off",
+    "enabled",
+    required=True,
+    help="Open the deployment to every user, or close it.",
+)
+@click.option(
+    "--rate",
+    type=click.IntRange(min=1),
+    help="Predict calls per second per caller (with --on).",
+)
+@click.option(
+    "--burst",
+    type=click.IntRange(min=1),
+    help="Calls a caller may send at once (with --on).",
+)
+@click.pass_context
+def deployment_platform_set(
+    ctx: click.Context,
+    serving_id: int,
+    enabled: bool,
+    rate: int | None,
+    burst: int | None,
+) -> None:
+    """Open a deployment to every user, or close it. Administrators only.
+
+    \f
+    The deployment must log no inference. Its id is the ID column of
+    `hops deployment list` in its project.
+
+    Args:
+        ctx: Click context.
+        serving_id: The deployment's id.
+        enabled: On or off.
+        rate: Calls per second per caller.
+        burst: Burst per caller.
+    """
+    from hopsworks_common.core import rest
+
+    if enabled and (rate is None or burst is None):
+        raise click.UsageError("--on takes --rate and --burst.")
+    session.get_project(ctx)
+    body = {"enabled": enabled, "callsPerSecond": rate, "burst": burst}
+    try:
+        result = rest._send_request(
+            "PUT", ["admin", "serving", serving_id, "platform"], json_body=body
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(
+            f"Could not set platform inference of deployment {serving_id}: {exc}"
+        ) from exc
+    if output.JSON_MODE:
+        output.print_json(result)
+        return
+    state = f"on, {rate}/s per caller, burst {burst}" if enabled else "off"
+    output.success(f"Deployment {serving_id}: platform inference {state}.")
