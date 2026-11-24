@@ -636,6 +636,7 @@ def test_the_client_posts_to_the_serving_project_by_its_backing_name(monkeypatch
 
     monkeypatch.setattr(embed, "_routes", {})
     rest, istio = mock.MagicMock(), mock.MagicMock()
+    rest._is_external.return_value = False
     project_info = {
         "projectId": 21623, "projectName": "hopsable_embeddings", "backingName": "5okprgv34044",
     }  # fmt: skip
