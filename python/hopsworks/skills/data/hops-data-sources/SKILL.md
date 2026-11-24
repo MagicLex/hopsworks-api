@@ -24,7 +24,7 @@ Never ask the user for a password, token or key in the conversation, in a messag
 
 Mounting and ingesting both build a feature pipeline's input side: an external feature group leaves data in the source (no copy, no copy-time MITs); a DLTHub ingest copies the source into a managed feature group. Mounting is the lower-cost path when the source already holds the data you want, since reuse beats rebuilding a pipeline.
 
-Google Drive and Google Analytics sources have no tables: [references/google-sources.md](references/google-sources.md).
+Google Drive and Google Analytics sources have no tables: [references/google-sources.md](references/google-sources.md) for the signed-in ones and their syncs.
 
 ## Contract
 - **Input:** a configured connector + a table from it.

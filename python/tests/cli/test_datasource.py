@@ -2089,7 +2089,10 @@ def test_google_drive_refuses_a_key_file_with_a_key_path(tmp_path):
 
 
 def _info(sc, *flags: str) -> str:
-    with mock.patch.object(ds.session, "get_feature_store") as fs:
+    with (
+        mock.patch.object(ds.session, "get_feature_store") as fs,
+        mock.patch.object(ds, "_get_connector", return_value={}),
+    ):
         fs.return_value.get_data_source.return_value.storage_connector = sc
         result = CliRunner().invoke(cli, ["datasource", "info", sc.name, *flags])
     assert result.exit_code == 0, result.output
@@ -2198,6 +2201,73 @@ def test_info_renders_the_google_drive_fields():
         "drive@p.iam.gserviceaccount.com",
     ):
         assert value in output
+
+
+def test_info_of_a_service_account_drive_source_asks_for_no_syncs():
+    from hsfs.storage_connector import GoogleDriveConnector
+
+    sc = GoogleDriveConnector(4, "drive", 67, key_path="/Projects/p/k.json")
+    with mock.patch("hopsworks_common.core.rest._send_request") as send:
+        output = _info(sc)
+
+    send.assert_not_called()
+    assert "/Projects/p/k.json" in output
+    assert "sync list" not in output
+
+
+def test_info_of_an_oauth_drive_source_lists_its_syncs():
+    from hsfs.storage_connector import GoogleDriveConnector
+
+    sc = GoogleDriveConnector(4, "drive", 67, oauth_state="CONNECTED", pinned=True)
+    syncs = {"items": [{"id": 9, "datasetName": "picked", "state": "SUCCEEDED"}]}
+    with (
+        mock.patch("hopsworks_common.core.rest._project_path", return_value=["p"]),
+        mock.patch(
+            "hopsworks_common.core.rest._send_request", return_value=syncs
+        ) as send,
+    ):
+        output = _info(sc)
+
+    assert send.call_args.args[0] == "GET"
+    assert "picked (SUCCEEDED)" in output
+    assert "hops datasource google-drive sync list drive" in output
+
+
+def test_a_drive_sync_on_a_service_account_source_shows_the_backend_refusal():
+    from hsfs.storage_connector import GoogleDriveConnector
+
+    sc = GoogleDriveConnector(4, "drive", 67, key_path="/Projects/p/k.json")
+    refusal = RuntimeError("Google Drive is not connected (270386)")
+    with (
+        mock.patch.object(ds.session, "get_feature_store") as fs,
+        mock.patch("hopsworks_common.core.rest._project_path", return_value=["p"]),
+        mock.patch("hopsworks_common.core.rest._send_request", side_effect=refusal),
+    ):
+        fs.return_value.get_data_source.return_value.storage_connector = sc
+        result = CliRunner().invoke(
+            cli, ["datasource", "google-drive", "sync", "list", "drive"]
+        )
+
+    assert result.exit_code == 1
+    assert "Google Drive is not connected (270386)" in result.output
+
+
+def test_ingest_files_on_a_signed_in_drive_source_shows_the_backend_refusal():
+    from hsfs.storage_connector import GoogleDriveConnector
+
+    sc = GoogleDriveConnector(4, "drive", 67, oauth_state="CONNECTED")
+    refusal = RuntimeError("Use the syncs of a signed-in Google Drive data source")
+    with (
+        mock.patch.object(ds.session, "get_feature_store") as fs,
+        mock.patch.object(GoogleDriveConnector, "ingest_files", side_effect=refusal),
+    ):
+        fs.return_value.get_data_source.return_value.storage_connector = sc
+        result = CliRunner().invoke(
+            cli, ["datasource", "ingest-files", "drive", "--dataset", "docs"]
+        )
+
+    assert result.exit_code == 1
+    assert "Use the syncs of a signed-in Google Drive data source" in result.output
 
 
 # endregion
@@ -2391,7 +2461,9 @@ def test_ingest_files_reports_a_failed_create():
         )
 
     assert result.exit_code == 1
-    assert "Create failed: dataset owned by another job" in result.output
+    assert (
+        "Could not create the files job: dataset owned by another job" in result.output
+    )
 
 
 def test_files_jobs_lists_the_jobs():
