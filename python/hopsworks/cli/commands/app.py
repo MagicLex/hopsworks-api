@@ -1239,7 +1239,10 @@ def _unsatisfied(env: Any, requirements_text: str, strict: bool) -> list[str] | 
             if strict:
                 unmet.append(line)
             continue
-        if req.marker is not None and not req.marker.evaluate():
+        # A marker reads the env's Python, not this one: unmet when strict, else left as it was.
+        if req.marker is not None:
+            if strict:
+                unmet.append(str(req))
             continue
         name = canonicalize_name(req.name)
         if name not in have or req.extras or req.url:

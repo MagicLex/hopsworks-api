@@ -1907,7 +1907,7 @@ def test_prepare_env_installs_nothing_into_a_clone_that_meets_every_requirement(
 ):
     root = _app_dir(
         tmp_path,
-        requirements="FastAPI>=0.100\nuvicorn\npandas==2.3.3 ; python_version >= '3.8'\n",
+        requirements="FastAPI>=0.100\nuvicorn\npandas==2.3.3\n",
     )
     mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
     envs = _BaseEnvironments(
@@ -1919,7 +1919,7 @@ def test_prepare_env_installs_nothing_into_a_clone_that_meets_every_requirement(
     envs.envs["shop-app-env"].install_requirements.assert_not_called()
     assert "Environment shop-app-env is up to date." in result.output
     assert dataset_api.records == [
-        "shop-app-env\nFastAPI>=0.100\nuvicorn\npandas==2.3.3 ; python_version >= '3.8'\n"
+        "shop-app-env\nFastAPI>=0.100\nuvicorn\npandas==2.3.3\n"
     ]
 
 
@@ -1930,6 +1930,10 @@ def test_prepare_env_installs_nothing_into_a_clone_that_meets_every_requirement(
         ("fastapi<0.100\n", "fastapi<0.100"),
         ("fastapi[all]\n", "fastapi"),
         ("-r more.txt\nfastapi\n", "-r more.txt"),
+        (
+            'fastapi\nuvicorn ; python_version < "3.11"\n',
+            'uvicorn; python_version < "3.11"',
+        ),
     ],
 )
 def test_prepare_env_installs_into_a_clone_what_it_lacks(
