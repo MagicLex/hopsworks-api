@@ -289,8 +289,9 @@ class Client:
             deadline: Monotonic time after which no request, token refresh or rate-limit retry starts.
                 Each socket wait is clipped to the time left, and at the deadline the request's sockets are shut down, whatever phase it is in (connect, status and headers, body, rate-limit and token retries): it raises `Timeout`.
                 With `stream`, the caller's reading of the returned body is not bounded.
-                Under it a cached session is not refreshed. A `deadline` argument also makes an error answer close unread and raise as
-                `requests.HTTPError` with its status and reason; one set by an enclosing `request_deadline` block keeps the `RestAPIError`.
+                Under it a cached session is not refreshed. With `stream`, a `deadline` argument also makes an error answer close unread
+                and raise as `requests.HTTPError` with its status and reason. Without `stream` the body is already read, so an error
+                answer raises `RestAPIError`, as does one under an enclosing `request_deadline` block.
                 An enclosing `request_deadline` block applies when it is earlier.
             retry_while_unavailable: False sends the call once, for a caller that needs the backend's own answer to a gateway error.
 
@@ -304,7 +305,8 @@ class Client:
                 A call with its own `timeout` or `deadline`, or with `retry_while_unavailable=False`, is never retried.
         """
         _drain_mount()
-        bounded_error = deadline is not None
+        # Only a streamed error body is still unread; a read one costs nothing and carries the error code callers key on.
+        bounded_error = deadline is not None and stream
         ambient = _request_deadline.get()
         if ambient is not None:
             deadline = ambient if deadline is None else min(deadline, ambient)
@@ -507,8 +509,8 @@ class Client:
             response.close()
             raise requests.exceptions.Timeout("HTTP request exceeded its deadline")
         if response.status_code // 100 != 2:
-            if deadline is not None and bounded_error:
-                # Reading the error body could outlast the deadline: status and reason only.
+            if bounded_error:
+                # Reading a streamed error body could outlast the deadline: status and reason only.
                 response.close()
                 raise requests.HTTPError(
                     f"HTTP {response.status_code} {response.reason} from {url}",
