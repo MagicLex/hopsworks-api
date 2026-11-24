@@ -126,6 +126,61 @@ class TestBaseClient:
         # Assert
         assert spy_retry_token_expired.call_count == 5
 
+    def test_deadline_error_answer_keeps_its_error_code(self):
+        """Under a deadline, a read error answer raises RestAPIError with its code; a streamed one stays unread."""
+        import http.server
+        import json
+        import time
+
+        body = json.dumps(
+            {"errorCode": 300003, "errorMsg": "Library not found", "usrMsg": ""}
+        ).encode()
+
+        class NotFound(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NotFound)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = self._init_test_client()
+            client._base_url = f"http://127.0.0.1:{server.server_address[1]}"
+            path = ["project", 1, "python", "environments", "env", "libraries", "lib"]
+
+            with pytest.raises(RestAPIError) as error:
+                client._send_request(
+                    "GET",
+                    path,
+                    with_base_path_params=False,
+                    timeout=5,
+                    deadline=time.monotonic() + 5,
+                )
+            assert error.value.error_code == 300003
+
+            with pytest.raises(requests.HTTPError) as streamed:
+                client._send_request(
+                    "GET",
+                    path,
+                    stream=True,
+                    with_base_path_params=False,
+                    timeout=5,
+                    deadline=time.monotonic() + 5,
+                )
+            assert not isinstance(streamed.value, RestAPIError)
+            assert streamed.value.response.status_code == 404
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
     def _init_test_client(self):
         client = Client()
         client._connected = True

@@ -149,8 +149,9 @@ class Client:
             with_base_path_params: Whether to include the base path parameters (hopsworks-api/api) in the request URL.
             timeout: How long to wait for the connection and for each block of the response, in seconds, passed straight through to `requests`.
                 Without it a stalled connection blocks the caller indefinitely, so pass one wherever the caller has its own deadline to honour.
-            deadline: A `time.monotonic()` value after which no retry of an expired token starts. With it, an
-                error answer is closed unread and raised as `requests.HTTPError` with its status and reason.
+            deadline: A `time.monotonic()` value after which no retry of an expired token starts. With it and `stream`,
+                an error answer is closed unread and raised as `requests.HTTPError` with its status and reason.
+                Without `stream` the body is already read, so an error answer raises `RestAPIError` with its error code.
 
         Returns:
             Response json
@@ -191,8 +192,8 @@ class Client:
             )
 
         if response.status_code // 100 != 2:
-            if deadline is not None:
-                # Reading the error body could outlast the deadline: status and reason only.
+            if deadline is not None and stream:
+                # Reading a streamed error body could outlast the deadline: status and reason only.
                 response.close()
                 raise requests.HTTPError(
                     f"HTTP {response.status_code} {response.reason} from {url}",
