@@ -40,9 +40,12 @@ Already known, no need to look again:
   says which.
 - A next-step offer (Explore, Pieces step 6) always has these two options: **Build a data
   pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
-  **Explore it in a notebook** (a notebook over the table). The other one or two options are what
-  the result points to: a dashboard over it, a model, or the whole ML system. An app only when
-  the user asked for one.
+  **Explore it in a notebook** (a notebook over the table). After a source's tables are mounted
+  or read, a third is **Build a semantic layer using selected tables** (the metrics piece over
+  them; mounted tables are copied into Hopsworks first). Picked, ask once which tables, one
+  `AskUserQuestion` with `multiSelect`: **All** first, then up to three tables by name (the user
+  types any other). The rest, four options in all, are what the result points to: a dashboard
+  over it, a model, or the whole ML system. An app only when the user asked for one.
 - When the result could carry a model (a table with an outcome column, a feature group with a key
   and an event time), that option is **Predict `<label>`: three tracked models** (the model piece
   with `candidates: 3`, minutes, every candidate a run in the registry). Once `hops model runs`

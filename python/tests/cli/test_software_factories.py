@@ -187,6 +187,8 @@ def test_every_next_step_offer_has_a_data_pipeline_and_a_notebook():
     rules = " ".join(text.split("## Rules", 1)[1].split("\n## ", 1)[0].split())
     assert "**Build a data pipeline over it**" in rules
     assert "**Explore it in a notebook**" in rules
+    assert "**Build a semantic layer using selected tables**" in rules
+    assert "`multiSelect`: **All** first" in rules
     # Explore and Pieces offer through that rule, with no list of their own.
     text = " ".join(text.split())
     assert text.count("next-step offer (Rules") == 2
