@@ -9,12 +9,16 @@ commands and ``hops login``.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import sys
 import threading
 import urllib.parse
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
+
+import click
+from hopsworks.cli import config
 
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
@@ -57,6 +61,62 @@ def api_base(host: str) -> str:
     return normalize_host(host) + "/hopsworks-api/api"
 
 
+def refused_key_fix(source: str | None) -> str:
+    """Say how to replace a refused API key from ``source``; empty when it has none.
+
+    Args:
+        source: Where the key came from (``HopsConfig.api_key_source``).
+
+    Returns:
+        A clause starting lowercase, without a final period.
+    """
+    if not source:
+        return ""
+    if source == "HOPSWORKS_API_KEY":
+        return f"check it, or unset it to use the key in {config.CONFIG_PATH}"
+    if source.startswith("--"):
+        return "check it"
+    return "check it, or run `hops setup --force` to create a new one"
+
+
+def login_failed(exc: Exception, source: str | None = None) -> NoReturn:
+    """Raise the ``ClickException`` that says why a login failed.
+
+    A 401 means the backend refused the API key: the message names where the
+    key came from and how to replace it, and is raised ``from None`` so the root
+    handler does not explain it again. A 403 means the key is valid but lacks
+    access. Either way the backend's own message is kept.
+
+    Args:
+        exc: Whatever ``hopsworks.login()`` raised.
+        source: Where the key came from (``HopsConfig.api_key_source``).
+
+    Raises:
+        click.ClickException: Always.
+    """
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status not in (401, 403):
+        raise click.ClickException(f"Could not log in: {exc}") from exc
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        body = {}
+    detail = body.get("errorMsg") or body.get("usrMsg") or response.reason
+    if status == 403:
+        raise click.ClickException(
+            f"Could not log in: access refused ({detail})"
+        ) from exc
+    key = f"the API key from {source}" if source else "the API key"
+    fix = refused_key_fix(source)
+    tail = f". {fix[0].upper()}{fix[1:]}." if fix else ""
+    raise click.ClickException(
+        f"Could not log in: {key} was refused ({detail}){tail}"
+    ) from None
+
+
 def login(
     host: str,
     api_key_value: str | None = None,
@@ -64,6 +124,7 @@ def login(
     engine: str | None = None,
     internal: bool = False,
     hostname_verification: bool = False,
+    project_id: int | None = None,
 ) -> Project:
     """Call ``hopsworks.login()`` with a stable argument shape.
 
@@ -92,6 +153,8 @@ def login(
         hostname_verification: Whether to verify Hopsworks' TLS certificate;
             False skips verification (the SDK default). Passed straight through
             to ``hopsworks.login(hostname_verification=...)``.
+        project_id: Id of the project to attach to; takes precedence over ``project``,
+            since several projects may share a name.
 
     Returns:
         The authenticated SDK ``Project`` object.
@@ -109,13 +172,7 @@ def login(
             kwargs["engine"] = engine
         return _quiet_login(hopsworks, kwargs)
 
-    parsed = urllib.parse.urlparse(host if "://" in host else "https://" + host)
-    scheme = (parsed.scheme or "https").lower()
-    netloc = parsed.netloc or parsed.path
-    default_port = 80 if scheme == "http" else 443
-    port = parsed.port or default_port
-    hostname = netloc.split(":")[0]
-
+    hostname, port = _host_port(host)
     kwargs = {
         "host": hostname,
         "port": port,
@@ -123,11 +180,119 @@ def login(
     }
     if api_key_value:
         kwargs["api_key_value"] = api_key_value
-    if project:
+    if project_id:
+        kwargs["project_id"] = project_id
+    elif project:
         kwargs["project"] = project
     if engine:
         kwargs["engine"] = engine
     return _quiet_login(hopsworks, kwargs)
+
+
+def _host_port(host: str) -> tuple[str, int]:
+    """Split a host as the user gives it into the SDK's hostname and port: 443 for https or no scheme, 80 for http."""
+    parsed = urllib.parse.urlparse(host if "://" in host else "https://" + host)
+    scheme = (parsed.scheme or "https").lower()
+    netloc = parsed.netloc or parsed.path
+    return netloc.split(":")[0], parsed.port or (80 if scheme == "http" else 443)
+
+
+# RESTCodes.ApiKeyErrorCode: the key carries none of the scopes the endpoint accepts.
+NO_VALID_SCOPE = 320004
+
+
+def is_scope_refusal(exc: BaseException) -> bool:
+    """Whether ``exc`` is Hopsworks refusing an API key for its scopes."""
+    from hopsworks_common.client.exceptions import RestAPIError  # noqa: PLC0415
+
+    return (
+        isinstance(exc, RestAPIError)
+        and getattr(exc.response, "status_code", None) == 403
+        and getattr(exc, "error_code", None) == NO_VALID_SCOPE
+    )
+
+
+def login_serving(
+    host: str,
+    api_key_value: str,
+    project: str,
+    project_id: int | None = None,
+    hostname_verification: bool = False,
+) -> Any:
+    """Connect for the model serving endpoints only, with a key that may hold just the SERVING scope.
+
+    ``hopsworks.login`` reads the project by name, the username, the client
+    certificates and the serving settings, which need the PROJECT scope, and
+    ``get_model_serving`` checks the Models dataset, which needs DATASET_VIEW.
+    The serving endpoints themselves take SERVING. This connects without a
+    project, then sets it from its id: read by name when the key may, else
+    ``project_id`` (``HOPSWORKS_PROJECT_ID``, or the saved config, only for
+    the host and project it was set with: ``config.load``). No certificates
+    are downloaded; serving is REST only.
+
+    Args:
+        host: Hopsworks host; ``https://`` prefix and trailing paths tolerated.
+        api_key_value: API key.
+        project: Project name.
+        project_id: The project's id, used when the key cannot read the project by name.
+        hostname_verification: Whether to verify Hopsworks' TLS certificate.
+
+    Returns:
+        The SDK ``ModelServing`` handle of the project.
+
+    Raises:
+        click.ClickException: When the project id cannot be known.
+    """
+    import click  # noqa: PLC0415
+    import hopsworks  # noqa: PLC0415 - intentionally lazy
+    from hopsworks_common import client  # noqa: PLC0415
+    from hsml.model_serving import ModelServing  # noqa: PLC0415
+
+    hostname, port = _host_port(host)
+    connection = hopsworks.connection(
+        host=hostname,
+        port=port,
+        api_key_value=api_key_value,
+        hostname_verification=hostname_verification,
+        engine="python",
+    )
+    _client = client._get_instance()
+    namespace = None
+    by_name = True
+    try:
+        info = _client._get_project_info(project)
+        project_id = info["projectId"]
+        namespace = info.get("namespace")
+    except Exception as exc:
+        if not is_scope_refusal(exc):
+            raise
+        by_name = False
+    if not by_name and project_id is None:
+        # Raised outside the handler: the CLI would otherwise append its
+        # generic missing-scope advice to this one.
+        raise click.ClickException(
+            f"This API key cannot read project '{project}' by name (it has no "
+            "PROJECT scope). Give the project's id: HOPSWORKS_PROJECT_ID=<id>. "
+            "A saved or exported id holds only for the host and project it was "
+            "set with; --host, --project or their environment variables naming "
+            "another drop it."
+        )
+    _client._project_name = project
+    _client._project_id = str(project_id)
+    connection._project = project
+    try:
+        connection._load_serving_defaults()
+    except Exception as exc:
+        if not is_scope_refusal(exc):
+            raise
+        # The serving settings are variables, which take the PROJECT scope.
+        # Without them there is no Istio client, so predictions go through
+        # Hopsworks, which serves every key with SERVING.
+        client._set_kserve_installed(False)
+        client._set_serving_num_instances_limits([-1, -1])
+        client._set_knative_domain("")
+        connection._serving_defaults_loaded = True
+    return ModelServing(project, int(project_id), project_namespace=namespace)
 
 
 class _ThreadSilencedStdout(io.TextIOBase):
@@ -151,6 +316,17 @@ class _ThreadSilencedStdout(io.TextIOBase):
     def flush(self) -> None:
         self.real.flush()
 
+    # io.TextIOBase defines these as None, so __getattr__ never reaches the real stream.
+    # click.echo reads them: with None it writes through a TextIOWrapper of its own over
+    # the binary buffer, and its lines overtake what still sits in the real stream's buffer.
+    @property
+    def encoding(self) -> str:
+        return self.real.encoding
+
+    @property
+    def errors(self) -> str | None:
+        return self.real.errors
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self.real, name)
 
@@ -163,13 +339,21 @@ def _quiet_login(hopsworks: Any, kwargs: dict[str, Any]) -> Project:
     command payload (``--json``, pipelines), so the banner is discarded, for
     the calling thread only.
     """
+    with quiet():
+        return hopsworks.login(**kwargs)
+
+
+@contextlib.contextmanager
+def quiet():
+    """Discard what the SDK prints, for the calling thread: a CLI's stdout carries its payload."""
     if not isinstance(sys.stdout, _ThreadSilencedStdout):
         sys.stdout = _ThreadSilencedStdout(sys.stdout)
+    previous = getattr(_ThreadSilencedStdout._silenced, "on", False)
     _ThreadSilencedStdout._silenced.on = True
     try:
-        return hopsworks.login(**kwargs)
+        yield
     finally:
-        _ThreadSilencedStdout._silenced.on = False
+        _ThreadSilencedStdout._silenced.on = previous
 
 
 def verify(
@@ -177,6 +361,7 @@ def verify(
     api_key_value: str,
     project: str | None = None,
     hostname_verification: bool = False,
+    project_id: int | None = None,
 ) -> Project:
     """Run a minimal login to confirm ``api_key_value`` works against ``host``.
 
@@ -188,6 +373,7 @@ def verify(
         api_key_value: API key to validate.
         project: Optional project to attach to.
         hostname_verification: Whether to verify Hopsworks' TLS certificate.
+        project_id: Optional id of the project to attach to; takes precedence over ``project``.
 
     Returns:
         The authenticated SDK ``Project`` object.
@@ -197,4 +383,5 @@ def verify(
         api_key_value=api_key_value,
         project=project,
         hostname_verification=hostname_verification,
+        project_id=project_id,
     )

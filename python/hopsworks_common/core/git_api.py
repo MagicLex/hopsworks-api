@@ -76,7 +76,7 @@ class GitApi:
             url: URL to the git repository.
             path: Path in Hopsworks Filesystem to clone the repo to. Use
                 `project.home_path` to clone into your personal home directory
-                (e.g. ``/Projects/<project>/Users/<username>``).
+                (e.g. ``/Projects/<backing name>/Users/<username>``).
             provider: The git provider where the repo is currently hosted.
             branch: The branch to clone, defaults to the configured default branch.
 
@@ -121,7 +121,7 @@ class GitApi:
                 ) from e
 
         # Support absolute and relative path to dataset
-        path = util._convert_to_abs(path, _client._project_name)
+        path = util._convert_to_abs(path, _client._project_backing_name)
 
         if provider is None:
             provider = self._git_provider_api._get_default_configured_provider()
@@ -288,7 +288,7 @@ class GitApi:
         )
 
         if path is not None:
-            path = util._convert_to_abs(path, _client._project_name)
+            path = util._convert_to_abs(path, _client._project_backing_name)
 
         filtered_repos = []
         for repository in repos:

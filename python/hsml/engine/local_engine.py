@@ -54,6 +54,7 @@ class LocalEngine:
         remote_path: str,
         upload_configuration=None,
         overwrite: bool = False,
+        into_new_folder: bool = False,
     ):
         local_path = self._get_abs_path(local_path)
         remote_path = self._prepend_project_path(remote_path)
@@ -88,6 +89,7 @@ class LocalEngine:
                     "max_chunk_retries",
                     self._dataset_api.DEFAULT_UPLOAD_MAX_CHUNK_RETRIES,
                 ),
+                _into_new_folder=into_new_folder,
             )
 
     def _download(self, remote_path: str, local_path: str, download_configuration=None):
@@ -128,5 +130,5 @@ class LocalEngine:
     def _prepend_project_path(self, remote_path: str):
         if not remote_path.startswith("/Projects/"):
             _client = client._get_instance()
-            remote_path = f"/Projects/{_client._project_name}/{remote_path}"
+            remote_path = f"/Projects/{_client._project_backing_name}/{remote_path}"
         return remote_path

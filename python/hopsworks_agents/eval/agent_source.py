@@ -393,7 +393,7 @@ def _absolute_hopsfs_path(child: str, root: str, project_name: str) -> str:
 
     ``DatasetApi.list`` returns paths relative to the project with a leading
     slash (``/Models/a/1/agent.py``, from ``util._convert_to_project_rel_path``),
-    so a child is placed under ``/Projects/<project>`` unless it already is
+    so a child is placed under ``/Projects/<backing name>`` unless it already is
     there. With no project known the root was given relative to the project
     too (``Models/a/1``), so a listed path already has its shape and is kept;
     only a bare name is placed under the root.

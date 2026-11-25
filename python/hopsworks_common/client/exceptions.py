@@ -36,6 +36,7 @@ class RestAPIError(Exception):
     STATUS_CODE_UNAUTHORIZED = 401
     STATUS_CODE_FORBIDDEN = 403
     STATUS_CODE_NOT_FOUND = 404
+    STATUS_CODE_CONFLICT = 409
     STATUS_CODE_TOO_MANY_REQUESTS = 429
     STATUS_CODE_INTERNAL_SERVER_ERROR = 500
 
@@ -381,3 +382,38 @@ class SemanticBuildException(SemanticLayerException):
         super().__init__("\n".join(lines))
         self.build = build
         self.issues = issues
+
+
+@public("hopsworks.client.exceptions.BackendUnavailableError")
+@also_available_as("hsml.client.exceptions.BackendUnavailableError")
+class BackendUnavailableError(Exception):
+    """The backend was unavailable during a call: unreachable, a gateway error, or a Payara error page.
+
+    `response` is the last response, or `None` when the backend did not answer at all.
+    """
+
+    def __init__(
+        self,
+        method: str,
+        path: str,
+        detail: str = "the request may or may not have been applied",
+        response: requests.Response | None = None,
+    ) -> None:
+        super().__init__(f"Backend unavailable during {method} {path}; {detail}.")
+        self.method = method
+        self.path = path
+        self.response = response
+
+
+@public("hopsworks.client.exceptions.TrinoAccountPendingError")
+class TrinoAccountPendingError(TrinoException):
+    """The project member's Trino account is still being set up.
+
+    Retry after `retry_after` seconds.
+    """
+
+    def __init__(self, retry_after: int = 2) -> None:
+        self.retry_after = retry_after
+        super().__init__(
+            f"Trino access for this project is still being set up; retry in {retry_after} s"
+        )
