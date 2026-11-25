@@ -15,7 +15,7 @@ description: Use when a Hopsworks Python app or agent deployment needs its own
 ## Concept
 
 Every project owns one MySQL-compatible database on **RonDB**, the online
-feature store, named after the project (lowercase). It holds the online feature
+feature store, named after the project's backing name (lowercase), which can differ from its display name. It holds the online feature
 group tables (`<fg_name>_<version>`) and it is also where an app keeps its own
 tables: sessions, user preferences, agent memory, job results. There is no
 separate "app database"; the app and the feature store share the project schema.
@@ -33,7 +33,7 @@ variables, so code written for one works in the other.
 |---|---|
 | `MYSQL_HOST` | internal DNS name of the online feature store MySQL server |
 | `MYSQL_PORT` | its port (normally `3306`) |
-| `MYSQL_DB` | the project database, `<project_name>` lowercased |
+| `MYSQL_DB` | the project database, the project's backing name lowercased |
 | `MYSQL_USER` | the app's own MySQL user, `hopsapp_<app id>`; for an app created before table registration, the user of the person who **started** it, `<project>_<username>` |
 | `MYSQL_PASSWORD_SECRET_NAME` | name of the **Hopsworks secret** holding that user's password (same string as `MYSQL_USER`) |
 
@@ -64,7 +64,7 @@ the project's Trino coordinator, so an app in any language can read the
 | `TRINO_HOST` / `TRINO_PORT` | internal DNS name and HTTPS port (`8443`) of the Trino coordinator |
 | `TRINO_USER` | `<project>__<username>` of the person who **started** the app (the HDFS username, two underscores) |
 | `TRINO_PASSWORD_SECRET_NAME` | name of the **Hopsworks secret** holding that user's Trino password (same string as `TRINO_USER`) |
-| `TRINO_SCHEMA` | `<project>_featurestore`, the project's offline feature store schema |
+| `TRINO_SCHEMA` | `<backing name>_featurestore`, the project's offline feature store schema (the backing name can differ from the display name) |
 
 There is deliberately **no `TRINO_CATALOG`**: the catalog depends on each feature
 group's format, so pick it in the app.
@@ -377,13 +377,13 @@ missing variable, so guard local development on `inHopsworks()`.
 ## Commands / API
 
 ```bash
-hops app create <name> --path /Projects/<p>/Users/<u>/app.py --start   # db access on by default
+hops app create <name> --path /Projects/<p>/Users/<u>/app.py --entrypoint-command "python app.py" --start   # db access on by default
 hops app create <name> ... --no-db-access                              # opt out
 hops app info <name>                                                   # "Database access" row
 ```
 
 ```python
-apps.create_app(name=..., app_path=..., db_access=True)   # default
+apps.create_app(name=..., app_path=..., entrypoint_command="python app.py", db_access=True)   # default
 app.db_access
 ```
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import hopsworks
 from click.testing import CliRunner
@@ -37,3 +38,58 @@ def test_cli_quiets_sdk_info_logging(tmp_home):
     logging.getLogger().setLevel(logging.INFO)
     CliRunner().invoke(cli, ["project", "list"])
     assert logging.getLogger().level == logging.WARNING
+
+
+def test_sdk_prints_stay_off_stdout_only_in_json_mode(capsys):
+    """`--json` keeps stdout for the payload: the SDK's banners (job created, launching job) are dropped."""
+    from hopsworks.cli import output
+
+    try:
+        output.set_json_mode(True)
+        with output.sdk_quiet():
+            print("Job created successfully, explore it at https://h/p/1/jobs/named/x")
+        output.print_json({"job": "x", "execution": 7})
+        assert capsys.readouterr().out == '{\n  "job": "x",\n  "execution": 7\n}\n'
+
+        output.set_json_mode(False)
+        with output.sdk_quiet():
+            print("Launching job: x")
+        assert capsys.readouterr().out == "Launching job: x\n"
+    finally:
+        output.set_json_mode(False)
+
+
+def test_a_nested_quiet_keeps_the_outer_silence(capsys):
+    """An inner SDK call's quiet must not end the silence of the block around it."""
+    with auth.quiet():
+        with auth.quiet():
+            print("inner banner")
+        print("outer banner")
+    print("after")
+    assert capsys.readouterr().out == "after\n"
+
+
+def test_echo_and_tables_keep_their_order_after_a_quiet_login():
+    """Piped stdout, a real process: after the login's stdout swap, a title stays before its table."""
+    import subprocess
+    import sys
+
+    script = (
+        "import sys\n"
+        "import click\n"
+        "from hopsworks.cli import auth, output\n"
+        "sys.stdout = auth._ThreadSilencedStdout(sys.stdout)\n"
+        "for t in ('first', 'second'):\n"
+        "    click.echo(t)\n"
+        "    output.print_table(['id'], [[t + '-row']])\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(Path(__file__).resolve().parents[2]),
+    )
+    lines = [line.strip() for line in done.stdout.splitlines() if line.strip()]
+    assert lines.index("first") < lines.index("first-row") < lines.index("second")
+    assert lines.index("second") < lines.index("second-row")

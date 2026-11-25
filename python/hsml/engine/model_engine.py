@@ -24,7 +24,7 @@ import tempfile
 import time
 from typing import TYPE_CHECKING
 
-from hopsworks_common import client, constants, util
+from hopsworks_common import client, constants, events, util
 from hopsworks_common.client.exceptions import ModelRegistryException, RestAPIError
 from hopsworks_common.core import dataset_api, inode
 from hsml.core import model_api
@@ -120,7 +120,9 @@ class ModelEngine:
                         json.dump(input_example, out, cls=util.NumpyEncoder)
 
                     self._engine._upload(
-                        input_example_path, model_instance.version_path
+                        input_example_path,
+                        model_instance.version_path,
+                        into_new_folder=True,
                     )
                     model_instance.input_example = None
                 if model_instance._model_schema is not None:
@@ -130,7 +132,11 @@ class ModelEngine:
                     with open(model_schema_path, "w+") as out:
                         out.write(model_schema.json())
 
-                    self._engine._upload(model_schema_path, model_instance.version_path)
+                    self._engine._upload(
+                        model_schema_path,
+                        model_instance.version_path,
+                        into_new_folder=True,
+                    )
                     model_instance.model_schema = None
         return model_instance
 
@@ -273,6 +279,7 @@ class ModelEngine:
                         root + "/" + f_name,
                         remote_base_path,
                         upload_configuration=upload_configuration,
+                        into_new_folder=True,
                     )
                     n_files += 1
                     update_upload_progress(n_dirs, n_files)
@@ -282,6 +289,7 @@ class ModelEngine:
                 from_local_model_path,
                 to_model_files_path,
                 upload_configuration=upload_configuration,
+                into_new_folder=True,
             )
             n_files += 1
             update_upload_progress(n_dirs, n_files)
@@ -405,6 +413,15 @@ class ModelEngine:
     def _build_resource_path(self, model_instance, artifact):
         return f"{model_instance.version_path}/{artifact}"
 
+    @events.tracking(
+        "model",
+        "create",
+        long=True,
+        key=lambda self, model_instance, *a, **k: {
+            "name": model_instance.name,
+            "version": model_instance.version,
+        },
+    )
     def _save(
         self,
         model_instance,
@@ -418,23 +435,37 @@ class ModelEngine:
         is_shared_registry = model_instance.shared_registry_project_name is not None
 
         if is_shared_registry:
-            dataset_models_root_path = f"{model_instance.shared_registry_project_name}::{constants.MODEL_REGISTRY.MODELS_DATASET}"
+            # Imported here: hsml.core.model_registry_api imports hsml.model, which imports this module.
+            from hsml.core import model_registry_api
+
+            model_instance._models_path = (
+                model_registry_api.ModelRegistryApi()
+                ._get(
+                    model_instance.shared_registry_project_name,
+                    project_id=model_instance.model_registry_id,
+                )
+                ._models_path
+            )
+            dataset_models_root_path = (
+                model_instance._models_path
+                or f"{model_instance.shared_registry_project_name}::{constants.MODEL_REGISTRY.MODELS_DATASET}"
+            )
             model_instance._project_name = model_instance.shared_registry_project_name
         else:
             dataset_models_root_path = constants.MODEL_REGISTRY.MODELS_DATASET
             model_instance._project_name = _client._project_name
+            model_instance._models_path = f"/Projects/{_client._project_backing_name}/{constants.MODEL_REGISTRY.MODELS_DATASET}"
 
         util._validate_metrics(model_instance.training_metrics)
         util._validate_model_name(model_instance._name)
 
-        if not self._dataset_api.path_exists(dataset_models_root_path):
-            raise AssertionError(
-                f"{dataset_models_root_path} dataset does not exist in this project. Please enable the Serving service or create it manually."
-            )
-
-        # Create /Models/{model_instance._name} folder
+        # Create /Models/{model_instance._name} folder; an existing one shows the dataset exists.
         dataset_model_name_path = dataset_models_root_path + "/" + model_instance._name
         if not self._dataset_api.path_exists(dataset_model_name_path):
+            if not self._dataset_api.path_exists(dataset_models_root_path):
+                raise AssertionError(
+                    f"{dataset_models_root_path} dataset does not exist in this project. Please enable the Serving service or create it manually."
+                )
             self._engine._mkdir(dataset_model_name_path)
 
         model_instance = self._set_model_version(
@@ -894,6 +925,14 @@ class ModelEngine:
         response = self._dataset_api.read_content(hdfs_resource_path)
         return json.loads(response.content)
 
+    @events.tracking(
+        "model",
+        "delete",
+        key=lambda self, model_instance, *a, **k: {
+            "name": model_instance.name,
+            "version": model_instance.version,
+        },
+    )
     def _delete(self, model_instance):
         self._engine._delete(model_instance)
 

@@ -57,7 +57,7 @@ Deploy the backfill job and run it once, waiting for it: `hops job deploy <slug>
 It creates the feature groups in `tables` (offline, Delta), writes the two years of history up to the last midnight (UTC), adds each feature's description and tags each `analytics_table` `{"layer": "gold", "lifecycle": "<layer.lifecycle>"}`.
 A scheduled run appends `-start_time <fire instant>` to the program's arguments, which the program accepts and ignores (**hops-job**, Windows and backfill).
 When it fails, read its log (`hops job logs <slug>-backfill --stdout --tail 200`, which prints both stdout and stderr), fix the cause, and run it again; a rerun rewrites the same rows.
-Check each table's rows (`hops trino query --catalog delta --schema <project>_featurestore "SELECT count(*) FROM <table>_1"`, the project name lowercased) against the counts the job's log printed, and its tag (`hops fg tags <name>`).
+Check each table's rows (`hops trino query --catalog delta --schema <store> "SELECT count(*) FROM <table>_1"`, `<store>` as the STORE column of `hops fg list` shows it, `<backing name>_featurestore`) against the counts the job's log printed, and its tag (`hops fg tags <name>`).
 Record each in `outputs.tables` (`name`, `version`, `cadence`, `primary_key`, `event_time`, `rows`), the job in `outputs.jobs` (`{name, environment, tables}`, no cadence), and the backfill's end in `decisions`.
 
 ### semantic
@@ -66,11 +66,11 @@ The cumulative and year-over-year metrics need the day time spine: unless `hops 
 Register the dbt project in `semantic_project.path` as the semantic project `semantic_project.name`: `hops semantic create <name> --path "$(pwd)/<semantic_project.path>"`, then `hops semantic compile <name> --wait`.
 An `INVALID` build lists each issue at its file and line: fix the definitions, record why in `decisions`, and compile again.
 Then `hops semantic test <name>`, which runs every metric once on Trino and exits 1 on any failure.
-Record `outputs.semantic_project` (`name`, `id` from `hops semantic show <name>`, the serving `build`, and the number of `metrics` from `hops semantic metrics <name>`).
+Record `outputs.semantic_project` (`name`, `id` from `hops semantic info <name>`, the serving `build`, and the number of `metrics` from `hops semantic metrics <name>`).
 
 ### verify
 
-For each metric in `reconcile`, query its total over all time (`hops semantic query <name> --metrics <metric> -o json`) and run its SQL on Trino (`hops trino query --catalog delta --schema <project>_featurestore "<sql>"`); the two must be equal, to the cent for money.
+For each metric in `reconcile`, query its total over all time (`hops semantic query <name> --metrics <metric> -o json`) and run its SQL on Trino (`hops trino query --catalog delta --schema <store> "<sql>"`); the two must be equal, to the cent for money.
 Record each in `outputs.reconciled` (`metric`, `semantic`, `sql`, `match`); a mismatch is a defect in the definitions or the generator: find it, fix it, and verify again.
 Then run the saved queries (`hops semantic saved-queries <name>`, then `hops semantic query <name> --saved-query <saved query> --limit 5`) and two of the app's example questions by hand, as metric queries (`app/app.json`, `examples`), checking that each returns rows and that the year-over-year growth for the last full month is about 0.3, the generator's trend.
 
@@ -79,7 +79,7 @@ Then run the saved queries (`hops semantic saved-queries <name>`, then `hops sem
 The chat app's LLM is the account environment variables `LLM_URL`, `LLM_MODEL` and `LLM_API_KEY` of the member who starts it, which the Factory's form saved; never read or print their values.
 Before deploying, run the app here and smoke-test it: `uv pip install -r <app.path>/app-requirements.txt` when a package is missing, `APP_PORT=8080 python <app.path>/app.py &`, then with `curl` on `http://localhost:8080`: `/health` answers, `/api/catalog` lists the semantic project's metrics, and `/api/run` with `{"query": {"metrics": ["revenue"], "group_by": ["metric_time__month"]}}` returns rows; stop it afterwards.
 `/api/catalog` also says whether the LLM is configured (`llm.configured`): when it is, `/api/ask` with one example question returns `"kind": "answer"`; when it is not, say that the app answers questions once the three variables are set in the account settings and the app is restarted, and go on, since its Build a query form works without them.
-Deploy the app from this directory, as **hops-app** says for a custom app, with its path relative to the project (the terminal's `/hopsfs/` mount is the project's root, and an app path is not read through it): `hops app create <app.name> --path "${PWD#/hopsfs/}/<app.path>/app.py" --app-kind custom --entrypoint-command "python app.py" --app-port 8080 --readiness-probe-path /health --environment <app.environment> --start`, adding `app-requirements.txt` to the environment only when **hops-app**'s reuse rule says the environment lacks them.
+Deploy the app from this directory, as **hops-app** says for a custom app, with its path relative to the project (the terminal's `/hopsfs/` mount is the project's root, and an app path is not read through it): `hops app create <app.name> --path "${PWD#/hopsfs/}/<app.path>/app.py" --app-kind custom --entrypoint-command "python app.py" --app-port 8080 --readiness-probe-path /health --env <app.environment> --start`, adding `app-requirements.txt` to the environment only when **hops-app**'s reuse rule says the environment lacks them.
 `--start` returns once the readiness probe on `/health` passes; check that it serves with `hops app info <app.name>` (`kubectl port-forward` is refused in a Hopsworks terminal).
 When it fails, read `hops app logs <app.name>`, fix the cause, and `hops app redeploy <app.name>`.
 Record `outputs.app` (`name`, `url` from `hops app url <app.name>`).

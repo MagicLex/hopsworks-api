@@ -17,7 +17,7 @@ Basic shell commands and `hops` may locate the table and check that `duckdb` is 
 
 1. `hops datasource list` shows mail data sources (type `GMAIL` or `OUTLOOK`); `hops datasource sync-jobs <data source>` shows the feature group each sync job fills.
    If the user named a mailbox, its feature group is the local part plus the first domain label plus `s`, lower case, other characters as `_`.
-2. The table is `/hopsfs/featurestore/<project>_featurestore.db/<feature group>_1`, with the project name in lower case.
+2. The table is `/hopsfs/featurestore/<store>.db/<feature group>_1`, where `<store>` is the group's feature store as `hops fg list` shows it in STORE (the project's backing name plus `_featurestore`, not its display name).
    Ask for the data source or feature group if it cannot be found; never invent a path.
 3. Check `duckdb --version` (2.0) and that the directory holds `_delta_log/`.
 
@@ -26,7 +26,7 @@ It needs no network.
 `T` stands for the table path:
 
 ```bash
-T=/hopsfs/featurestore/<project>_featurestore.db/<feature group>_1
+T=/hopsfs/featurestore/<store>.db/<feature group>_1
 ```
 
 ## Columns
@@ -42,7 +42,7 @@ T=/hopsfs/featurestore/<project>_featurestore.db/<feature group>_1
 | `subject`, `snippet` | Short text; search these before `body_text` |
 | `body_text` | Plain text body, large |
 | `labels` | Gmail: label ids, `INBOX`, `SENT`, `IMPORTANT`, `STARRED`, `UNREAD`, `CATEGORY_PROMOTIONS`, user labels as `Label_<n>`. Outlook: the folder path, such as `Inbox` or `Sent Items`, then the categories |
-| `attachments` | Full paths, `/Projects/<project>/.../day=.../<message_id>/<file>` |
+| `attachments` | Full paths, `/Projects/<backing name>/.../day=.../<message_id>/<file>` |
 | `date_header`, `history_id`, `size_estimate` | Raw `Date` header, Gmail history id or Outlook change key, size in bytes |
 
 ## Search workflow
@@ -128,7 +128,7 @@ WHERE thread_id = '18c2f0d5e9a7b1c3'
 ORDER BY internal_date;"
 ```
 
-Attachments of matching messages; in a terminal `/Projects/<project>/<path>` is `/hopsfs/<path>`:
+Attachments of matching messages; in a terminal `/Projects/<backing name>/<path>` is `/hopsfs/<path>`:
 
 ```bash
 duckdb -init /opt/duckdb/init.sql -c "
