@@ -946,7 +946,7 @@ def _upload_key_file(
         if dataset_api.exists(relative):
             raise click.ClickException(
                 f"{relative} already exists in the project; pass --key-path "
-                f"/Projects/{project.name}/{relative} to reuse it, or choose another name."
+                f"/Projects/{project.backing_name}/{relative} to reuse it, or choose another name."
             )
         for directory in (os.path.dirname(target_dir), target_dir):
             if not dataset_api.exists(directory):
@@ -964,7 +964,7 @@ def _upload_key_file(
             f"Could not upload the key file '{relative}': {exc}"
         ) from exc
     output.info("Uploaded key to %s", relative)
-    return f"/Projects/{project.name}/{relative}", created
+    return f"/Projects/{project.backing_name}/{relative}", created
 
 
 def _discard_upload(ctx: click.Context, created: list[str]) -> None:
