@@ -286,7 +286,7 @@ class DatasetApi:
                         # uploading files in the same folder is done concurrently
                         futures = [
                             executor.submit(
-                                self._upload_file,
+                                self._upload_tracked_file,
                                 f_name,
                                 root + os.sep + f_name,
                                 remote_base_path,
@@ -316,6 +316,11 @@ class DatasetApi:
                     change,
                 )
         return upload_path + "/" + os.path.basename(local_path)
+
+    def _upload_tracked_file(self, file_name, local_path, upload_path, *args):
+        # One line per file of a directory upload, as a single-file upload writes.
+        with events.tracked("file", "create", path=upload_path + "/" + file_name):
+            self._upload_file(file_name, local_path, upload_path, *args)
 
     def _upload_file(
         self,
