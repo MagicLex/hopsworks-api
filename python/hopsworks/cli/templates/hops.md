@@ -42,7 +42,7 @@ Already known, no need to look again:
   pipeline over it** (a feature pipeline, bronze, silver and gold layers, a scheduled job) and
   **Explore it in a notebook** (a notebook over the table). After a source read or mount, add
   **Build a semantic layer using selected tables**; picked, ask with `multiSelect`: **All**
-  first, then up to three. The other one or two options are what
+  first, then up to three. The rest (four in all) are what
   the result points to: a dashboard over it, a model, or the whole ML system. An app only when
   the user asked for one.
 - When the result could carry a model (a table with an outcome column, a feature group with a key
