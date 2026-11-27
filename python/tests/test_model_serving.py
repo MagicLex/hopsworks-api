@@ -1351,3 +1351,15 @@ class TestDeployAgentFrameworkAndChatConfig:
         # Assert
         assert predictor._agent_framework is None
         assert predictor._chat_config == {"protocol": "hopsworks"}
+def test_project_path_uses_the_backing_name():
+    ms = model_serving.ModelServing(
+        project_name="Display", project_id=99, project_backing_name="backing1"
+    )
+
+    assert ms.project_path == "/Projects/backing1"
+
+
+def test_project_path_without_backing_name_uses_the_project_name():
+    ms = model_serving.ModelServing(project_name="proj", project_id=99)
+
+    assert ms.project_path == "/Projects/proj"

@@ -52,6 +52,7 @@ class ModelServingApi:
             _client._project_name,
             _client._project_id,
             project_namespace=project_namespace,
+            project_backing_name=_client._project_backing_name,
         )
 
     def _load_default_configuration(self):
