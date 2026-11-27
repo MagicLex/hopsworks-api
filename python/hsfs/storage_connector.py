@@ -4246,7 +4246,7 @@ class SqlConnector(StorageConnector):
             user: The database username, stored in your account as an env var when you save it.
             password: The database password, stored in your account as a secret when you save it.
             wallet_path:
-                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<project>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
+                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<backing name>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
                 The wallet has to be in HopsFS for the test to read it.
                 Defaults to the wallet already bound.
             wallet_password: The password of the wallet, when it has one.
@@ -4322,7 +4322,7 @@ class SqlConnector(StorageConnector):
             user: The database username, stored in your account as an env var.
             password: The database password, stored in your account as a secret.
             wallet_path:
-                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<project>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
+                An Oracle wallet zip already uploaded to your home directory in this project, under `/Projects/<backing name>/Users/<username>/.datasources/<name>/`, where `<name>` is the lower-cased form of `<NAME>`.
                 A wallet anywhere else is refused.
                 Defaults to the wallet already bound; to drop a bound wallet, call `delete_credentials()` first.
             wallet_password: The password of the wallet, when it has one.

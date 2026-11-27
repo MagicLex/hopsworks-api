@@ -116,12 +116,15 @@ def register_provider(provider: str, username: str, token: str, host: str):
 
 @click.group("git")
 def git_group() -> None:
-    """Git provider credentials Hopsworks holds for your account."""
+    """Git credentials Hopsworks holds for your account."""
 
 
 @git_group.group("provider")
 def provider_group() -> None:
-    """List, register or remove a Git provider personal access token."""
+    """Git provider tokens Hopsworks holds for you.
+
+    List, register or remove a Git provider personal access token.
+    """
 
 
 @provider_group.command("list")
@@ -129,6 +132,7 @@ def provider_group() -> None:
 def list_cmd(ctx: click.Context) -> None:
     """List the Git providers registered for your account.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -184,8 +188,9 @@ def set_cmd(
     """Register a personal access token for a Git provider.
 
     Idempotent: an existing registration for the same provider and host is left
-    alone unless ``--force`` is given, so scripts can call this unconditionally.
+    alone unless `--force` is given, so scripts can call this unconditionally.
 
+    \f
     Args:
         ctx: Click context.
         provider: github, gitlab or bitbucket.
@@ -232,20 +237,25 @@ def set_cmd(
 @provider_group.command("delete")
 @click.option("--provider", default="github", show_default=True)
 @click.option("--host", help="Provider host (default: the provider's public host).")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
-def delete_cmd(ctx: click.Context, provider: str, host: str | None) -> None:
+def delete_cmd(ctx: click.Context, provider: str, host: str | None, yes: bool) -> None:
     """Remove a registered Git provider token.
 
+    \f
     Args:
         ctx: Click context.
         provider: github, gitlab or bitbucket.
         host: Provider host, defaulting to the provider's public host.
+        yes: Skip confirmation when True.
     """
     label = canonical_provider(provider)
     host = (host or default_host(label)).strip()
     session.get_project(ctx)
     if not find_provider(label, host):
         raise click.ClickException(f"No {label} token registered for {host}.")
+    if not yes:
+        output.confirm(f"Remove the {label} token for {host}?")
     git_provider_api.GitProviderApi()._delete_provider(label, host)
     if output.JSON_MODE:
         output.print_json({"provider": label, "host": host, "deleted": True})

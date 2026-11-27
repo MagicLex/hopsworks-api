@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import humps
 import requests
 from hopsworks_apigen import public
-from hopsworks_common import usage, util
+from hopsworks_common import events, usage, util
 from hopsworks_common.client.exceptions import (
     SemanticBuildException,
     SemanticLayerException,
@@ -571,6 +571,9 @@ class SemanticProject:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "semantic", "update", long=True, key=lambda self, *a, **k: {"name": self._name}
+    )
     def compile(self, wait: bool = True) -> SemanticBuild:
         """Compile the definitions under `root_path` into a build.
 
@@ -592,6 +595,7 @@ class SemanticProject:
         if not wait:
             build = api._compile(self, wait)
             self._latest_build = build
+            events.note(id=self._id, build=build.id, status=build.status)
             return build
         # One budget for the whole wait, every request included: the server's own wait and the polls.
         deadline = time.monotonic() + _COMPILE_TIMEOUT_SECONDS
@@ -610,6 +614,7 @@ class SemanticProject:
             while build.status not in _FINAL_BUILD_STATUSES:
                 time.sleep(_COMPILE_POLL_SECONDS)
                 build = api._get_build(self, build.id, timeout=budget())
+            events.note(id=self._id, build=build.id, status=build.status)
             # A compile in FOLLOW mode moves the build queries use.
             self.update_from_response_json(api._get(self, timeout=budget()))
             if build.status == "VALID":
@@ -688,7 +693,7 @@ class SemanticProject:
         This object is updated in place.
 
         Parameters:
-            root_path: Directory of the definitions, relative to the project, under `/hopsfs/`, or `/Projects/<project>/...`.
+            root_path: Directory of the definitions, relative to the project, under `/hopsfs/`, or `/Projects/<backing name>/...`.
             format: Format of the definitions; `AUTO` detects it from the files.
             deployment_mode: `FOLLOW` serves every new valid build; `PINNED` serves a build until another is promoted.
 
@@ -850,7 +855,7 @@ class SemanticProject:
     def serving(self) -> SemanticServing:
         """The build the gateway answers this project's queries from, and whether a newer compile is pending or invalid.
 
-        The gateway keeps each caller's view of the project for up to a minute, so a newly served build can take that long to show.
+        The request names the build this object read as current, so a gateway that knows the hint serves a promoted build at once; an older gateway keeps each caller's view for up to a minute.
 
         Returns:
             The serving build.
@@ -1125,6 +1130,13 @@ class SemanticProject:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "dashboard",
+        "create",
+        key=lambda self, metrics=None, group_by=None, title=None, *a, **k: {
+            **({"name": title} if title else {})
+        },
+    )
     def create_dashboard(
         self,
         metrics: str | Sequence[str] | None = None,
@@ -1175,6 +1187,8 @@ class SemanticProject:
         response = self._semantic_layer_api._create_dashboard(
             self, {key: value for key, value in request.items() if value is not None}
         )
+        # Titles are not unique: the id tells which dashboard this change made.
+        events.note(id=response["dashboardId"])
         return {
             "id": response["dashboardId"],
             "title": response.get("title"),

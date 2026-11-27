@@ -399,7 +399,7 @@ class TestProjects:
     def test_show_names_the_owner(self, sales):
         sales.owner = "meb10001"
 
-        result = _run("show", "sales")
+        result = _run("info", "sales")
 
         assert result.exit_code == 0, result.output
         assert ["owner", "meb10001"] in [
@@ -529,7 +529,7 @@ class TestTags:
     def test_get_prints_the_value(self, sales):
         sales.get_tag.return_value = {"owner": "finance"}
 
-        result = _run("tag", "get", "sales", "ownership")
+        result = _run("tag", "info", "sales", "ownership")
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == {"owner": "finance"}
@@ -538,7 +538,7 @@ class TestTags:
     def test_get_of_a_missing_tag_exits_one(self, sales):
         sales.get_tag.return_value = None
 
-        result = _run("tag", "get", "sales", "ownership")
+        result = _run("tag", "info", "sales", "ownership")
 
         assert result.exit_code == 1
         assert "has no tag 'ownership'" in result.output
@@ -625,7 +625,7 @@ class TestProjectSettings:
             "no valid build", error_msg="semantic project 7 has no valid build"
         )
 
-        result = _run("show", "sales")
+        result = _run("info", "sales")
 
         assert result.exit_code == 0, result.output
         assert "has no valid build" in result.output
@@ -634,7 +634,7 @@ class TestProjectSettings:
         sales.get_tags.return_value = {"owner": "finance", "domain": "sales"}
         sales.missing_mandatory_tags = ["certified"]
 
-        result = _run("show", "sales")
+        result = _run("info", "sales")
 
         assert result.exit_code == 0, result.output
         assert "domain, owner" in result.output

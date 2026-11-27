@@ -349,6 +349,113 @@ class TestDataSourceApiInferMetadata:
         assert [f.name for f in preview_data.features] == ["col_a", "col_b"]
         assert [f.type for f in preview_data.features] == ["string", "bigint"]
 
+    def test_data_source_data_warns_once_for_renamed_source_columns(self):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            preview_data = dsd.DataSourceData.from_response_json(
+                {
+                    "features": [
+                        {"name": "Id", "type": "string"},
+                        {"name": "AccountNumber", "type": "string"},
+                        {"name": "Billing City", "type": "string"},
+                        {"name": "amount", "type": "double"},
+                    ],
+                    "preview": [],
+                }
+            )
+
+        assert [str(w.message) for w in caught] == [
+            "3 source columns are renamed for the feature store (lower case,"
+            " underscores): Id to id, AccountNumber to accountnumber, Billing City"
+            " to billing_city."
+        ]
+        assert [f.name for f in preview_data.features] == [
+            "id",
+            "accountnumber",
+            "billing_city",
+            "amount",
+        ]
+        assert [f.original_name for f in preview_data.features] == [
+            "Id",
+            "AccountNumber",
+            "Billing City",
+            "amount",
+        ]
+        assert [f.column_name for f in preview_data.features] == [
+            "Id",
+            "AccountNumber",
+            "Billing City",
+            "amount",
+        ]
+
+    def test_data_source_data_counts_many_renamed_columns_in_one_short_line(self):
+        import warnings
+
+        names = [f"Field{i}__c" for i in range(64)] + ["amount"]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dsd.DataSourceData.from_response_json(
+                {"features": [{"name": n, "type": "string"} for n in names], "preview": []}
+            )
+
+        assert [str(w.message) for w in caught] == [
+            "64 source columns are renamed for the feature store (lower case,"
+            " underscores): Field0__c to field0__c, Field1__c to field1__c,"
+            " Field2__c to field2__c, and 61 more."
+        ]
+
+    def test_data_source_data_names_columns_that_become_one_feature(self):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dsd.DataSourceData.from_response_json(
+                {
+                    "features": [
+                        {"name": "Id", "type": "string"},
+                        {"name": "ID", "type": "string"},
+                        {"name": "Billing City", "type": "string"},
+                        {"name": "billing_city", "type": "string"},
+                        {"name": "Name", "type": "string"},
+                    ],
+                    "preview": [],
+                }
+            )
+
+        assert [str(w.message) for w in caught] == [
+            "4 source columns are renamed for the feature store (lower case,"
+            " underscores): Id to id, ID to id, Billing City to billing_city, and 1"
+            " more. These become one feature name: Id, ID to id; Billing City,"
+            " billing_city to billing_city."
+        ]
+
+    def test_data_source_data_one_renamed_column_reads_singular(self):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dsd.DataSourceData.from_response_json(
+                {"features": [{"name": "Id", "type": "bigint"}], "preview": []}
+            )
+
+        assert [str(w.message) for w in caught] == [
+            "1 source column is renamed for the feature store (lower case,"
+            " underscores): Id to id."
+        ]
+
+    def test_data_source_data_lower_case_columns_warn_nothing(self):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dsd.DataSourceData.from_response_json(
+                {"features": [{"name": "id", "type": "bigint"}], "preview": []}
+            )
+
+        assert caught == []
+
     def test_infer_metadata_handles_data_source_data_from_response_json(self):
         # Regression for the infer_metadata break (HWORKS-2876, d830e12f6):
         # _infer_metadata reads feature.name / feature.type, which raised

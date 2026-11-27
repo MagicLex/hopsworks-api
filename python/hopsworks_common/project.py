@@ -82,6 +82,7 @@ class Project:
         datasets=None,
         creation_status=None,
         namespace=None,
+        backing_name=None,
         department_id=None,
         department_name=None,
         **kwargs,
@@ -89,6 +90,7 @@ class Project:
         self._id = project_id
         self._name = project_name
         self._owner = owner
+        self._project_team = project_team
         self._description = description
         self._created = created
 
@@ -104,6 +106,8 @@ class Project:
         self._project_members_api = project_members_api.ProjectMembersApi()
         self._search_api = search_api.SearchApi()
         self._project_namespace = namespace
+        # Older backends return no backingName; there the backing name is the project name.
+        self._backing_name = backing_name or project_name
         self._department = department_name
         self._trino_api = None
         self._trino_catalog_api = None
@@ -129,11 +133,24 @@ class Project:
         """Name of the project."""
         return self._name
 
+    @property
+    def backing_name(self):
+        """Immutable name behind the project's HopsFS folder, HDFS users and databases.
+
+        Equals the project name for projects created before backing names were introduced.
+        """
+        return self._backing_name
+
     @public
     @property
     def owner(self):
         """Owner of the project."""
         return self._owner
+
+    @property
+    def project_team(self):
+        """Members of the project as the project info lists them, with their role and user."""
+        return self._project_team
 
     @public
     @property
@@ -168,7 +185,7 @@ class Project:
     def home_path(self) -> str:
         """Path to the current user's home directory within this project.
 
-        The home directory is located at `/Projects/<project_name>/Users/<username>`
+        The home directory is located at `/Projects/<backing_name>/Users/<username>`
         and is created automatically when a user joins a project.
         """
         _client = client._get_instance()
@@ -176,9 +193,9 @@ class Project:
             # External client stores the username directly
             username = _client._username
         else:
-            # Internal client: HDFS user is formatted as <project_name>__<username>
+            # Internal client: HDFS user is formatted as <backing_name>__<username>
             username = _client._project_user().split("__", 1)[1]
-        return f"/Projects/{self._name}/Users/{username}"
+        return f"/Projects/{self._backing_name}/Users/{username}"
 
     @public
     def get_feature_store(self, name: str | None = None) -> FeatureStore:
@@ -533,6 +550,86 @@ class Project:
                 self._owner = email
             raise
         self._owner = email
+
+    @public
+    def invite_member(self, email: str, role: str) -> dict:
+        """Invite an email address with no Hopsworks account to the project.
+
+        Once an account with that address is activated and its email is proven, it becomes a member with `role`.
+        See [`ProjectMembersApi.invite_member`][hopsworks_common.core.project_members_api.ProjectMembersApi.invite_member].
+
+        Example:
+            ```python
+            import hopsworks
+
+            project = hopsworks.login()
+
+            project.invite_member("dana@example.com", "Data scientist")
+            ```
+
+        Parameters:
+            email: Email address to invite.
+            role: The project role it gets, one of `Data owner`, `Data scientist`, `Observer`,
+                `Feature store restricted`. Matched regardless of case.
+
+        Returns:
+            The pending invite: `email`, `role`, `inviter`, `created` and `expires`.
+
+        Raises:
+            ValueError: If `role` is not a built-in project role.
+            hopsworks.client.exceptions.RestAPIError: If the backend encounters an error when handling the request, for example if a user with that email exists (add them instead).
+        """
+        return self._project_members_api.invite_member(email, role)
+
+    @public
+    def get_invites(self) -> list[dict]:
+        """Get the pending invites of the project.
+
+        Returns:
+            One dict per pending invite: `email`, `role`, `inviter`, `created` and `expires`.
+
+        Raises:
+            hopsworks.client.exceptions.RestAPIError: If the backend encounters an error when handling the request.
+        """
+        return self._project_members_api.get_invites()
+
+    @public
+    def get_member_usage(self, since: str = "7d", until: str | None = None) -> dict:
+        """Get each member's container use of the project over a window of whole hours.
+
+        The numbers are use, not the bill: CPU core-hours and memory GB-hours of the pods each member started, from an
+        hourly rollup. A Data owner reads every member; any other member reads their own row. GPU and storage are not
+        split by member.
+
+        ```python
+        usage = project.get_member_usage(since="7d")
+        for m in usage["members"]:
+            print(m["email"], m["cpuCoreHours"])
+        ```
+
+        Parameters:
+            since: How far back from `until`, in hours (`36h`) or days (`7d`).
+            until: An ISO-8601 instant; now when not given.
+
+        Returns:
+            A dict with `since`, `until`, `hours`, `hoursMissing`, `members`, `notByMember`, `gpu` and `storage`.
+
+        Raises:
+            hopsworks.client.exceptions.RestAPIError: If the window is invalid or longer than the use kept.
+        """
+        return self._project_members_api.get_usage(since, until)
+
+    @public
+    def cancel_invite(self, email: str) -> None:
+        """Cancel the pending invite of an email address.
+
+        Parameters:
+            email: The invited email address.
+
+        Raises:
+            hopsworks.client.exceptions.RestAPIError: If the project has no pending invite for `email`.
+        """
+        self._project_members_api.cancel_invite(email)
 
     @public
     def get_search_api(self) -> search_api.SearchApi:

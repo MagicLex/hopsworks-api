@@ -42,11 +42,11 @@ treated as the project path of the same name.
 
 **The SDK takes project paths only.** `env.install_requirements()` forwards the
 string to the backend, which resolves it against the project root
-`/Projects/<project>/`. A local-only path fails with:
+`/Projects/<backing name>/`. A local-only path fails with:
 
 ```
-Error: Install failed: ... HTTP code: 404 ...
-{"errorCode":110008,"usrMsg":"path: /Projects/<project>/requirements.txt",
+Error: Could not install into environment '<env>': ... HTTP code: 404 ...
+{"errorCode":110008,"usrMsg":"path: /Projects/<backing name>/requirements.txt",
  "errorMsg":"File not found."}
 ```
 

@@ -7,7 +7,7 @@ they test). The `ccfraud` package imports Faker and geoip2, which only
 `<slug>-jobs-env` holds, so the tests run as the `<slug>-tests` job from this
 file's HopsFS path, in place, like the pipelines:
 
-    hops job deploy <slug>-tests hdfs:///Projects/<project>/<system dir>/tests/run_unit.py \
+    hops job deploy <slug>-tests hdfs:///Projects/<backing name>/<system dir>/tests/run_unit.py \
         --env <slug>-jobs-env --run --wait
 
 Their conftest replaces the hopsworks modules with mocks for the whole process,
