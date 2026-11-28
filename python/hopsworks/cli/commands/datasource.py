@@ -181,7 +181,8 @@ def connector_info(ctx: click.Context, name: str) -> None:
         value = getattr(sc, attr, None)
         rows.append([label, "-" if value is None else value])
     group = _synced_group(sc)
-    if group in _GOOGLE:
+    # A Google Drive source with a key path is read by files ingestion jobs, not syncs.
+    if group in _GOOGLE and getattr(sc, "key_path", None) is None:
         syncs = (_google_send("GET", _google_syncs_path(fs, group, name)) or {}).get(
             "items"
         ) or []
@@ -933,7 +934,7 @@ def _upload_key_file(
     """
     if not _UPLOAD_NAME.match(connector_name):
         raise click.ClickException(
-            f"--key-file needs a data source name of letters, digits, - and _, not {connector_name!r}; "
+            f"A --key-file upload needs a data source name of letters, digits, - and _, not {connector_name!r}; "
             "upload the key yourself and pass --key-path instead."
         )
     project = session.get_project(ctx)
@@ -959,7 +960,9 @@ def _upload_key_file(
         raise
     except Exception as exc:  # noqa: BLE001
         _discard_upload(ctx, created)
-        raise click.ClickException(f"Key upload failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not upload the key file '{relative}': {exc}"
+        ) from exc
     output.info("Uploaded key to %s", relative)
     return f"/Projects/{project.name}/{relative}", created
 
@@ -2949,7 +2952,9 @@ def _files_source(ctx: click.Context, name: str) -> Any:
     try:
         sc = fs.get_data_source(name).storage_connector
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Data source '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
     if sc is None:
         raise click.ClickException(f"Data source '{name}' not found.")
     if getattr(sc, "type", None) not in _FILES_SOURCE_TYPES:
@@ -3071,10 +3076,11 @@ def connector_ingest_files(
     job_name: str | None,
     no_run: bool,
 ) -> None:
-    """Copy the files under a prefix of an S3, GCS, ADLS, SFTP or Google Drive data source into a dataset.
+    """Copy files from a data source into a dataset.
 
-    Creates a files ingestion job and, unless --no-run, starts its first run.
+    The files are those under a prefix of an S3, GCS, ADLS, SFTP or Google Drive data source. Creates a files ingestion job and, unless --no-run, starts its first run.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3094,15 +3100,15 @@ def connector_ingest_files(
         no_run: Whether to skip the first run.
     """
     if keep_original and not transform_script:
-        raise click.ClickException("--keep-original needs --transform-script.")
+        raise click.ClickException("Option --keep-original needs --transform-script.")
     if index_name is not None and not index_name.strip():
-        raise click.ClickException("--index-name must not be empty.")
+        raise click.ClickException("Option --index-name must not be empty.")
     if max_file_size_mb is not None and max_file_size_mb < 0:
-        raise click.ClickException("--max-file-size-mb must be 0 or more.")
+        raise click.ClickException("Option --max-file-size-mb must be 0 or more.")
     index: bool | str = index_name if index_name else index_files
     sc = _files_source(ctx, name)
     job = _call(
-        "Create",
+        "create the files job",
         lambda: sc.ingest_files(
             dataset=dataset,
             prefix=prefix,
@@ -3120,7 +3126,7 @@ def connector_ingest_files(
     )
     execution_id = None
     if not no_run:
-        execution = _call("Run", lambda: job.run(await_termination=False))
+        execution = _call("run the files job", lambda: job.run(await_termination=False))
         execution_id = getattr(execution, "id", None)
     if output.JSON_MODE:
         output.print_json(_files_job_dict(job, execution_id))
@@ -3141,14 +3147,17 @@ def connector_ingest_files(
 @click.argument("name")
 @click.pass_context
 def connector_files_jobs(ctx: click.Context, name: str) -> None:
-    """List the files ingestion jobs of an S3, GCS, ADLS, SFTP or Google Drive data source.
+    """List the files ingestion jobs of a data source.
 
+    The data source is an S3, GCS, ADLS, SFTP or Google Drive one.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
     """
     sc = _files_source(ctx, name)
-    jobs = _call("Listing files jobs", sc.get_files_ingestion_jobs)
+    jobs = _call("list the files jobs", sc.get_files_ingestion_jobs)
     if output.JSON_MODE:
         output.print_json([_files_job_dict(j) for j in jobs])
         return

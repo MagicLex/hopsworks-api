@@ -56,6 +56,7 @@ def lookups(tmp_path, monkeypatch):
             "hopsworks.cli.commands.datasource._get_connector", return_value={"id": 1}
         ),
         mock.patch("hopsworks.cli.commands.datasource._groups_on", return_value=[]),
+        mock.patch("hopsworks.cli.commands.datasource._provided_connector"),
     ):
         yield providers
 
