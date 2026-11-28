@@ -19,6 +19,9 @@ hops skills info hops-app references/look.md             # the design system in 
 hops skills info hops-design
 ```
 
+Project files the app's build needs (a CSV, an image in `Resources/`): read them as
+the **hops** skill's *Project files* rule (in a Hopsable sandbox, `$HOPS_TEMPLATES/SKILL.md`) says. The deploy uploads the app's own directory.
+
 The skeleton is `references/app_skeleton/` next to the SKILL.md whose path the first command
 prints. A new app starts as a copy of it (`cp -r <that folder> apps/<name>`), so the hops-design
 tokens and components (`static/app.css`), the chart theme and the vendored Chart.js are in place
