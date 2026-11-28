@@ -151,6 +151,7 @@ class DatasetApi:
                     total=file_size,
                     bar_format="{desc}: {percentage:.3f}%|{bar}| {n_fmt}/{total_fmt} elapsed<{elapsed} remaining<{remaining}",
                     desc="Downloading",
+                    disable=util._progress_disabled(),
                 )
             except Exception:
                 self._log.exception("Failed to initialize progress bar.")
@@ -319,6 +320,7 @@ class DatasetApi:
                     total=file_size,
                     bar_format="{desc}: {percentage:.3f}%|{bar}| {n_fmt}/{total_fmt} elapsed<{elapsed} remaining<{remaining}",
                     desc=f"Uploading {local_path}",
+                    disable=util._progress_disabled(),
                 )
             except Exception:
                 self._log.exception("Failed to initialize progress bar.")
