@@ -22,7 +22,7 @@ hops datasource google-drive sync mirror <source> <id> --on|--off
 ```bash
 hops datasource create hopsfs <source>_files --dataset <dataset>
 hops fg create-external <name> --connector <source>_files --path traffic --data-format csv \
-  --primary-key date,sessiondefaultchannelgroup,country
+  --primary-key date,sessiondefaultchannelgroup,country --no-statistics
 ```
 
 A row is one date, channel and country. For another grain (one row per date and country), sum `sessions`, `activeusers` and `conversions` over the external feature group in a feature pipeline that writes its own feature group, scheduled after the daily load.
