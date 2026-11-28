@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import inspect
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import click
@@ -666,10 +667,18 @@ def app_deploy(
         raise click.ClickException(
             f"App name '{name}' is all digits: pick a name with a letter."
         )
-    kind, entry = _app_entry(local_dir)
-    node = kind == "NODEJS"
+    chat = _chat_folder(local_dir)
+    if chat:
+        kind, entry = "CUSTOM", _chat_entry(local_dir)
+        if environment is not None:
+            raise click.UsageError(
+                f"{local_dir} is a chat app: it runs on the chat app's own environment, so --env does not apply."
+            )
+    else:
+        kind, entry = _app_entry(local_dir)
+    node = chat or kind == "NODEJS"
     files = _deploy_files(local_dir, node)
-    wanted = _wanted(local_dir, node)
+    wanted = None if chat else _wanted(local_dir, node)
     project = session.get_project(ctx)
     has_requirements = wanted is not None
     if environment is None and has_requirements:
@@ -691,7 +700,7 @@ def app_deploy(
         installed,
         apps,
         existing,
-    ) = _deploy_target(project, name, environment, has_requirements, kind, entry)
+    ) = _deploy_target(project, name, environment, has_requirements, kind, entry, chat)
 
     mountpoint = _project_mount(project)
     try:
@@ -760,9 +769,12 @@ def app_deploy(
             f"Could not clear old files from {remote_dir}: {exc}"
         ) from exc
     files_sha256 = _tree_sha256(contents)
-    moving = existing is not None and not (
-        getattr(existing, "app_path", None) or ""
-    ).endswith(f"{remote_dir}/{entry}")
+    # A chat app with no folder yet runs the image's default app: not a move.
+    moving = (
+        existing is not None
+        and bool(getattr(existing, "app_path", None))
+        and not existing.app_path.endswith(f"{remote_dir}/{entry}")
+    )
     previous = None
     try:
         if existing is not None:
@@ -835,6 +847,44 @@ def app_deploy(
         click.echo(url)
 
 
+@app_group.command("chat-template")
+@click.argument("local_dir", type=click.Path(file_okay=False, dir_okay=True))
+def app_chat_template(local_dir: str) -> None:
+    """Write a chat app's template into an empty folder.
+
+    LOCAL_DIR is new or empty. The folder is an agent's chat app on `@hopsworks/agent-chat`: `server.mjs`,
+    the page in `web/`, and `AGENTS.md` for whoever changes it. The package's
+    README and CHANGELOG go in `.hopsworks/agent-chat/` for reference; the deploy
+    skips that folder. Change the page, then `hops app deploy <chat app> LOCAL_DIR`.
+
+    \f
+    Args:
+        local_dir: The folder to write.
+    """
+    import os
+    import shutil
+
+    if os.path.exists(local_dir) and (
+        not os.path.isdir(local_dir) or os.listdir(local_dir)
+    ):
+        raise click.UsageError(f"{local_dir} is not an empty folder.")
+    template = _CHAT_REFERENCES / "chat_template"
+    for source in sorted(template.rglob("*")):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(template)
+        # npm and wheels drop a packed .gitignore, so the template's is "gitignore"
+        target = Path(local_dir, relative.parent, ".gitignore" if relative.name == "gitignore" else relative.name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    reference = Path(local_dir, ".hopsworks", "agent-chat")
+    reference.mkdir(parents=True, exist_ok=True)
+    for name in ("README.md", "CHANGELOG.md"):
+        shutil.copyfile(_CHAT_REFERENCES / "agent-chat" / name, reference / name)
+    output.success("✓ Wrote the chat app template to %s", local_dir)
+    click.echo(local_dir)
+
+
 def _deploy_target(
     project: Any,
     name: str,
@@ -842,6 +892,7 @@ def _deploy_target(
     has_requirements: bool,
     kind: str,
     entry: str,
+    chat: bool = False,
 ) -> tuple[str, str, str, bool, str, Any, tuple[str, str] | None, Any, Any]:
     """Where `hops app deploy` puts the app and the environment it runs in; prepare-env resolves through here too."""
     username = env_commands.current_username()
@@ -861,6 +912,32 @@ def _deploy_target(
         existing = apps.get_app(name)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not find app '{name}': {exc}") from exc
+    is_chat_app = bool(getattr(existing, "agent_chat_app", False))
+    if chat != is_chat_app:
+        if chat:
+            raise click.ClickException(
+                f"{_DEPLOY_PACKAGE} names a chat app, and '{name}' is not an agent's chat app. "
+                "Deploy it with --name of the chat app (`agent.chat_app()`), "
+                "or create one first with `agent.create_chat_app()`."
+            )
+        raise click.ClickException(
+            f"App '{name}' is an agent's chat app. Start its folder with `hops app chat-template <dir>`, "
+            f"then deploy that folder to it."
+        )
+    if chat:
+        # A chat app keeps the kind, entrypoint and environment Hopsworks gave it; the deploy
+        # sets only the folder it runs and that folder's hash.
+        return (
+            remote_dir,
+            app_path,
+            existing.environment_name,
+            False,
+            copy,
+            dataset_api,
+            None,
+            apps,
+            existing,
+        )
     # An app deployed to its creator's home moves to Resources at this deploy;
     # its install record is read where it was.
     moving = existing is not None and (
@@ -1106,6 +1183,75 @@ def _app_entry(local_dir: str) -> tuple[str, str]:
     raise click.UsageError(
         f"{local_dir} has no app.py, nor a {_DEPLOY_PACKAGE} whose main names the server."
     )
+
+
+# The major of @hopsworks/agent-chat the chat template is made for, as in its package.json.
+_CHAT_MAJOR = "2"
+_CHAT_ENTRY = "server.mjs"
+_CHAT_REFERENCES = (
+    Path(__file__).resolve().parents[2]
+    / "skills"
+    / "agents"
+    / "hops-agent-chat"
+    / "references"
+)
+
+
+def _chat_package(local_dir: str) -> dict | None:
+    """The folder's package.json when it names a chat app (`hopsworks.agentChat`), else None."""
+    import json
+    import os
+
+    package = os.path.join(local_dir, _DEPLOY_PACKAGE)
+    if not os.path.isfile(package):
+        return None
+    try:
+        data = json.loads(_local_text(package))
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    hopsworks = data.get("hopsworks")
+    if not isinstance(hopsworks, dict) or "agentChat" not in hopsworks:
+        return None
+    return data
+
+
+def _chat_folder(local_dir: str) -> bool:
+    return _chat_package(local_dir) is not None
+
+
+def _chat_entry(local_dir: str) -> str:
+    """A chat folder's entry file, once its package.json passes: server.mjs at its root, no dependencies of its own."""
+    import os
+
+    data = _chat_package(local_dir) or {}
+    if not os.path.isfile(os.path.join(local_dir, _CHAT_ENTRY)):
+        raise click.UsageError(
+            f"{local_dir} is a chat app and has no {_CHAT_ENTRY} at its root."
+        )
+    extra = sorted(
+        {
+            str(dep)
+            for field in ("dependencies", "devDependencies", "optionalDependencies")
+            for dep in (data.get(field) or {})
+        }
+    )
+    if extra:
+        raise click.UsageError(
+            f"{local_dir} lists packages in {_DEPLOY_PACKAGE}: {', '.join(extra)}. "
+            "A chat app runs on its image's packages only (@hopsworks/agent-chat and what it ships): remove them."
+        )
+    major = str(data["hopsworks"]["agentChat"]).split(".")[0]
+    if major != _CHAT_MAJOR:
+        output.warn(
+            "%s was made for @hopsworks/agent-chat %s.x, and this CLI's template is %s.x: "
+            "see .hopsworks/agent-chat/CHANGELOG.md in a folder from `hops app chat-template`.",
+            local_dir,
+            major,
+            _CHAT_MAJOR,
+        )
+    return _CHAT_ENTRY
 
 
 def _wanted(local_dir: str, node: bool) -> str | None:

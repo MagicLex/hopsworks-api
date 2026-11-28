@@ -1220,44 +1220,60 @@ class Agent:
         Returns:
             `App | None`: the chat app.
         """
+        name = self._chat_app_name()
+        return None if name is None else self._app(name)
+
+    def _chat_app_name(self) -> str | None:
         try:
             body = self._http.get(f"/serving/{self.id}/chatapp")
         except AgentServingError as err:
             if err.status == 404:
                 return None
             raise
-        return self._app(str(body["name"]))
+        return str(body["name"])
 
     @public
-    def customize_chat_app(self) -> App:
-        """Run the agent's chat app from a folder of the project, where its page and server can be changed.
+    def customize_chat_app(self, path: str) -> App:
+        """Deploy a folder as the agent's chat app, the way `hops app deploy <chat app> <path>` does.
 
-        The folder is `Resources/chat-apps/<app name>`.
-        On its next start, which this triggers, the app copies its template there (nothing already there is overwritten) and runs from it.
-        The template holds a `server.mjs`, a React page in `web/`, a `theme.css`, and an `AGENTS.md` for whoever changes it, coding agents in the Hopsworks terminal included.
+        Start the folder with `hops app chat-template <path>`: a `server.mjs` on `@hopsworks/agent-chat`, a React page in `web/`, a `theme.css`, and an `AGENTS.md` for whoever changes it.
+        The folder goes to `Resources/apps/<app name>/`, sealed with the hash of its files, and the app restarts on that copy; a later change to the project folder runs only after the next deploy.
         The chat's core (who is chatting, whose conversations are whose, how the agent is reached) stays the image's `@hopsworks/agent-chat` package, so it keeps getting fixes.
-        Restart the app (`app.redeploy()`) to see a change; one that fails to load or build is logged and the default page is served instead.
-        Customizing an app that already is keeps its folder.
+        The folder lists no packages of its own: the app runs on its image's packages only.
+        A `server.mjs` that fails to load fails the start, and the app's log says why.
 
         Example:
             ```python
             agent = project.get_agent_serving().get_agent("support")
-            app = agent.customize_chat_app()  # now edit Resources/chat-apps/support_chat
-            app.redeploy()  # after a change
+            app = agent.customize_chat_app("support_chat")  # a folder from `hops app chat-template support_chat`
             ```
 
+        Parameters:
+            path: The local folder to deploy.
+
         Returns:
-            `App`: the chat app.
+            `App`: the chat app, serving the folder.
 
         Raises:
-            `AgentServingError`: If the agent has no chat app.
+            `AgentServingError`: If the agent has no chat app, or the deploy is refused.
         """
-        from hopsworks_common import events  # noqa: PLC0415
+        import click  # noqa: PLC0415
+        import hopsworks  # noqa: PLC0415
+        from hopsworks.cli.commands.app import app_deploy  # noqa: PLC0415
 
-        with events.tracked("app", "update") as change:
-            body = self._http.post(f"/serving/{self.id}/chatapp/customize", json={})
-            change.key = {"name": str(body["name"]), "version": None, "path": None}
-        return self._app(str(body["name"]))
+        name = self._chat_app_name()
+        if name is None:
+            raise AgentServingError(
+                f"agent {self.name} has no chat app: create it with create_chat_app()"
+            )
+        try:
+            with click.Context(
+                app_deploy, obj={"project": hopsworks.get_current_project()}
+            ) as ctx:
+                ctx.invoke(app_deploy, name=name, local_dir=path)
+        except click.ClickException as err:
+            raise AgentServingError(err.format_message()) from err
+        return self._app(name)
 
     @public
     def delete_chat_app(self) -> None:

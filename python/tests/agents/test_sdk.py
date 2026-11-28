@@ -2756,17 +2756,48 @@ class TestChatApp:
         assert support.chat_app() == "App(support_chat)"
         assert session.sent == [("GET", "/serving/7/chatapp", None, None)]
 
-    def test_customizing_it_asks_the_deployment_and_returns_the_app(self):
-        _, support, session = agent(
-            Reply(
-                {
-                    "name": "support_chat",
-                    "customDir": "Resources/chat-apps/support_chat",
-                }
-            )
+    def test_customizing_it_deploys_the_folder_to_the_chat_app(self, monkeypatch):
+        import click
+        import hopsworks
+        from hopsworks.cli.commands import app as app_commands
+
+        deployed = {}
+
+        def deploy(**kwargs):
+            deployed.update(kwargs, obj=click.get_current_context().obj)
+
+        project = object()
+        monkeypatch.setattr(app_commands.app_deploy, "callback", deploy)
+        monkeypatch.setattr(
+            hopsworks, "get_current_project", lambda: project, raising=False
         )
-        assert support.customize_chat_app() == "App(support_chat)"
-        assert session.sent == [("POST", "/serving/7/chatapp/customize", None, {})]
+        _, support, session = agent(Reply({"name": "support_chat"}))
+        assert support.customize_chat_app("chat_dir") == "App(support_chat)"
+        assert session.sent == [("GET", "/serving/7/chatapp", None, None)]
+        assert deployed["name"] == "support_chat"
+        assert deployed["local_dir"] == "chat_dir"
+        assert deployed["obj"] == {"project": project}
+
+    def test_customizing_it_says_why_the_deploy_refused(self, monkeypatch):
+        import click
+        import hopsworks
+        from hopsworks.cli.commands import app as app_commands
+
+        def deploy(**kwargs):
+            raise click.UsageError("chat_dir lists packages in package.json: left-pad.")
+
+        monkeypatch.setattr(app_commands.app_deploy, "callback", deploy)
+        monkeypatch.setattr(
+            hopsworks, "get_current_project", lambda: object(), raising=False
+        )
+        _, support, _ = agent(Reply({"name": "support_chat"}))
+        with pytest.raises(AgentServingError, match="left-pad"):
+            support.customize_chat_app("chat_dir")
+
+    def test_customizing_it_needs_a_chat_app(self):
+        _, support, _ = agent(Reply(status=404))
+        with pytest.raises(AgentServingError, match="has no chat app"):
+            support.customize_chat_app("chat_dir")
 
     def test_deleting_it(self):
         _, support, session = agent(Reply(status=204))

@@ -37,18 +37,3 @@ def test_creating_the_chat_app_writes_an_app_create_line_with_its_name(
     (line,) = [json.loads(x) for x in events_file.read_text().splitlines()]
     assert (line["kind"], line["op"], line["phase"]) == ("app", "create", "done")
     assert line["key"]["name"] == "rondocs_chat"
-
-
-def test_customizing_the_chat_app_writes_an_app_update_line(tmp_path, monkeypatch):
-    events_file = tmp_path / "events.jsonl"
-    monkeypatch.setenv("HOPS_EVENTS_FILE", str(events_file))
-    agent, _ = _agent(monkeypatch)
-
-    agent.customize_chat_app()
-
-    (line,) = [json.loads(x) for x in events_file.read_text().splitlines()]
-    assert (line["kind"], line["op"], line["key"]["name"]) == (
-        "app",
-        "update",
-        "rondocs_chat",
-    )
