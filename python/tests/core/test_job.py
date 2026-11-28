@@ -424,7 +424,7 @@ class TestJob:
 
     def test_run_python_app_waits_for_running(self, mocker, backend_fixtures):
         # Arrange — PYTHON_APP calls _wait_for_running, not _wait_until_finished
-        mocker.patch("hopsworks_common.client._get_instance")
+        mocker.patch("hopsworks_common.client._get_instance").return_value._base_url = "https://myhost:443"
         mocker.patch("hopsworks_common.execution.Execution.get_url")
         mock_execution_api = mocker.patch(
             "hopsworks_common.core.execution_api.ExecutionApi",
@@ -556,7 +556,7 @@ class TestExecution:
         )
 
         # Act + Assert
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/myapp/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/myapp/"
 
     def test_app_url_without_monitoring(self, mocker):
         # Arrange

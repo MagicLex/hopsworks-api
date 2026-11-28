@@ -48,12 +48,21 @@ _FAILED_STATES = frozenset(
 )
 
 
+
+def _origin(base_url: str) -> str:
+    """The client's base URL without a trailing slash or its scheme's default port, as a browser writes it."""
+    parts = urllib.parse.urlsplit(base_url.rstrip("/"))
+    if parts.port is not None and parts.port == {"https": 443, "http": 80}.get(parts.scheme):
+        host = parts.hostname or ""
+        parts = parts._replace(netloc=f"[{host}]" if ":" in host else host)
+    return urllib.parse.urlunsplit(parts)
+
 def absolute_url(app_url: str) -> str:
     """The app URL the backend returns (a path under /hopsworks-api) on the client's host."""
     app_url = app_url.lstrip("/")
     if app_url.startswith(("http://", "https://")):
         return app_url
-    base_url = client._get_instance()._base_url.rstrip("/")
+    base_url = _origin(client._get_instance()._base_url)
     if app_url.startswith("hopsworks-api/"):
         return base_url + "/" + app_url
     return base_url + "/hopsworks-api/" + app_url
@@ -484,7 +493,7 @@ class App:
         project = urllib.parse.quote(_client._project_name, safe="")
         name = urllib.parse.quote(self._name, safe="")
         return (
-            _client._base_url.rstrip("/")
+            _origin(_client._base_url)
             + "/hopsworks-api/pythonapp/"
             + project
             + "/"

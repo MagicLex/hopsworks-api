@@ -77,7 +77,7 @@ class TestExecution:
             job=mock.Mock(),
         )
 
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
     def test_app_url_when_running_with_prefixed_monitoring_path(self, mocker):
         mock_client = mocker.patch("hopsworks_common.client._get_instance")
@@ -89,7 +89,7 @@ class TestExecution:
             job=mock.Mock(),
         )
 
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
     def test_app_url_none_when_not_running(self, mocker):
         mocker.patch("hopsworks_common.client._get_instance")
@@ -128,7 +128,7 @@ class TestExecution:
             job=mock.Mock(),
         )
 
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
 
 class TestExecutionPerTable:
