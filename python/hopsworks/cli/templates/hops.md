@@ -112,7 +112,8 @@ is the whole dispatch:
    feature view makes the view inside the model piece; "score the deals daily with the best
    model" when a model exists is the inference piece alone. "Serve", "real-time", "an endpoint" or
    "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference. "An
-   agent", "a chatbot", "an assistant" or "a chat over my data" is the agent piece.
+   agent", "a chatbot", "an assistant", "a chat over my data" or a chat UI to talk to the data is the
+   agent piece, never an app that calls a model itself: the agent piece is traced.
 2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
    inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
    `not listed`, not a count alone), the piece is not among them, and no earlier step of this
