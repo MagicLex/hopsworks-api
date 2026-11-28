@@ -492,6 +492,13 @@ def _get_cached_api_key_path():
 
 def _prompt_project(valid_connection, project, is_saas, project_id=None):
     if project_id is not None:
+        # The session is per project: bind it before the project is read from it.
+        try:
+            _client = client._get_instance()
+        except Exception:  # noqa: BLE001 - no client yet: nothing to bind
+            _client = None
+        if _client is not None and _client._is_external():
+            _client._bind_session(str(project_id))
         try:
             return valid_connection._project_api._get_project_by_id(project_id)
         except RestAPIError as x:
