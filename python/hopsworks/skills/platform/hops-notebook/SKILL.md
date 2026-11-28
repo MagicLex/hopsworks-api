@@ -66,3 +66,9 @@ hops notebook start --shutdown-hours 8  # Hopsworks stops it 8 h after its start
   in JupyterLab, and a save replaces the file.
 - Done when every `hops notebook run` exited 0: each prints `ran as In [n]` or the cell's error.
   A notebook from an earlier session: `hops notebook info` shows a `RUN` number on every code cell.
+- Data from a data source is read through Hopsworks, never with a database driver (psycopg2,
+  SQLAlchemy, pymysql) and a credential from a secret. Mount a query as an external feature group
+  first (`hops fg create-external <fg> --connector <ds> --query "select ... limit 1000" --no-statistics`, the
+  query in the source's `schema.table`, not the `--database` name), then read it in a cell with
+  `fs.get_feature_group("<fg>", 1).read()`. A SQL data source's own `read()` raises
+  NotImplementedError outside Spark. When the mount fails, report its error; never fall back to a driver.
