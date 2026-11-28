@@ -46,8 +46,8 @@ Part of **hops-app**: the contract **hops-app-builder** follows, read for every 
   LIMIT 1`. Values are bound as `?` parameters, never formatted into the SQL;
   `limit` is capped (`MAX_LIMIT`), and results are cached for `CACHE_SECONDS`.
   Never read a whole feature group into pandas to sort or filter it per request.
-- **Where the source lives.** `Users/<user>/apps/<name>/` (`~/apps/<name>/` in a
-  terminal; `./apps/<name>/` from a laptop, uploaded by `hops app deploy`),
+- **Where the source lives.** `./apps/<name>/` (`~/apps/<name>/` in a
+  terminal), uploaded by `hops app deploy` to `Resources/apps/<name>/`,
   or a git-backed app when the working directory is a GitHub repository
   (`--git-url`, `--git-branch`, `--git-auto-redeploy`, so a push is a
   redeploy). An ML system's app keeps its source in the system's repository
@@ -63,8 +63,8 @@ change after it:
 hops app deploy customer-lookup apps/customer-lookup
 ```
 
-It uploads the directory to `Users/<user>/apps/customer-lookup/` (missing
-folders created, files overwritten, dotfiles and `__pycache__` skipped), clones
+It uploads the directory to `Resources/apps/customer-lookup/` (missing
+folders created, files overwritten, other files removed, dotfiles and `__pycache__` skipped), clones
 `python-agent-pipeline` to `customer-lookup-app-env` when the directory has
 `app-requirements.txt` (installed again only when the file changed), creates the
 app (`app.py` as a custom app on port 8080, readiness on `/health`) or redeploys
