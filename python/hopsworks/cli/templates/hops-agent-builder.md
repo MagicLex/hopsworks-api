@@ -26,8 +26,11 @@ There is no ML system: no `system.yaml`, no build lease, no `set.py`. Load
    searchable first and pass the group to `--search`:
    `hops fg embed <fg> --text <col> [--schedule]` names the group `<fg>_<col>_emb`, starts its
    build as the job `<group>_embed` and returns the execution id; the build is not done when the
-   command returns, and a search over a group still building has no results. Read the job with
-   `hops job info <group>_embed` once, on a later step, and never poll or loop. When the command
+   command returns, and a search over a group still building has no results. Before the first step
+   that searches the group (an evaluation run, a test question), run
+   `hops job wait <group>_embed --execution <id> --timeout 600` once: it returns when the build
+   ends and exits 1 with the log tail if it failed. `hops job info` shows the job's config, not a
+   run state: never poll it or loop. When the command
    exits non-zero it started nothing: tell the user its message (capacity, a build already
    running, or the group being deleted) and do not retry in a loop. A source that changes gets `--schedule` (daily).
 2. **Write the entry script with `hops agent init`, then edit its output.** Never write the script
