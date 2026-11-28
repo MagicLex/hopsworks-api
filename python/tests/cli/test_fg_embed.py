@@ -276,7 +276,7 @@ def test_a_start_refused_for_capacity_names_the_retry_time():
 def test_a_platform_class_429_keeps_the_capacity_wording():
     from hopsworks.cli.commands.embed import start_refusal
 
-    for code in (130097, 130099, 130100, 130101):
+    for code in (130097, 130099, 130100, 130101, 130109, 130111, 130112, 130113):
         assert start_refusal(_refused(429, code, retry_after="5"), "g") == (
             "embed jobs are at capacity; nothing was started; retry after 5 s"
         )
@@ -296,11 +296,12 @@ def test_a_quota_busy_429_shows_the_server_message_and_is_not_resent(code):
     assert short_wait(refused) is None
 
 
-def test_a_start_refused_for_a_running_build_or_a_deletion_says_which():
+@pytest.mark.parametrize("running", [130095, 130108])
+def test_a_start_refused_for_a_running_build_or_a_deletion_says_which(running):
     from hopsworks.cli.commands.embed import start_refusal
 
     assert (
-        start_refusal(_refused(409, 130095), "g") == "a build of g is already running"
+        start_refusal(_refused(409, running), "g") == "a build of g is already running"
     )
     assert start_refusal(_refused(409, 130104), "g") == (
         "g is being deleted; nothing was started; run hops fg embed delete g again to finish it"
@@ -321,13 +322,14 @@ def _job(answers):
     return SimpleNamespace(name="g_embed", run=run)
 
 
-def test_a_start_refused_with_a_short_retry_after_waits_and_starts():
+@pytest.mark.parametrize("start_rate", [130099, 130111])
+def test_a_start_refused_with_a_short_retry_after_waits_and_starts(start_rate):
     from hopsworks.cli.commands.embed import _start
 
     slept = []
     job = _job(
         [
-            _refused(429, 130099, retry_after="2"),
+            _refused(429, start_rate, retry_after="2"),
             _refused(429, retry_after="1"),
             "execution",
         ]
@@ -367,25 +369,27 @@ def test_a_start_stops_resending_at_its_send_and_wait_budgets():
     assert slept == [30, 30]
 
 
-def test_a_conflict_or_another_failure_is_never_resent():
+@pytest.mark.parametrize("running", [130095, 130108])
+def test_a_conflict_or_another_failure_is_never_resent(running):
     from hopsworks.cli.commands.embed import _start
 
     slept = []
     with pytest.raises(click.ClickException, match="a build of g is already running"):
-        _start(_job([_refused(409, 130095)]), "g", sleep=slept.append)
+        _start(_job([_refused(409, running)]), "g", sleep=slept.append)
     with pytest.raises(click.ClickException, match="Could not start job 'g_embed'"):
         _start(_job([_refused(500, retry_after="1")]), "g", sleep=slept.append)
     assert slept == []
 
 
+@pytest.mark.parametrize("start_rate", [130099, 130111])
 def test_a_deletion_start_refused_with_a_short_retry_after_waits_and_starts(
-    monkeypatch,
+    monkeypatch, start_rate
 ):
     from hopsworks.cli.commands import embed
     from hopsworks_common.core import execution_api
 
     done = SimpleNamespace(id=7, args="", final_status="SUCCEEDED")
-    answers = iter([_refused(429, 130099, retry_after="0"), done])
+    answers = iter([_refused(429, start_rate, retry_after="0"), done])
     starts = []
 
     class Executions:

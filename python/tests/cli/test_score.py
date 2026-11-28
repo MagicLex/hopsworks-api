@@ -513,7 +513,7 @@ def test_a_429_says_nothing_started_and_when_to_retry():
 
 
 def test_a_platform_class_429_keeps_the_capacity_wording():
-    for code in (130097, 130099, 130100, 130101):
+    for code in (130097, 130099, 130100, 130101, 130109, 130111, 130112, 130113):
         body = {"errorCode": code, "errorMsg": "Jobs of this class are at capacity."}
         message = str(_refusal(429, body, {"Retry-After": "5"}))
         assert "the platform's scoring capacity is full" in message
