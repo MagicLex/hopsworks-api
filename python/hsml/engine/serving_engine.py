@@ -268,6 +268,7 @@ class ServingEngine:
                 if desc is not None:
                     pbar.set_description(desc)
 
+            started = False
             try:
                 update_progress(state, num_instances=0)
 
@@ -282,6 +283,7 @@ class ServingEngine:
                 self._serving_api._post(
                     deployment_instance, DEPLOYMENT.ACTION_START
                 )  # start deployment
+                started = True
 
                 state = self._poll_deployment_status(  # wait for status
                     deployment_instance,
@@ -290,7 +292,9 @@ class ServingEngine:
                     update_progress,
                 )
             except RestAPIError as re:
-                self._stop(deployment_instance, await_status=0)
+                # A refused start left nothing to roll back.
+                if started:
+                    self._stop(deployment_instance, await_status=0)
                 raise re
 
         # await_running=0 returns before the state is polled again
