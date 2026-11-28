@@ -283,3 +283,26 @@ def test_project_info_says_unavailable_when_the_quota_cannot_be_read(authed_conf
     assert result.exit_code == 0, result.output
     assert "unavailable" in result.output
     assert "Project" in result.output
+
+
+def test_project_info_shows_the_egress_policy(authed_config):
+    from tests.cli.test_egress import ENFORCED
+
+    result = _run_info(lambda method, path: ENFORCED if path[-1] == "egress" else QUOTA)
+    assert result.exit_code == 0, result.output
+    assert (
+        "enforced: 443/TCP 80/TCP 8000-8010/TCP (global); 6543/TCP (project)"
+        in result.output
+    )
+
+
+def test_project_info_says_egress_is_unavailable_when_it_cannot_be_read(authed_config):
+    def send(method, path):
+        if path[-1] == "egress":
+            raise RuntimeError("503")
+        return QUOTA
+
+    result = _run_info(send)
+    assert result.exit_code == 0, result.output
+    assert "Egress" in result.output and "unavailable" in result.output
+    assert "KUEUE (other)" in result.output
