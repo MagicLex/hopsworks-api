@@ -66,8 +66,10 @@ failed mount is reported with its error, not routed around.
 ## Check and return
 
 ```bash
-hops fg preview <name> --limit 1
+hops sql "SELECT * FROM <name>_<version> LIMIT 1"
 ```
+
+Several groups: one statement, `hops sql "(SELECT '<a>' AS fg FROM <a>_<version> LIMIT 1) UNION ALL (SELECT '<b>' FROM <b>_<version> LIMIT 1)"`, a line for each group with rows. A mounted group is not read by `hops sql`: `hops fg preview <name> --limit 1`.
 
 The row count you report is `rows sent`, as `generate.py` printed it after its insert, labelled
 "rows sent", never "rows written"; no count query.
