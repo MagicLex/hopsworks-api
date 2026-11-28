@@ -970,28 +970,22 @@ def app_stop(ctx: click.Context, name: str) -> None:
 @app_group.command("delete")
 @click.argument("name")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-@click.option(
-    "--force", is_flag=True, help="Stop the app first if it is still running."
-)
+# Accepted for old scripts and ignored: the delete stops a running app itself.
+@click.option("--force", is_flag=True, hidden=True)
 @click.pass_context
 def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
-    """Delete an app.
+    """Delete an app. A running app is stopped first.
 
     \f
     Args:
         ctx: Click context.
         name: App name.
         yes: Skip confirmation when True.
-        force: Stop the app first if still running.
+        force: Ignored; kept so old scripts still parse.
     """
     a = _get_app(ctx, name)
     if not yes:
         output.confirm(f"Delete app '{name}'?")
-    if force:
-        import contextlib
-
-        with contextlib.suppress(Exception):
-            a.stop()
     try:
         a.delete()
     except Exception as exc:  # noqa: BLE001

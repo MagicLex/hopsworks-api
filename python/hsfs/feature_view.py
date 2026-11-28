@@ -179,7 +179,7 @@ class FeatureView:
     def __init__(
         self,
         name: str,
-        query: query.Query,
+        query: query.Query | None,
         featurestore_id: int,
         id: int | None = None,
         version: int | None = None,
@@ -205,7 +205,8 @@ class FeatureView:
         self._tags: list[tag.Tag] | None = tags
         self._query = query
         # Check if query has any ambiguous columns and print warning in these cases:
-        query.check_and_warn_ambiguous_features()
+        if query is not None:
+            query.check_and_warn_ambiguous_features()
         self._featurestore_id = featurestore_id
         self._feature_store_id = featurestore_id  # for consistency with feature group
         self._feature_store_name = featurestore_name
@@ -506,7 +507,7 @@ class FeatureView:
         """
         if not isinstance(feature_store_id, int):
             raise ValueError("`feature_store_id` should be an integer.")
-        FeatureViewApi(feature_store_id).delete_by_name_version(
+        FeatureViewApi(feature_store_id)._delete_by_name_version(
             feature_view_name, feature_view_version, force
         )
 
@@ -5351,10 +5352,13 @@ class FeatureView:
         tags = None
         if tags_response:
             tags = tag.Tag.from_response_json(tags_response)
+        # A view whose feature group was force-deleted comes back without a query;
+        # it must still load so it can be deleted.
+        query_json = json_decamelized.get("query")
         fv = cls(
             id=json_decamelized.get("id", None),
             name=json_decamelized["name"],
-            query=query.Query.from_response_json(json_decamelized["query"]),
+            query=query.Query.from_response_json(query_json) if query_json else None,
             featurestore_id=json_decamelized["featurestore_id"],
             version=json_decamelized.get("version", None),
             description=json_decamelized.get("description", None),
@@ -5454,11 +5458,12 @@ class FeatureView:
             JSON deserialized class object.
         """
         other = self.from_response_json(json_dict)
+        if other._query is not None:
+            self._query = other._query
         for key in [
             "name",
             "description",
             "id",
-            "query",
             "featurestore_id",
             "version",
             "labels",
@@ -6533,7 +6538,16 @@ class FeatureView:
     @public
     @property
     def query(self) -> query.Query:
-        """Query of the feature view."""
+        """Query of the feature view.
+
+        Raises:
+            hopsworks.client.exceptions.FeatureStoreException: If the view has no query because a feature group it reads was deleted.
+        """
+        if self._query is None:
+            raise FeatureStoreException(
+                f"Feature view '{self._name}' v{self._version} has no query: a feature group it reads was deleted. "
+                "Only `delete()` works on it now."
+            )
         return self._query
 
     @query.setter
@@ -6569,7 +6583,7 @@ class FeatureView:
             Those three are siblings under `FeatureGroupBase`, which is why the return type is
             the base and not `FeatureGroup`.
         """
-        return self._query._left_feature_group
+        return self.query._left_feature_group
 
     @public
     def get_feature(self, name: str) -> Feature:
@@ -6602,7 +6616,7 @@ class FeatureView:
                 is not in the feature view's query, or is ambiguous across
                 joined feature groups and no prefix was used.
         """
-        return self._query.get_feature(name)
+        return self.query.get_feature(name)
 
     @public
     @property
