@@ -42,7 +42,10 @@ SYSTEMS = [
 def logged_in(monkeypatch):
     from hopsworks.cli import teardown
 
-    monkeypatch.setattr(session, "get_project", lambda ctx: mock.Mock(name="churndemo"))
+    project = mock.Mock(name="churndemo")
+    # A project with no copies of the system's environments.
+    project.get_environment_api.return_value.get_environments.return_value = []
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
     monkeypatch.setattr(teardown, "require_data_owner", lambda project: None)
 
 
@@ -156,6 +159,8 @@ def test_the_inventory_takes_what_the_system_created_downstream_first():
         "feature group billing (every other version churn-example made)",
         "data source acme_snowflake",
         "environment churn-example-train-env",
+        "environments churn-example-app-app-env-* (each user's copy)",
+        "environments churn-example-train-env-app-env-* (each user's copy)",
         "directory Resources/churn-example",
     ]
     # Read, shared or pre-existing: never deleted.
@@ -516,6 +521,48 @@ def test_a_feature_groups_monitoring_job_goes_with_its_configuration():
     assert deleted == ["config"]
 
 
+def test_each_users_copy_of_an_environment_goes_and_nothing_else():
+    from hopsworks.cli import teardown
+
+    deleted = []
+    envs = [
+        SimpleNamespace(name=n, delete=lambda n=n: deleted.append(n))
+        for n in (
+            "churn-example-app-app-env",
+            "churn-example-app-app-env-meb10000",
+            "churn-example-app-app-env-alice001",
+            "churn-example-app-app-env-backup",
+            "churn-example-app-app-env-meb10000-old",
+            "churn-example-v2-app-app-env-meb10000",
+        )
+    ]
+    by_name = {e.name: e for e in envs}
+    project = SimpleNamespace(
+        get_environment_api=lambda: SimpleNamespace(
+            get_environments=lambda: envs, get_environment=by_name.get
+        )
+    )
+    deleter = teardown.Deleter(project)
+    planned = deleter.expand(
+        [
+            teardown.Asset("app", "churn-example-app"),
+            teardown.Asset("environment", "churn-example-app-app-env-*"),
+            teardown.Asset("environment", "other-app-env-*"),
+        ]
+    )
+    assert [str(a) for a in planned] == [
+        "app churn-example-app",
+        "environment churn-example-app-app-env-meb10000",
+        "environment churn-example-app-app-env-alice001",
+    ]
+    for asset in planned[1:]:
+        assert deleter.delete(asset) == "deleted"
+    assert deleted == [
+        "churn-example-app-app-env-meb10000",
+        "churn-example-app-app-env-alice001",
+    ]
+
+
 def test_delete_removes_the_code_last_and_a_retry_after_it_finishes(
     monkeypatch, logged_in, system_dir
 ):
@@ -639,7 +686,10 @@ def test_a_data_scientist_is_refused_before_anything_is_deleted(
 ):
     from hopsworks.cli import teardown
 
-    monkeypatch.setattr(session, "get_project", lambda ctx: mock.Mock(name="churndemo"))
+    project = mock.Mock(name="churndemo")
+    # A project with no copies of the system's environments.
+    project.get_environment_api.return_value.get_environments.return_value = []
+    monkeypatch.setattr(session, "get_project", lambda ctx: project)
 
     def refuse(project):
         raise click.ClickException("only a Data owner can delete")
