@@ -300,7 +300,9 @@ def _send(
     from hopsworks_common import client
 
     namespace, name, project_id, platform_id = _route(project, deployment)
-    istio = client.istio._get_instance()
+    # Istio only from inside the cluster: an external client (a sandbox, a laptop) may not reach the
+    # ingress at all, so it goes through the Hopsworks REST route, the member or the platform one.
+    istio = None if client._get_instance()._is_external() else client.istio._get_instance()
     if istio is not None:
         from hopsworks_common.constants import PREDICTOR
         from hsml.core.serving_api import ServingApi
