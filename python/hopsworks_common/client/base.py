@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import contextvars
 import hashlib
 import logging
 import os
@@ -26,12 +27,16 @@ import re
 import socket
 import struct
 import tempfile
+import threading
 import time
 from urllib.parse import urlsplit
 
 import furl
 import requests
+import requests.adapters
 import urllib3
+import urllib3.connection
+import urllib3.connectionpool
 from hopsworks_apigen import also_available_as
 from hopsworks_common.client import auth, exceptions, session_cache
 from hopsworks_common.constants import _temp_dir
@@ -73,6 +78,89 @@ def _drain_mount() -> None:
 
 urllib3.disable_warnings(urllib3.exceptions.SecurityWarning)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+_request_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "hopsworks_request_deadline", default=None
+)
+
+
+@contextlib.contextmanager
+def request_deadline(deadline: float):
+    """Bound every request sent inside the block by a monotonic deadline.
+
+    A request that names its own `deadline` keeps the earlier of the two; a nested block can only shorten it.
+    The calls the SDK makes on the caller's behalf (reads, saves, polls) get the same bound without a parameter of their own.
+
+    Parameters:
+        deadline: Monotonic time (`time.monotonic()`) after which no request starts and no socket wait continues.
+    """
+    outer = _request_deadline.get()
+    token = _request_deadline.set(deadline if outer is None else min(outer, deadline))
+    try:
+        yield
+    finally:
+        _request_deadline.reset(token)
+
+
+# The sockets of the request running under a deadline, for its timer to shut down.
+_watched_sockets: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "hopsworks_watched_sockets", default=None
+)
+
+
+def _watch(sock) -> None:
+    sockets = _watched_sockets.get()
+    if sock is not None and sockets is not None:
+        sockets.append(sock)
+
+
+class _WatchedConnection:
+    """Registers the connection's socket as it connects, and again on each request over a kept-alive one."""
+
+    def _new_conn(self):
+        sock = super()._new_conn()
+        _watch(sock)
+        return sock
+
+    def request(self, *args, **kwargs):
+        _watch(self.sock)
+        return super().request(*args, **kwargs)
+
+
+class _WatchedHTTPConnection(_WatchedConnection, urllib3.connection.HTTPConnection):
+    pass
+
+
+class _WatchedHTTPSConnection(_WatchedConnection, urllib3.connection.HTTPSConnection):
+    pass
+
+
+class _WatchedHTTPConnectionPool(urllib3.connectionpool.HTTPConnectionPool):
+    ConnectionCls = _WatchedHTTPConnection
+
+
+class _WatchedHTTPSConnectionPool(urllib3.connectionpool.HTTPSConnectionPool):
+    ConnectionCls = _WatchedHTTPSConnection
+
+
+_WATCHED_POOLS = {
+    "http": _WatchedHTTPConnectionPool,
+    "https": _WatchedHTTPSConnectionPool,
+}
+
+
+class _WatchedAdapter(requests.adapters.HTTPAdapter):
+    """A requests adapter whose connections register their sockets with the request running under a deadline."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = _WATCHED_POOLS
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        manager = super().proxy_manager_for(proxy, **proxy_kwargs)
+        manager.pool_classes_by_scheme = _WATCHED_POOLS
+        return manager
 
 
 @also_available_as(
@@ -199,9 +287,12 @@ class Client:
             timeout: How long to wait for the connection and for each block of the response, in seconds, passed straight through to `requests`.
                 Without it a stalled connection blocks the caller indefinitely, so pass one wherever the caller has its own deadline to honour.
             deadline: Monotonic time after which no request, token refresh or rate-limit retry starts.
-                Each socket wait is clipped to the time left, so a response can finish after it; a successful one is returned.
-                Under it a cached session is not refreshed, and an error answer is closed unread and raised as
-                `requests.HTTPError` with its status and reason.
+                Each socket wait is clipped to the time left, and at the deadline the request's sockets are shut down, whatever phase it is in (connect, status and headers, body, rate-limit and token retries): it raises `Timeout`.
+                With `stream`, the caller's reading of the returned body is not bounded.
+                Under it a cached session is not refreshed. With `stream`, a `deadline` argument also makes an error answer close unread
+                and raise as `requests.HTTPError` with its status and reason. Without `stream` the body is already read, so an error
+                answer raises `RestAPIError`, as does one under an enclosing `request_deadline` block.
+                An enclosing `request_deadline` block applies when it is earlier.
             retry_while_unavailable: False sends the call once, for a caller that needs the backend's own answer to a gateway error.
 
         Returns:
@@ -214,6 +305,106 @@ class Client:
                 A call with its own `timeout` or `deadline`, or with `retry_while_unavailable=False`, is never retried.
         """
         _drain_mount()
+        # Only a streamed error body is still unread; a read one costs nothing and carries the error code callers key on.
+        bounded_error = deadline is not None and stream
+        ambient = _request_deadline.get()
+        if ambient is not None:
+            deadline = ambient if deadline is None else min(deadline, ambient)
+        if deadline is None:
+            return self._send_request_body(
+                method,
+                path_params,
+                query_params,
+                headers,
+                data,
+                stream,
+                files,
+                with_base_path_params,
+                timeout,
+                None,
+                retry_while_unavailable,
+                False,
+            )
+        return self._send_within(
+            method,
+            path_params,
+            query_params,
+            headers,
+            data,
+            stream,
+            files,
+            with_base_path_params,
+            timeout,
+            deadline,
+            retry_while_unavailable,
+            bounded_error,
+        )
+
+    def _send_within(self, *args):
+        """Run the request with every socket it opens or reuses shut down at the deadline.
+
+        A socket timeout bounds each wait for the next bytes, not a status line, headers or body that arrive one byte a second.
+        The connections register their sockets as they connect or are reused (`_WatchedAdapter`), so the timer cuts the request in any phase:
+        connect, status and headers, a body read for the result, a rate-limit check or a token retry.
+        With `stream=True` the caller's own reading of the body comes after this returns and is not bounded.
+        """
+        deadline, stream = args[9], args[5]
+        self._watch_session()
+        sockets = []
+        fired = threading.Event()
+
+        def cut() -> None:
+            fired.set()
+            for sock in list(sockets):
+                with contextlib.suppress(OSError):
+                    sock.shutdown(socket.SHUT_RDWR)
+
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), cut)
+        timer.daemon = True
+        token = _watched_sockets.set(sockets)
+        timer.start()
+        try:
+            result = self._send_request_body(*args)
+        except Exception as e:
+            if fired.is_set():
+                raise requests.exceptions.Timeout(
+                    "HTTP request still running at its deadline"
+                ) from e
+            raise
+        finally:
+            timer.cancel()
+            _watched_sockets.reset(token)
+        if fired.is_set():
+            # The cut may have ended a body early without an error.
+            if stream:
+                result.close()
+            raise requests.exceptions.Timeout(
+                "HTTP request still running at its deadline"
+            )
+        return result
+
+    def _watch_session(self) -> None:
+        for prefix in ("https://", "http://"):
+            adapter = self._session.adapters.get(prefix)
+            if type(adapter) is requests.adapters.HTTPAdapter:
+                self._session.mount(prefix, _WatchedAdapter())
+                adapter.close()
+
+    def _send_request_body(
+        self,
+        method,
+        path_params,
+        query_params,
+        headers,
+        data,
+        stream,
+        files,
+        with_base_path_params,
+        timeout,
+        deadline,
+        retry_while_unavailable,
+        bounded_error,
+    ):
         f_url = furl.furl(self._base_url)
         if with_base_path_params:
             base_path_params = ["hopsworks-api", "api"]
@@ -318,8 +509,8 @@ class Client:
             response.close()
             raise requests.exceptions.Timeout("HTTP request exceeded its deadline")
         if response.status_code // 100 != 2:
-            if deadline is not None:
-                # Reading the error body could outlast the deadline: status and reason only.
+            if bounded_error:
+                # Reading a streamed error body could outlast the deadline: status and reason only.
                 response.close()
                 raise requests.HTTPError(
                     f"HTTP {response.status_code} {response.reason} from {url}",
