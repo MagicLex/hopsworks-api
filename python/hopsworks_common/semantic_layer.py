@@ -1131,6 +1131,13 @@ class SemanticProject:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "dashboard",
+        "create",
+        key=lambda self, metrics=None, group_by=None, title=None, *a, **k: {
+            **({"name": title} if title else {})
+        },
+    )
     def create_dashboard(
         self,
         metrics: str | Sequence[str] | None = None,
@@ -1181,6 +1188,8 @@ class SemanticProject:
         response = self._semantic_layer_api._create_dashboard(
             self, {key: value for key, value in request.items() if value is not None}
         )
+        # Titles are not unique: the id tells which dashboard this change made.
+        events.note(id=response["dashboardId"])
         return {
             "id": response["dashboardId"],
             "title": response.get("title"),

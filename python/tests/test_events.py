@@ -497,3 +497,50 @@ def test_an_external_feature_group_create_is_reported(tmp_path, monkeypatch, moc
     (line,) = _lines(target)
     assert (line["kind"], line["op"], line["phase"]) == ("fg", "create", "done")
     assert line["key"] == {"name": "orders", "version": 1}
+
+
+def test_a_semantic_dashboard_line_carries_its_id(tmp_path, monkeypatch, mocker):
+    from hopsworks_common import semantic_layer
+    from hopsworks_common.core.semantic_layer_api import SemanticLayerApi
+
+    target = tmp_path / "events.jsonl"
+    monkeypatch.setenv(events.ENV_VAR, str(target))
+    send = mocker.patch(
+        "hopsworks_common.client._get_instance"
+    ).return_value._send_request
+    send.return_value = {"dashboardId": 12, "title": "Churn", "url": "https://h/d/12/"}
+    api = SemanticLayerApi.__new__(SemanticLayerApi)
+    api._project_id = 119
+    sp = semantic_layer.SemanticProject(id=4, name="churn", semantic_layer_api=api)
+
+    sp.create_dashboard(metrics="revenue", title="Churn")
+
+    (line,) = _lines(target)
+    assert (line["kind"], line["op"], line["phase"]) == ("dashboard", "create", "done")
+    assert line["key"] == {"name": "Churn"}
+    assert line["detail"] == {"id": 12}
+
+
+def test_a_folder_upload_writes_a_line_per_file(tmp_path, monkeypatch, mocker):
+    from hopsworks_common.core.dataset_api import DatasetApi
+
+    target = tmp_path / "events.jsonl"
+    monkeypatch.setenv(events.ENV_VAR, str(target))
+    scaffold = tmp_path / "scaffold"
+    (scaffold / "models").mkdir(parents=True)
+    (scaffold / "README.md").write_text("a")
+    (scaffold / "models" / "semantic.yml").write_text("b")
+    api = DatasetApi.__new__(DatasetApi)
+    mocker.patch.object(DatasetApi, "exists", return_value=False)
+    mocker.patch.object(DatasetApi, "mkdir")
+    mocker.patch.object(DatasetApi, "_upload_file")
+
+    api.upload(str(scaffold), "Resources/sem")
+
+    done = [line for line in _lines(target) if line["phase"] == "done"]
+    assert all((line["kind"], line["op"]) == ("file", "create") for line in done)
+    assert sorted(line["key"]["path"] for line in done) == [
+        "Resources/sem/scaffold",
+        "Resources/sem/scaffold/README.md",
+        "Resources/sem/scaffold/models/semantic.yml",
+    ]
