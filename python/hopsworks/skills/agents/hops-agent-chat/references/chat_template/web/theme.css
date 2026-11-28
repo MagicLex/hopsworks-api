@@ -1,0 +1,13 @@
+/* This app's look, loaded after the chat page's own styles. The page's colours
+   are variables (see .hopsworks/agent-chat/react/styles.css for all of them);
+   CopilotKit's chat takes its colours from them too. For example:
+
+:root {
+  --hw-accent: #5b4cff;
+  --hw-surface: #f6f5ff;
+}
+
+.hw-top h1 {
+  font-size: 1.1rem;
+}
+*/

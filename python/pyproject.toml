@@ -234,6 +234,8 @@ include = [
     "skills/**/*.txt",
     "skills/**/*.html",
     "skills/**/*.js",
+    "skills/**/*.mjs",
+    "skills/**/*.jsx",
     "skills/**/*.json",
     "skills/**/*.css",
     "skills/**/*.svg",

@@ -58,6 +58,7 @@ def _fake_app(**overrides):
     a.monitoring_config = overrides.get("monitoring_config")
     a.monitoringConfig = overrides.get("monitoringConfig")
     a.description = overrides.get("description")
+    a.agent_chat_app = overrides.get("agent_chat_app", False)
     a.app_base_path = overrides.get("app_base_path")
     a.proxy_path_mode = overrides.get("proxy_path_mode")
     a.readiness_probe_path = overrides.get("readiness_probe_path")
@@ -2250,3 +2251,153 @@ def test_deploy_writes_through_the_mount_only_when_it_serves_the_project(
     assert app_commands._project_mount(project) == (
         "/Projects/blah" if uses_mount else None
     )
+
+
+_CHAT_SOURCE = "/Projects/demo/Resources/apps/shop/server.mjs"
+_CHAT_ENTRYPOINT = "node /opt/hopsworks/agent-chat-app/server.mjs"
+
+
+def _chat_dir(tmp_path, package=None):
+    root = tmp_path / "shop"
+    (root / "web").mkdir(parents=True)
+    (root / "server.mjs").write_text("server")
+    (root / "web" / "main.jsx").write_text("page")
+    (root / "node_modules" / "x").mkdir(parents=True)
+    (root / "node_modules" / "x" / "index.js").write_text("x")
+    (root / ".hopsworks" / "agent-chat").mkdir(parents=True)
+    (root / ".hopsworks" / "agent-chat" / "README.md").write_text("ref")
+    (root / "package.json").write_text(
+        json.dumps(package or {"name": "shop", "hopsworks": {"agentChat": "2"}})
+    )
+    return root
+
+
+def _chat_app(execution_id, app_path=None):
+    a = _app(execution_id, env="python-app-pipeline")
+    a.agent_chat_app = True
+    a.app_kind = "CUSTOM"
+    a.entrypoint_command = _CHAT_ENTRYPOINT
+    a.app_path = app_path
+    return a
+
+
+def test_deploy_to_a_chat_app_sets_only_its_folder_and_hash(mock_project, tmp_path):
+    import hashlib
+
+    root = _chat_dir(tmp_path)
+    existing = _chat_app(3)
+    result, apps, dataset_api = _deploy(
+        mock_project, root, existing=existing, polls=[_app(4)]
+    )
+    assert result.exit_code == 0, result.output
+    uploaded = sorted(
+        os.path.relpath(c.kwargs["local_path"], root)
+        for c in dataset_api.upload.call_args_list
+    )
+    assert uploaded == ["package.json", "server.mjs", os.path.join("web", "main.jsx")]
+    tree = hashlib.sha256()
+    for relative in ["package.json", "server.mjs", "web/main.jsx"]:
+        body = (root / relative).read_bytes()
+        tree.update(f"{relative}\0{hashlib.sha256(body).hexdigest()}\n".encode())
+    apps._set_app_files.assert_called_once_with("shop", _CHAT_SOURCE, tree.hexdigest())
+    apps.create_app.assert_not_called()
+    mock_project.get_environment_api.assert_not_called()
+    assert dataset_api.records == []
+    existing.redeploy.assert_called_once_with(await_serving=False)
+    assert "Moved app" not in result.output
+
+
+def test_deploy_refuses_a_chat_folder_that_lists_packages(mock_project, tmp_path):
+    root = _chat_dir(
+        tmp_path,
+        {
+            "name": "shop",
+            "hopsworks": {"agentChat": "2"},
+            "dependencies": {"left-pad": "1.3.0"},
+            "devDependencies": {"vite": "7.0.0"},
+        },
+    )
+    result, apps, dataset_api = _deploy(mock_project, root, existing=_chat_app(3))
+    assert result.exit_code == 2
+    assert "left-pad, vite" in result.output
+    assert "image's packages only" in result.output
+    dataset_api.upload.assert_not_called()
+    apps._set_app_files.assert_not_called()
+
+
+def test_deploy_refuses_a_chat_folder_without_server_mjs(mock_project, tmp_path):
+    root = _chat_dir(tmp_path)
+    (root / "server.mjs").unlink()
+    result, _, dataset_api = _deploy(mock_project, root, existing=_chat_app(3))
+    assert result.exit_code == 2
+    assert "has no server.mjs at its root" in result.output
+    dataset_api.upload.assert_not_called()
+
+
+def test_deploy_refuses_a_chat_folder_onto_an_app_that_is_not_a_chat_app(
+    mock_project, tmp_path
+):
+    root = _chat_dir(tmp_path)
+    result, apps, dataset_api = _deploy(mock_project, root, existing=None)
+    assert result.exit_code == 1
+    assert "is not an agent's chat app" in result.output
+    dataset_api.upload.assert_not_called()
+    apps.create_app.assert_not_called()
+
+
+def test_deploy_refuses_another_folder_onto_a_chat_app(mock_project, tmp_path):
+    root = _app_dir(tmp_path)
+    result, apps, dataset_api = _deploy(mock_project, root, existing=_chat_app(3))
+    assert result.exit_code == 1
+    assert "hops app chat-template" in result.output
+    dataset_api.upload.assert_not_called()
+    apps._set_app_files.assert_not_called()
+
+
+def test_deploy_refuses_env_for_a_chat_folder(mock_project, tmp_path):
+    root = _chat_dir(tmp_path)
+    result, _, dataset_api = _deploy(
+        mock_project, root, "--env", "mine", existing=_chat_app(3)
+    )
+    assert result.exit_code == 2
+    assert "--env does not apply" in result.output
+    dataset_api.upload.assert_not_called()
+
+
+def test_chat_template_writes_a_template_of_the_clis_major(tmp_path):
+    target = tmp_path / "support_chat"
+    result = CliRunner().invoke(cli, ["app", "chat-template", str(target)])
+    assert result.exit_code == 0, result.output
+    package = json.loads((target / "package.json").read_text())
+    assert package["hopsworks"]["agentChat"].split(".")[0] == app_commands._CHAT_MAJOR
+    assert "dependencies" not in package
+    for relative in [
+        "server.mjs",
+        "web/main.jsx",
+        "web/theme.css",
+        "AGENTS.md",
+        ".gitignore",
+        ".hopsworks/agent-chat/README.md",
+        ".hopsworks/agent-chat/CHANGELOG.md",
+    ]:
+        assert (target / relative).is_file(), relative
+    assert not (target / "gitignore").exists()
+    assert app_commands._chat_folder(str(target))
+    assert app_commands._chat_entry(str(target)) == "server.mjs"
+    assert app_commands._deploy_files(str(target), True) == [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "package.json",
+        "server.mjs",
+        "web/main.jsx",
+        "web/theme.css",
+    ]
+
+
+def test_chat_template_refuses_a_folder_with_files(tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "keep.txt").write_text("mine")
+    result = CliRunner().invoke(cli, ["app", "chat-template", str(tmp_path / "x")])
+    assert result.exit_code == 2
+    assert "is not an empty folder" in result.output
+    assert (tmp_path / "x" / "keep.txt").read_text() == "mine"

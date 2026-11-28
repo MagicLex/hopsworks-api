@@ -130,11 +130,12 @@ Members open it with their Hopsworks login; `app.make_public()` shares it with a
 
 To change its page, layout or server, **customize** it rather than starting over:
 
-```python
-app = agent.customize_chat_app()  # runs from Resources/chat-apps/support_chat
+```bash
+hops app chat-template support_chat        # the template, in a new folder
+hops app deploy support_chat support_chat  # after editing: the chat app's name, then the folder
 ```
 
-The app copies its template into that project folder (a `server.mjs` on the image's `@hopsworks/agent-chat` package, a React page in `web/`, `theme.css`) and runs from it. **Read the folder's `AGENTS.md` before changing anything**: it lists the extension points (`<HopsworksChat />` slots and parts, `startChatApp()` options, a `routes` hook given who is asking) and what must stay the package's. The package is in the app's image, not the terminal's, so try a change with `app.redeploy()` and `app.get_logs()`; a folder that fails to build is logged and the default page is served. Removing the app's `CHAT_APP_DIR` variable goes back to the default app. An app that already has a page of its own can hold the chat instead (`create_app(..., agent=agent)` + `hopsworks-agent-chat` beside its server): see **hops-agent-chat**.
+The template is a `server.mjs` on the image's `@hopsworks/agent-chat` package, a React page in `web/` and `theme.css`. **Read the folder's `AGENTS.md` before changing anything**: it lists the extension points (`<HopsworksChat />` slots and parts, `startChatApp()` options, a `routes` hook given who is asking) and what must stay the package's. The deploy seals the folder with the hash of its files and restarts the app on that copy; it refuses a package.json that lists packages, since the app runs on its image's. A `server.mjs` that fails to load fails the start: read `hops app logs <chat app>`. An app that already has a page of its own can hold the chat instead (`create_app(..., agent=agent)` + `hopsworks-agent-chat` beside its server): see **hops-agent-chat**.
 
 ## Fix loop
 
