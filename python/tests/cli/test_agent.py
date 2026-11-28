@@ -224,8 +224,9 @@ def test_agent_create_sets_a_memory_limit(mock_project, tmp_path):
     assert result.exit_code == 0, result.output
     resources = ms.deploy_agent.call_args.kwargs["resources"]
     assert resources.limits.memory == 3072
-    # The rest keep the platform defaults.
-    assert resources.limits.cores is not None and resources.requests.memory is not None
+    # What is not given is left for the backend to fill.
+    assert resources.limits.cores is None
+    assert resources.requests is None
 
 
 def test_agent_list_falls_back_to_model_name_heuristic(mock_project):
