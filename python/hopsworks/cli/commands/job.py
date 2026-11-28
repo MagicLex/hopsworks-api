@@ -8,6 +8,7 @@ follows the same memoized-session pattern as the rest of the CLI.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -246,6 +247,16 @@ def _job_to_dict(job: Any) -> dict[str, Any]:
     help='Arguments passed to the program, split as shell words: quote a value that holds spaces ("2026-10-16 00:00:00").',
 )
 @click.option("--description", help="Free-form description of the job.")
+@click.option(
+    "--resources",
+    default=None,
+    help=(
+        "Resources the job runs with, as JSON with the configuration fields to set, e.g. "
+        '\'{"resourceConfig": {"cores": 2, "memory": 8192}}\' or '
+        "'{\"spark.executor.memory\": 8192}'. Other fields keep the type's default. "
+        "A start beyond the project's quota is refused."
+    ),
+)
 @click.pass_context
 def job_create(
     ctx: click.Context,
@@ -255,6 +266,7 @@ def job_create(
     environment: str | None,
     app_args: str | None,
     description: str | None,
+    resources: str | None,
 ) -> None:
     """Create a job from a program on HopsFS.
 
@@ -267,7 +279,9 @@ def job_create(
         environment: Python environment the job runs in; the type's default when omitted.
         app_args: Optional argument string passed to the job.
         description: Optional free-form description.
+        resources: JSON with the configuration fields to set on the job.
     """
+    job_resources = _parse_resources(resources)
     project = session.get_project(ctx)
     api = project.get_job_api()
     try:
@@ -281,6 +295,7 @@ def job_create(
         config["defaultArgs"] = app_args
     if description:
         config["description"] = description
+    _merge_resources(config, job_resources)
     try:
         with output.sdk_quiet():
             job = api.create_job(name=name, config=config)
@@ -339,6 +354,16 @@ def job_create(
     is_flag=True,
     help="Refuse when a job of that name exists, so a new job never replaces another one.",
 )
+@click.option(
+    "--resources",
+    default=None,
+    help=(
+        "Resources the job runs with, as JSON with the configuration fields to set, e.g. "
+        '\'{"resourceConfig": {"cores": 2, "memory": 8192}}\'. Other fields keep the '
+        "job's stored value, or the type's default for a new job. "
+        "A start beyond the project's quota is refused."
+    ),
+)
 @click.pass_context
 def job_deploy(
     ctx: click.Context,
@@ -354,11 +379,13 @@ def job_deploy(
     overwrite: bool,
     start_timeout: int,
     new: bool,
+    resources: str | None,
 ) -> None:
     """Upload, configure, schedule and run a job in one step.
 
-    One-shot for what `create` + `schedule` + `run` do separately.
-    `SCRIPT` is either a local file (uploaded to HopsFS) or an existing HopsFS path.
+    One-shot for what `create` + `schedule` + `run` do separately. A redeploy of
+    a job of the same type keeps its stored configuration and changes only what is
+    given. `SCRIPT` is either a local file (uploaded to HopsFS) or an existing HopsFS path.
 
     \f
     Args:
@@ -375,7 +402,9 @@ def job_deploy(
         overwrite: Overwrite an existing uploaded script.
         start_timeout: With `wait`, seconds to wait for the execution to reach RUNNING.
         new: Refuse when a job of that name exists.
+        resources: JSON with the configuration fields to set on the job.
     """
+    job_resources = _parse_resources(resources)
     project = session.get_project(ctx)
     api = project.get_job_api()
     if new:
@@ -408,16 +437,19 @@ def job_deploy(
         app_path = uploaded or f"{dest_dir}/{os.path.basename(script)}"
         output.success("✓ Uploaded %s -> %s", os.path.basename(script), app_path)
 
-    # 2. Build the config, including the environment the CLI otherwise can't set.
-    try:
-        config = api.get_configuration(job_type.upper())
-    except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Could not load default config: {exc}") from exc
+    # 2. Build the config: the stored one for a redeploy of the same type, else the type's default.
+    config = _stored_config(api, name, job_type.upper())
+    if config is None:
+        try:
+            config = api.get_configuration(job_type.upper())
+        except Exception as exc:  # noqa: BLE001
+            raise click.ClickException(f"Could not load default config: {exc}") from exc
     config["appPath"] = app_path
     if app_args:
         config["defaultArgs"] = app_args
     if environment:
         config["environmentName"] = environment
+    _merge_resources(config, job_resources)
 
     # 3. Create or update the job.
     try:
@@ -1362,6 +1394,40 @@ def _read_log(path: str | None, tail: int | None) -> str:
     if tail is not None and tail >= 0:
         lines = lines[-tail:]
     return "".join(lines)
+
+
+def _parse_resources(resources: str | None) -> dict | None:
+    if not resources:
+        return None
+    try:
+        parsed = json.loads(resources)
+    except ValueError as exc:
+        raise click.UsageError(f"--resources is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise click.UsageError("--resources must be a JSON object.")
+    return parsed
+
+
+def _merge_resources(config: dict, resources: dict | None) -> None:
+    """Lay ``resources`` over ``config``: a nested object changes only the keys it names."""
+    for key, value in (resources or {}).items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            _merge_resources(config[key], value)
+        else:
+            config[key] = value
+
+
+def _stored_config(api: Any, name: str, job_type: str) -> dict | None:
+    """The configuration of job ``name`` when it exists with ``job_type``, else None."""
+    try:
+        job = api.get_job(name)
+    except Exception as exc:  # noqa: BLE001
+        if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+            return None
+        raise click.ClickException(f"Could not read job '{name}': {exc}") from exc
+    if job is None or str(getattr(job, "job_type", "")).upper() != job_type:
+        return None
+    return dict(job.config)
 
 
 def _get_job(ctx: click.Context, name: str) -> Any:
