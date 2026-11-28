@@ -55,7 +55,7 @@ a question you are about to ask depends on.
   realtime, time-ordered or grouped split, mount or ingest, scheduled or continuous). A routine
   engineering choice with an obvious default is taken and recorded in `decisions` with `by: claude`.
 - **Tell, one line per event.** Print a line when a phase starts (what it will do, the estimate),
-  when a job is submitted, on every poll of a running job (elapsed against the budget), when a run
+  when a job is submitted and when it ends (elapsed against the budget), when a run
   or attempt completes (its row), and when a phase ends (what it did, the new remaining estimate).
   Nothing else. Update `system.progress.now` at each of these events, and when a phase ends run
   `hops factory system plan <slug> --sync`, which records what the project now has (`met`,
@@ -64,13 +64,14 @@ a question you are about to ask depends on.
   system runs again (the data, feature, training and inference pipelines, the benchmark of a
   realtime deployment, the app) is a Hopsworks job, deployment or app, and runs as one at least
   once during the build. A program run once for a decision or a check (EDA, a research run,
-  integration tests, a shake-out of a pipeline into a test group) runs in the Terminal when it
-  fits: no GPU, the data it holds under a third of the Terminal's memory, and
+  integration tests, a shake-out of a pipeline into a test group) runs in this shell (the Terminal, a Hopsable
+  sandbox or a laptop) when it fits: no GPU, the data it holds under a third of the Terminal's memory, and
   `hops env libraries <env> --diff` empty for the libraries it imports, `<env>` being the job's
   environment. The Terminal's limits are its cgroup's (`cat /sys/fs/cgroup/memory.max
   /sys/fs/cgroup/cpu.max`); `free` and `nproc` show the node's. Install a missing test tool such
   as pytest with `uv pip install`, never a library the pipelines import, and run it with `TZ=UTC`
-  as jobs run (the Terminal's own zone is the user's). Otherwise it runs as a job.
+  as jobs run (the Terminal's own zone is the user's). Otherwise it runs as a job. A run you start
+  waits with `--wait`, or `hops job wait <job>` for one already started; never poll `hops job history`.
 - **Lint before a phase is validated.** Before a phase's tests run, and before it is recorded
   `met`, run in the system directory `ruff format .` then `ruff check --fix .` (with
   `uv tool run ruff@0.15.6` when `ruff` is not installed; the rules are in `pyproject.toml`), fix by hand
