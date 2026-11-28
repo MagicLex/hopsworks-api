@@ -1856,6 +1856,7 @@ def _create_google_drive(
     """
     project = mock.Mock()
     project.name = "p"
+    project.backing_name = "bk1"
     dataset_api = project.get_dataset_api.return_value
     dataset_api.exists.side_effect = lambda path: path in existing
     with (
@@ -1901,7 +1902,7 @@ def test_google_drive_uploads_the_key_file_and_sends_its_path(tmp_path):
         "description": "",
         "folderId": "1AbC_-x",
         "folderName": "Handbook",
-        "keyPath": "/Projects/p/Resources/datasources/n/drive-sa.json",
+        "keyPath": "/Projects/bk1/Resources/datasources/n/drive-sa.json",
     }
 
 
@@ -1954,7 +1955,8 @@ def test_google_drive_never_replaces_an_existing_key(tmp_path):
     assert result.exit_code == 1, result.output
     assert "already exists" in result.output
     assert (
-        "--key-path /Projects/p/Resources/datasources/n/drive-sa.json" in result.output
+        "--key-path /Projects/bk1/Resources/datasources/n/drive-sa.json"
+        in result.output
     )
     dataset_api.upload.assert_not_called()
     dataset_api.remove.assert_not_called()
