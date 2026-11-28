@@ -701,6 +701,7 @@ def app_deploy(
             installed != (env_name, wanted),
             copy,
             wanted,
+            name,
         )
         if (used, wanted) != installed:
             _write_installed(dataset_api, remote_dir, f"{used}\n{wanted}")
@@ -948,6 +949,7 @@ def _prepare_env(ctx: click.Context, name: str, local_dir: str) -> None:
         installed != (env_name, wanted),
         copy,
         wanted,
+        name,
     )
     if (used, wanted) != installed:
         _write_installed(dataset_api, remote_dir, f"{used}\n{wanted}")
@@ -1099,6 +1101,7 @@ def _deploy_environment(
     install: bool,
     copy: str,
     requirements_text: str,
+    app_name: str,
 ) -> str:
     """Clone `env_name` from the base environment once; install on a new clone or new requirements.
 
@@ -1117,7 +1120,10 @@ def _deploy_environment(
         )
         try:
             env = env_api.create_environment(
-                env_name, base_environment_name=_DEPLOY_BASE_ENV, await_creation=True
+                env_name,
+                base_environment_name=_DEPLOY_BASE_ENV,
+                created_for_app=app_name,
+                await_creation=True,
             )
         except Exception as exc:  # noqa: BLE001
             raise click.ClickException(
@@ -1138,7 +1144,7 @@ def _deploy_environment(
             raise click.ClickException(
                 f"Could not install into environment '{env_name}': {exc}"
             ) from exc
-        env = env_commands.own_copy(env_api, env_name, copy)
+        env = env_commands.own_copy(env_api, env_name, copy, created_for_app=app_name)
         env_name = copy
         output.info("Installing %s into %s.", _DEPLOY_REQUIREMENTS, env_name)
         try:
@@ -1232,9 +1238,6 @@ def app_stop(ctx: click.Context, name: str) -> None:
 def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
     """Delete an app. A running app is stopped first.
 
-    Its environment goes too when it is your own copy, `<name>-app-env-<user>`,
-    that you created and no other app runs on.
-
     \f
     Args:
         ctx: Click context.
@@ -1255,41 +1258,11 @@ def app_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> None:
         )
     if waited >= 1:
         output.info("Waited %d s for the environment of app %s.", waited, name)
-    env_name = getattr(a, "environment_name", None) or ""
-    username = None
-    if env_name.startswith(f"{name}-app-env-"):
-        username = env_commands.current_username()
     try:
         a.delete()
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Could not delete app '{name}': {exc}") from exc
     output.success("✓ Deleted app %s", name)
-    if username is None or env_name != env_commands.copy_name(name, username):
-        return
-    try:
-        # `hops env install <name>` makes a copy of the same name, which other apps may run on.
-        users = [
-            other.name
-            for other in project.get_app_api().get_apps() or []
-            if getattr(other, "environment_name", None) == env_name
-            and other.name != name
-        ]
-        env = project.get_environment_api().get_environment(env_name)
-        if users:
-            output.info(
-                "Kept environment %s: app %s runs on it.", env_name, ", ".join(users)
-            )
-        elif env is not None and env.creator != username:
-            output.info(
-                "Kept environment %s: %s created it, not you.",
-                env_name,
-                env.creator or "someone else",
-            )
-        elif env is not None:
-            env.delete()
-            output.success("✓ Deleted environment %s", env_name)
-    except Exception as exc:  # noqa: BLE001
-        output.warn("Kept environment %s: could not delete it: %s", env_name, exc)
 
 
 def _accepted_kwargs(fn: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
