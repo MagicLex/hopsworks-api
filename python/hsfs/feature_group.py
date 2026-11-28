@@ -4460,6 +4460,20 @@ class FeatureGroup(FeatureGroupBase):
                 "Sink can only be enabled for feature groups with time travel format DELTA."
             )
 
+        # A sink group's schema is its source's, as Hopsworks reads it (a CRM or REST
+        # source has no catalog, so a schema-fetch job samples it).
+        if (
+            self._sink_enabled
+            and features is None
+            and not self._features
+            and (
+                self._data_source.table
+                or self._data_source.query
+                or self._data_source.path
+            )
+        ):
+            self._features = external_feature_group_engine.schema_from_data_source(self)
+
         # A copy, so the defaults set below stay out of the caller's dict.
         write_options = dict(write_options or {})
         if not self._id and self.time_travel_format == "DELTA":
