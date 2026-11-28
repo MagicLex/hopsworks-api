@@ -68,9 +68,10 @@ Already known, no need to look again:
 | --- | --- |
 | none | Ask "What do you want to do?": **Explore data**, **Make a table and look at it**, **Build or resume an ML system**, **A dashboard or an app** (then ask which); with a system listed above, **Resume <slug>** replaces **Explore data**, first and recommended, and runs `/hops-build <slug>`. Then continue with that choice below. |
 | `explore` | Explore (below). |
-| an instruction to make something outside an ML system (a table, features, a model or candidates, scoring, a real-time endpoint for a model, a dashboard, an app, a notebook, an analytics layer), alone or several together | Pieces (below), whatever its first word. |
+| an instruction to make something outside an ML system (a table, features, a model or candidates, scoring, a real-time endpoint for a model, a dashboard, an app, an agent, a notebook, an analytics layer), alone or several together | Pieces (below), whatever its first word. |
 | `dashboard` | Dashboard (below), with the rest as the instruction. |
 | `app` | App (below), with the rest as the instruction. |
+| `agent` | Agent (below), with the rest as the instruction. |
 | `status` | Status (below). |
 | `ml` | Run the interview: invoke the `hops-ml` command with the Skill tool, passing the rest as its arguments, and follow it. |
 | `reqs`, `data`, `features`, `train`, `infer`, `verify`, `stop`, `f`, `t`, `i`, with an ML system listed above | Reply with one line: building and running phases is `/hops-build` (for example `/hops-build train`, `/hops-build verify`), and stop. Without a system, `features`, `train` and `infer` are Pieces (below). |
@@ -102,6 +103,7 @@ is the whole dispatch:
 | deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, `hops deployment predict <d>` for a known entity returns a prediction, and `hops deployment info <d> --stable 60` passes | **hops-deploy-builder** |
 | dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
 | app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving, a Node.js app when the request says Node or an npm framework | `hops app info <a>` shows `State` `RUNNING`, and `Type` `NODEJS` for a Node.js app | **hops-app-builder** (App below) |
+| agent | feature groups with rows it answers from, and an LLM with its API key saved as a secret | agent deployment `<a>` with tracing, and its chat app `<a>_chat` | one question the data answers gets an answer whose trace has a tool call, and `hops app info <a>_chat` shows `State` `RUNNING` | **hops-agent-builder** (Agent below) |
 | notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | every `hops notebook run` of this turn exited 0 (each prints `ran as In [n]` or the cell's error); a notebook from an earlier turn: `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell | you, no builder (Notebook below) |
 | analytics layer | bronze: a source; silver: feature groups with rows, used as bronze by name, never copied; gold: silver tables | the layer's tables with rows | `hops fg preview <table> --limit 1` for each table its `system.yaml` lists | `/hops-bronze` only for the example bronze of generated data, never when the request names a table or this conversation made one (that table is the bronze: `hops factory run analytics-silver` with it by name), then `/hops-silver`, `/hops-gold` |
 
@@ -109,7 +111,8 @@ is the whole dispatch:
    one of them needs only when that need's exit check fails: "a model on the deals" with no
    feature view makes the view inside the model piece; "score the deals daily with the best
    model" when a model exists is the inference piece alone. "Serve", "real-time", "an endpoint" or
-   "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference.
+   "an API for predictions" is the deployment piece; "score daily" or "in batch" is inference. "An
+   agent", "a chatbot", "an assistant" or "a chat over my data" is the agent piece.
 2. **Run what is missing, in needs order.** For each piece, run its exit check, unless the turn's
    inventory shows the piece missing: its line for that kind names every item (no `+N more`, not
    `not listed`, not a count alone), the piece is not among them, and no earlier step of this
@@ -165,6 +168,7 @@ columns fit the request equally.
 | hops-model-builder | `name`, `feature_view` (name:version, or the feature groups and the label to make one), `label`, `task` (classification, regression), `candidates` (what the user named, or none), `metric`, `job` (`yes` when the user asks for a pipeline, a job or a schedule, else `no`) |
 | hops-infer-builder | `name`, `model` (name:version, or the best by a metric), `feature_view` (name:version), `population` (the entities to score, such as open deals, and the feature group that lists them), `schedule` |
 | hops-deploy-builder | `name` (the deployment, a letter first, then letters and digits), `model` (name:version, or the best by a metric), `feature_view` (name:version), `passed_features` (sent by the caller instead of looked up, or none), `known_entity` (a key to check with, or none), `cores` and `memory` (1 and 1024 unless the user said) |
+| hops-agent-builder | the prompt in Agent (below) |
 
 ## Status
 
@@ -274,5 +278,31 @@ A notebook is cells run on the user's own Jupyter kernel and saved with their ou
    change: <for an edit, the user's words>
    runtime: <node when the request says Node or an npm framework, else python>
    source: <hopsfs | git>
+   where: <Hopsworks terminal | external client>
+   ```
+
+## Agent
+
+1. `hops agent list`. An instruction naming an existing agent is an edit; "delete" is a delete;
+   otherwise a new agent. With several candidates, ask which.
+2. **Create.** The description is the instruction; without one, ask what the agent should answer
+   and for whom. What it reads: the feature groups the request names, else the ones this
+   conversation made or explored; with none, the table piece runs first. Ask the name, proposing a
+   slug from the description (a letter first, then letters and digits).
+3. **The LLM.** `anthropic/claude-sonnet-5-5` unless the user names another model. Its API key is
+   a secret: ask for it as a credential (never in a message or with AskUserQuestion), saved as
+   `<provider>_api_key`; one already saved under that name is used without asking.
+4. **Edit.** Ask what should change, in words, unless the instruction says it.
+5. **Delete.** Ask the user to confirm the exact name. Its chat app and uploaded code go with it.
+6. Spawn **hops-agent-builder** with the Agent tool and this prompt, then print what it returns:
+
+   ```
+   action: create | edit | delete
+   name: <name>
+   description: <the user's words>
+   change: <for an edit, the user's words>
+   reads: <feature groups, name:version, one per line>
+   model: <provider>/<model>
+   key_secret: <the secret's name>
    where: <Hopsworks terminal | external client>
    ```
