@@ -17,7 +17,7 @@ The YAML format, compiling and querying are in [hops-semantic](../hops-semantic/
 ## Smoke-test (cheap pre/post-flight)
 ```bash
 hops semantic list                       # existing views; reuse one whose domain fits before creating another
-hops semantic show <name>                # root path, and the build that answers queries
+hops semantic info <name>                # root path, and the build that answers queries
 hops semantic metrics <name>             # what an agent sees first
 ```
 
@@ -36,7 +36,7 @@ Estimate tokens as characters / 3, since YAML and CSV full of snake_case identif
 ## Measure
 
 ```bash
-hops semantic show sales      # root path /Projects/<project>/<dir>; a terminal or job mounts it at /hopsfs/<dir>
+hops semantic info sales      # root path /Projects/<backing name>/<dir>; a terminal or job mounts it at /hopsfs/<dir>
 D=/hopsfs/Resources/semantic/sales
 grep -rlE --include='*.yml' --include='*.yaml' '^(semantic_models|metrics|saved_queries):' "$D" \
   | xargs -r cat | wc -c                                             # the semantic YAML
@@ -105,7 +105,7 @@ Point feature views, models and pipelines at the export's feature group rather t
 6. Measure; prune or split until the view is under 100k tokens and each list under 50,000 characters.
 
 ## Toolset
-- **CLI:** `hops semantic init|compile|test|show|metrics|dimensions|entities|saved-queries`, `hops search --type metric|saved_query`
+- **CLI:** `hops semantic init|compile|test|info|metrics|dimensions|entities|saved-queries`, `hops search --type metric|saved_query`
 - **MCP:** `list_semantic_projects`, `list_metrics`, `get_dimensions`, `get_entities`, `list_saved_queries`, `query_saved_query`, `list_exports`
 - **SDK:** `project.get_semantic_layer_api().get_project(<name>)`
 

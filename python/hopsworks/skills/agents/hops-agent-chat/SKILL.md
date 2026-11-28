@@ -10,7 +10,7 @@ An agent deployment (see **hops-agent-deployment**) answers the [chat contract](
 | Need | Do |
 | --- | --- |
 | A chat page, now | the agent's **chat app**: `agent.create_chat_app()` |
-| The same page, your look or layout, routes of your own | **customize** it: `agent.customize_chat_app()`, edit the project folder |
+| The same page, your look or layout, routes of your own | **customize** it: `hops app chat-template <dir>`, edit, `hops app deploy <chat app> <dir>` |
 | The chat inside an app that already has a page of its own | **embed** it: `create_app(..., agent=agent)` + `hopsworks-agent-chat` beside your server |
 
 Never write a chat page against the agent's API from scratch for these: the package already handles who is chatting, keeping each person's conversations apart, no serving key in the browser, the agent's questions (human in the loop), feedback, attachments, and waking an agent that scales to zero.
@@ -24,15 +24,17 @@ print(app.app_url)
 agent.chat_app()  # the app, or None
 ```
 
-Members open it with their Hopsworks login; `app.make_public()` shares it with anyone holding the link (needs `enable_public_apps`). Branding without code: the app's `CHAT_TITLE`, `CHAT_WELCOME`, `CHAT_ACCENT_COLOR`, `CHAT_LOGO_URL`, `CHAT_THEME_DIR` (a project folder with `theme.css` and a logo), `CHAT_SHOW_TOOL_CALLS`. Deleting the agent deletes its chat app; a data owner deletes it alone with `agent.delete_chat_app()`.
+Members open it with their Hopsworks login; `app.make_public()` shares it with anyone holding the link (needs `enable_public_apps`). Branding without code: the app's `CHAT_TITLE`, `CHAT_WELCOME`, `CHAT_ACCENT_COLOR`, `CHAT_LOGO_URL`, `CHAT_THEME_DIR` (a project folder with `theme.css` and a logo), `CHAT_SHOW_TOOL_CALLS`. `CHAT_WELCOME` and any text a customized page adds say what is: no greeting filler, no line that explains the page, and a text block takes its column's width (no `max-width` or `ch` cap on a paragraph, no `text-wrap: balance`). Deleting the agent deletes its chat app; a data owner deletes it alone with `agent.delete_chat_app()`.
 
 ## 2. Customizing the chat app
 
-```python
-app = agent.customize_chat_app()  # restarts from Resources/chat-apps/support_chat
+```bash
+hops app chat-template support_chat        # a new folder with the template
+# edit support_chat/, then:
+hops app deploy support_chat support_chat  # the chat app's name, then the folder
 ```
 
-The app copies its template into that folder (`server.mjs` on `@hopsworks/agent-chat`, `web/main.jsx`, `web/theme.css`, `AGENTS.md`) and runs from it. **Read the folder's `AGENTS.md` before changing anything**: `<HopsworksChat />` slots (`headerStart`, `headerEnd`, `footer`, `children`, `components`, `chatProps`), the exported parts (`Header`, `Sidebar`, `Questions`, `AssistantMessage`, `NegativeFeedback`, `useChat()`), `startChatApp()` settings and its `routes` hook (given `who`: never trust the request for who is asking), and what must stay the package's. The package is in the app's image, not the terminal's: try a change with `app.redeploy()` and `app.get_logs()`; a folder that fails to build is logged and the default page served. Removing `CHAT_APP_DIR` from the app's variables goes back to the default app.
+The template holds `server.mjs` on `@hopsworks/agent-chat`, `web/main.jsx`, `web/theme.css`, `AGENTS.md`, and the package's README and CHANGELOG in `.hopsworks/agent-chat/`. **Read the folder's `AGENTS.md` before changing anything**: `<HopsworksChat />` slots (`headerStart`, `headerEnd`, `footer`, `children`, `components`, `chatProps`), the exported parts (`Header`, `Sidebar`, `Questions`, `AssistantMessage`, `NegativeFeedback`, `useChat()`), `startChatApp()` settings and its `routes` hook (given `who`: never trust the request for who is asking), and what must stay the package's. The deploy uploads the folder to `Resources/apps/<chat app>/` with the hash of its files, and the app restarts on that checked copy: a later write into the project folder runs only after the next deploy. The folder lists no packages in package.json: the app runs on its image's packages only, and the deploy refuses a folder that names any. The package is in the app's image, not the terminal's: try a change by deploying it and reading `hops app logs <chat app>`; a `server.mjs` that fails to load fails the start. From Python: `agent.customize_chat_app("support_chat")` runs the same deploy.
 
 ## 3. Embedding the chat in an app of your own
 

@@ -6,7 +6,7 @@ fetches the per-project user's password from the Hopsworks Secrets storage,
 and configures TLS, so the CLI just wraps the resulting DBAPI connection.
 
 Defaults: ``--catalog delta`` (the format feature groups are created in) and
-``--schema <project>_featurestore`` (the project's feature store), so
+``--schema <backing name>_featurestore`` (the project's feature store), so
 ``hops sql "SELECT * FROM <fg>_<version>"`` reads a feature group. Override
 per-command, e.g. ``--catalog iceberg`` for Iceberg feature groups, or
 ``--catalog hive`` / ``--catalog system`` for the built-in catalogs.
@@ -15,10 +15,13 @@ per-command, e.g. ``--catalog iceberg`` for Iceberg feature groups, or
 from __future__ import annotations
 
 import contextlib
+import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import click
 from hopsworks.cli import output, session
+from hopsworks_common.client.exceptions import TrinoAccountPendingError
 
 
 if TYPE_CHECKING:
@@ -35,7 +38,7 @@ _FETCH_BATCH = 1_000
 
 @click.group("trino")
 def trino_group() -> None:
-    """Trino commands (query, catalogs, schemas, tables)."""
+    """Trino: SQL over the feature store and data sources."""
 
 
 def _api(ctx: click.Context) -> Any:
@@ -52,19 +55,13 @@ def _connect(ctx: click.Context, catalog: str | None, schema: str | None) -> Any
     api = _api(ctx)
     cat = catalog or "delta"
     sch = schema or _featurestore_schema(ctx)
-    # hops sql verifies the Trino coordinator's TLS certificate by default,
-    # independent of the REST/login default (which is off). An explicit
-    # --verify/--no-verify or HOPSWORKS_HOSTNAME_VERIFICATION still wins, so a
-    # cluster whose Trino load balancer serves a self-signed or IP-SAN-mismatched
-    # certificate stays reachable with --no-verify (the trino driver otherwise
-    # raises an SSL CERTIFICATE_VERIFY_FAILED). Forwarding it here matters because
-    # the flag reaches hopsworks.login() but never the Trino connection on its own.
-    cfg = session.get_config(ctx)
-    verify = cfg.hostname_verification if cfg.hostname_verification_explicit else True
     try:
-        return api.connect(catalog=cat, schema=sch, verify=verify)
+        return api.connect(catalog=cat, schema=sch, verify=session.trino_verify(ctx))
+    except TrinoAccountPendingError as exc:
+        # from None: the root's REST rewrite would replace the message with the 409 behind it.
+        raise click.ClickException(str(exc)) from None
     except Exception as exc:  # noqa: BLE001 - SDK raises a mix of types
-        raise click.ClickException(f"Trino connect failed: {exc}") from exc
+        raise click.ClickException(f"Could not connect to Trino: {exc}") from exc
 
 
 def _column_names(cursor: Any) -> list[str]:
@@ -118,6 +115,52 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+_MISSING_TABLE = re.compile(r"Table '(?:[^.']+\.)*([^.']+)' does not exist")
+_DIGIT_IDENTIFIER = "identifiers must not start with a digit"
+
+
+def _table_hint(ctx: click.Context, exc: Exception, schema: str | None) -> str:
+    """Name the table a failed query most likely meant."""
+    name = getattr(exc, "error_name", None)
+    if name == "SYNTAX_ERROR" and _DIGIT_IDENTIFIER in str(exc):
+        return (
+            ". A catalog or feature store name that starts with a digit goes in double quotes: "
+            '"<catalog>".<schema>.<table>, "<store>".<name>_<version>.'
+        )
+    if name != "TABLE_NOT_FOUND":
+        return ""
+    match = _MISSING_TABLE.search(str(exc))
+    if not match:
+        return ""
+    table = match.group(1)
+    versioned = re.fullmatch(r"(.+)_(\d+)", table)
+    if not versioned:
+        return f". A feature group is the table <name>_<version>, such as {table}_1."
+    if schema is not None:
+        return ""
+    store = _shared_store_of(ctx, versioned.group(1), int(versioned.group(2)))
+    if store is None:
+        return ""
+    return (
+        f". {table} is in the shared feature store {store}: write "
+        f'"{store}".{table}, or pass --schema {store}.'
+    )
+
+
+def _shared_store_of(ctx: click.Context, name: str, version: int) -> str | None:
+    """The first feature store shared with the project that holds this group."""
+    own = _featurestore_schema(ctx)
+    for fs in session.get_accessible_feature_stores(ctx):
+        if fs.name == own:
+            continue
+        try:
+            if fs.get_feature_group(name, version=version) is not None:
+                return fs.name
+        except Exception:  # noqa: BLE001, S112 - not in this store, try the next
+            continue
+    return None
+
+
 def _execute(
     ctx: click.Context,
     sql: str,
@@ -132,7 +175,12 @@ def _execute(
     conn = _connect(ctx, catalog, schema)
     try:
         cur = conn.cursor()
-        cur.execute(sql)
+        try:
+            cur.execute(sql)
+        except Exception as exc:  # noqa: BLE001 - the driver raises a mix of types
+            raise click.ClickException(
+                f"Could not run the query: {exc}{_table_hint(ctx, exc, schema)}"
+            ) from exc
         if cur.description is None:
             # Statement that returned no rowset (e.g. CREATE/INSERT). Most users
             # don't run these from the CLI, but report the rowcount if the
@@ -144,7 +192,12 @@ def _execute(
                 output.print_json({"affected_rows": affected})
             return
         headers = _column_names(cur)
-        rows = list(_iter_rows(cur, limit))
+        try:
+            rows = list(_iter_rows(cur, limit))
+        except Exception as exc:  # noqa: BLE001 - rows stream, so a failure can come late
+            raise click.ClickException(
+                f"Could not read the query's rows: {exc}"
+            ) from exc
         _render_rows(headers, rows)
         if limit and len(rows) >= limit and not output.JSON_MODE:
             output.warn(
@@ -207,9 +260,16 @@ def trino_query(
 ) -> None:
     """Run an ad-hoc SQL query.
 
-    Provide the SQL as a positional argument, or use ``-f`` to read from a
-    file, or ``-i`` to read from stdin (useful in shell pipelines).
+    Provide the SQL as a positional argument, or use `-f` to read from a
+    file, or `-i` to read from stdin (useful in shell pipelines).
 
+    The dialect is Trino's: `date_diff('day', a, b)`, `date_trunc('month', ts)`,
+    `approx_percentile(x, 0.5)`. A feature group is the table `<name>_<version>` in
+    the feature store's schema, the project's own store by default. A group of a
+    store shared with the project is `"<store>".<name>_<version>`, or pass
+    `--schema <store>`; `hops fg info` names the table.
+
+    \f
     Args:
         ctx: Click context.
         sql: SQL string passed positionally.
@@ -233,12 +293,6 @@ def trino_query(
     _execute(ctx, sql, catalog, schema, limit)
 
 
-# ``hops trino sql ...`` is a natural guess (the skill calls it "Trino SQL",
-# and the top-level alias is ``hops sql``). Without this it failed with a bare
-# "No such command 'sql'". Register the same command under both names.
-trino_group.add_command(trino_query, name="sql")
-
-
 # region: discovery shortcuts ---------------------------------------------
 
 
@@ -247,10 +301,21 @@ trino_group.add_command(trino_query, name="sql")
 def trino_catalogs(ctx: click.Context) -> None:
     """List Trino catalogs visible to the current user.
 
+    \f
     Args:
         ctx: Click context.
     """
     _execute(ctx, "SHOW CATALOGS", catalog=None, schema=None, limit=0)
+
+
+def _quoted(ref: str) -> str:
+    """Quote each part of a dotted name, since catalog and store names may start with a digit.
+
+    A name the caller already quoted is used as given.
+    """
+    if '"' in ref:
+        return ref
+    return ".".join(f'"{part}"' for part in ref.split("."))
 
 
 @trino_group.command("schemas")
@@ -259,52 +324,57 @@ def trino_catalogs(ctx: click.Context) -> None:
 def trino_schemas(ctx: click.Context, catalog: str) -> None:
     """List schemas in CATALOG.
 
+    \f
     Args:
         ctx: Click context.
         catalog: Trino catalog name.
     """
-    _execute(ctx, f"SHOW SCHEMAS FROM {catalog}", catalog=None, schema=None, limit=0)
+    _execute(
+        ctx, f"SHOW SCHEMAS FROM {_quoted(catalog)}", catalog=None, schema=None, limit=0
+    )
 
 
 @trino_group.command("tables")
 @click.argument("target")
 @click.pass_context
 def trino_tables(ctx: click.Context, target: str) -> None:
-    """List tables in TARGET (``<catalog>.<schema>`` or just ``<schema>``).
+    """List tables in a schema.
+
+    List tables in TARGET (`<catalog>.<schema>` or just `<schema>`).
 
     When TARGET has no dot the active project's default catalog is assumed.
 
+    \f
     Args:
         ctx: Click context.
-        target: ``<catalog>.<schema>`` or just ``<schema>``.
+        target: `<catalog>.<schema>` or just `<schema>`.
     """
-    if "." in target:
-        cat, sch = target.split(".", 1)
-        sql = f"SHOW TABLES FROM {cat}.{sch}"
-        _execute(ctx, sql, catalog=None, schema=None, limit=0)
-        return
-    sql = f"SHOW TABLES FROM {target}"
-    _execute(ctx, sql, catalog=None, schema=None, limit=0)
+    _execute(
+        ctx, f"SHOW TABLES FROM {_quoted(target)}", catalog=None, schema=None, limit=0
+    )
 
 
-@trino_group.command("describe")
+@trino_group.command("columns")
 @click.argument("table_ref")
 @click.pass_context
 def trino_describe(ctx: click.Context, table_ref: str) -> None:
-    """Describe TABLE_REF (``<catalog>.<schema>.<table>`` or ``<schema>.<table>``).
+    """Describe a table.
+
+    Describe TABLE_REF (`<catalog>.<schema>.<table>` or `<schema>.<table>`).
 
     Output is one row per column with name, type, extra-info, and comment.
 
+    \f
     Args:
         ctx: Click context.
-        table_ref: ``<catalog>.<schema>.<table>`` or ``<schema>.<table>``.
+        table_ref: `<catalog>.<schema>.<table>` or `<schema>.<table>`.
     """
     parts = table_ref.split(".")
     if len(parts) not in (2, 3):
         raise click.UsageError(
             "TABLE_REF must be <catalog>.<schema>.<table> or <schema>.<table>."
         )
-    _execute(ctx, f"DESCRIBE {table_ref}", catalog=None, schema=None, limit=0)
+    _execute(ctx, f"DESCRIBE {_quoted(table_ref)}", catalog=None, schema=None, limit=0)
 
 
 # region: connection info -------------------------------------------------
@@ -315,6 +385,7 @@ def trino_describe(ctx: click.Context, table_ref: str) -> None:
 def trino_info(ctx: click.Context) -> None:
     """Show the host/port/user the CLI would connect with.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -323,8 +394,11 @@ def trino_info(ctx: click.Context) -> None:
         host = api.get_host()
         port = api.get_port()
         user, _ = api.get_basic_auth()
+    except TrinoAccountPendingError as exc:
+        # from None: the root's REST rewrite would replace the message with the 409 behind it.
+        raise click.ClickException(str(exc)) from None
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Trino info failed: {exc}") from exc
+        raise click.ClickException(f"Could not read Trino server info: {exc}") from exc
     payload = {"host": host, "port": port, "user": user}
     if output.JSON_MODE:
         output.print_json(payload)
@@ -333,3 +407,154 @@ def trino_info(ctx: click.Context) -> None:
         ["FIELD", "VALUE"],
         [[k.upper(), str(v)] for k, v in payload.items()],
     )
+
+
+# region: catalogs ----------------------------------------------------------
+
+# A catalog applied without a restart (dynamic Trino) is SYNCED within one backend
+# poll (1 min) plus its CREATE CATALOG; the wait covers two polls.
+_CATALOG_WAIT_S = 150
+_CATALOG_POLL_S = 2
+
+
+@trino_group.group("catalog")
+def trino_catalog_group() -> None:
+    """Trino catalogs: query a data source through Trino."""
+
+
+def _catalog_api(ctx: click.Context) -> Any:
+    return session.get_project(ctx).get_trino_catalog_api()
+
+
+def _print_catalog(catalog: dict[str, Any]) -> None:
+    if output.JSON_MODE:
+        output.print_json(catalog)
+        return
+    fields = ("name", "connectorType", "scope", "status", "operation", "failureReason")
+    output.print_table(
+        ["FIELD", "VALUE"],
+        [[f.upper(), str(catalog.get(f) or "-")] for f in fields],
+    )
+
+
+def _wait_synced(api: Any, name: str, timeout_s: int) -> dict[str, Any]:
+    """Poll the catalog until Trino has it (SYNCED) or refused it (FAILED), within timeout_s."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        catalog = api.get_catalog(name)
+        if catalog.get("status") in ("SYNCED", "FAILED"):
+            return catalog
+        if time.monotonic() >= deadline:
+            return catalog
+        time.sleep(_CATALOG_POLL_S)
+
+
+@trino_catalog_group.command("create")
+@click.argument("data_source")
+@click.option(
+    "--name",
+    default=None,
+    help="Catalog name, with the prefix of the suggested one (default: the suggested name).",
+)
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    show_default=True,
+    help=f"Wait up to {_CATALOG_WAIT_S} s until Trino answers on the catalog.",
+)
+@click.pass_context
+def trino_catalog_create(
+    ctx: click.Context, data_source: str, name: str | None, wait: bool
+) -> None:
+    """Create a Trino catalog from DATA_SOURCE.
+
+    Query it as `"<catalog>".<schema>.<table>`.
+
+    Credentials come from the data source; none are passed here. On a Trino with dynamic
+    catalogs the catalog answers within about a minute. On a static one it answers after the
+    next Trino restart, whose time this prints.
+
+    \f
+    Args:
+        ctx: Click context.
+        data_source: Data source name in the project's feature store.
+        name: Catalog name; the suggested one when unset.
+        wait: Wait until the catalog answers.
+    """
+    api = _catalog_api(ctx)
+    fs_id = session.get_feature_store(ctx).id
+    template = api.get_catalog_template(data_source, fs_id)
+    if not template.get("supported"):
+        raise click.ClickException(
+            f"Data source {data_source} cannot be a Trino catalog: {template.get('reason') or 'unsupported type'}."
+        )
+    catalog = api.create_catalog(
+        name or template["suggestedName"],
+        template["connectorType"],
+        template["properties"],
+        data_source_name=data_source,
+        featurestore_id=fs_id,
+        scope=template.get("scope"),
+    )
+    # Named before any further call, so a failure below still says which catalog exists now.
+    output.info("Created Trino catalog %s.", catalog["name"])
+    capabilities = api.get_capabilities()
+    if not capabilities.get("dynamicCatalogs"):
+        _print_catalog(catalog)
+        output.info(
+            "Trino here loads catalogs at a restart: %s answers after the next one (%s).",
+            catalog["name"],
+            capabilities.get("nextScheduledRestart")
+            or "none scheduled; ask an administrator",
+        )
+        return
+    if wait:
+        catalog = _wait_synced(api, catalog["name"], _CATALOG_WAIT_S)
+    _print_catalog(catalog)
+    if catalog.get("status") == "FAILED":
+        raise click.ClickException(
+            f"Trino refused catalog {catalog['name']}: {catalog.get('failureReason') or 'no reason given'}."
+        )
+    if catalog.get("status") == "SYNCED":
+        output.success(
+            "Catalog %s answers: hops trino schemas %s",
+            catalog["name"],
+            catalog["name"],
+        )
+    elif wait:
+        raise click.ClickException(
+            f"Catalog {catalog['name']} is still {catalog.get('status')} after {_CATALOG_WAIT_S} s."
+        )
+
+
+@trino_catalog_group.command("info")
+@click.argument("name")
+@click.pass_context
+def trino_catalog_info(ctx: click.Context, name: str) -> None:
+    """Show catalog NAME: its connector, scope and status.
+
+    \f
+    Args:
+        ctx: Click context.
+        name: Catalog name.
+    """
+    _print_catalog(_catalog_api(ctx).get_catalog(name))
+
+
+@trino_catalog_group.command("delete")
+@click.argument("name")
+@click.option("--yes", is_flag=True, help="Delete without asking.")
+@click.pass_context
+def trino_catalog_delete(ctx: click.Context, name: str, yes: bool) -> None:
+    """Delete catalog NAME. Its data source stays.
+
+    \f
+    Args:
+        ctx: Click context.
+        name: Catalog name.
+        yes: Skip the confirmation.
+    """
+    if not yes:
+        output.confirm(f"Delete Trino catalog {name}?")
+    _catalog_api(ctx).delete_catalog(name)
+    output.success("Deleted Trino catalog %s", name)

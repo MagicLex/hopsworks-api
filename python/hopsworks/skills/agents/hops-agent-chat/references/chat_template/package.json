@@ -1,0 +1,9 @@
+{
+  "name": "agent-chat-app",
+  "private": true,
+  "type": "module",
+  "description": "A Hopsworks agent chat app, built on @hopsworks/agent-chat. See AGENTS.md.",
+  "hopsworks": {
+    "agentChat": "2"
+  }
+}

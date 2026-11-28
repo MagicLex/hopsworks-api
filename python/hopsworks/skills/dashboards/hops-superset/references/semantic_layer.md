@@ -101,4 +101,4 @@ METRIC_DATASETS = [
 - Leave out `--limit` and `--order-by`; Superset applies its own.
 - The SQL is fixed when the dataset is written.
   A dashboard program writes it again on every run, so rerun the program after the definitions change.
-- The SQL names its tables in full (`"delta"."<project>_featurestore"."<fg>_<version>"`), so the Trino connection's default catalog does not matter.
+- The SQL names its tables in full (`"delta"."<backing name>_featurestore"."<fg>_<version>"`, the schema the STORE column of `hops fg list` shows), so the Trino connection's default catalog does not matter.

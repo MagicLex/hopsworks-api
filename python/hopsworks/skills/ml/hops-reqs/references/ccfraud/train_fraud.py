@@ -4,7 +4,7 @@
 Run as the job `<slug>-train` in `<slug>-jobs-env`, after the features and the
 aggregates backfill:
 
-    hops job deploy <slug>-train hdfs:///Projects/<project>/<system dir>/ccfraud/train_fraud.py \
+    hops job deploy <slug>-train hdfs:///Projects/<backing name>/<system dir>/ccfraud/train_fraud.py \
         --env <slug>-jobs-env --args "--test-days 7" --run --wait
 
 It creates the feature view `cc_fraud_fv` over `cc_trans_fg` (the label and the

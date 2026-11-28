@@ -31,7 +31,7 @@ The scripts import each other by module name from their directory, and the app
 imports `scoring.py`, `kumo.py`, `synth.py` and `names.py` from the directory
 above it, so every job and the app run in place from HopsFS: pass `hops job
 deploy` the script's HopsFS path,
-`hdfs:///Projects/<project>/<the system directory below /hopsfs/>/leasing/<script>`,
+`hdfs:///Projects/<backing name>/<the system directory below /hopsfs/>/leasing/<script>`,
 never the local file. The feature group, feature view and model names are fixed
 in `names.py` and read by the app, so a project holds one leasing example. Every
 job takes `--system <slug>`, which starts each description it writes: deleting
@@ -58,7 +58,7 @@ structured-data-models (`KumoTabular`), which is not on PyPI, at a pinned commit
 ## data: the history
 
 ```bash
-P=hdfs:///Projects/<project>/<system dir>/leasing
+P=hdfs:///Projects/<backing name>/<system dir>/leasing
 hops job deploy <slug>-data $P/generate_data.py --env <slug>-jobs-env --args "--system <slug>" --run --wait
 ```
 
@@ -145,7 +145,7 @@ Deploy `leasing/app/` as **hops-app** says, from its HopsFS path, with 4096 MB a
 two cores for Kumo Tabular medium:
 
 ```bash
-hops app create <slug>-app --path /Projects/<project>/<system dir>/leasing/app/app.py \
+hops app create <slug>-app --path /Projects/<backing name>/<system dir>/leasing/app/app.py \
   --app-kind custom --entrypoint-command "python app.py" --app-port 8080 \
   --readiness-probe-path /health --environment <slug>-app-env --cores 2 --memory 4096 --start
 ```

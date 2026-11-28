@@ -39,6 +39,8 @@ hops semantic init sales --from-fg orders --repo new               # a new priva
 hops semantic init sales --repo https://github.com/acme/metrics.git   # an existing repository, cloned and registered as it is
 ```
 
+- The project's files are in HopsFS at `Resources/semantic/<name>/`: edit them with the HopsFS mount at `/Projects/<backing name>/Resources/semantic/<name>/` (`/hopsfs/Resources/semantic/<name>/` in a terminal), else `hops files download`, edit, `hops files upload`. Measures exist only on a feature group with an event time (references/init.md).
+- `hops semantic delete <name>` removes the project and its builds and keeps `Resources/semantic/<name>/` (the files are the user's source, a git clone too); a scaffold this conversation made goes with `hops files delete`.
 - One simple metric per measure is written commented out: uncomment the ones to serve, give them labels and descriptions, then `hops semantic compile <name> --wait`.
 - How feature groups map to entities, dimensions and measures, `--repo new` and the other flags: [references/init.md](references/init.md).
 
@@ -145,15 +147,15 @@ hops semantic test sales                                       # CI: compile, th
 hops semantic test sales --no-compile                          # PINNED: test the promoted build; a plain test exits 1 on an unpromoted build
 hops semantic builds sales                                     # * marks the build answering queries
 hops semantic build sales 13                                   # one build's errors and warnings at file:line
-hops semantic show sales                                       # settings, the build queries use, and whether it is stale
+hops semantic info sales                                       # settings, the build queries use, and whether it is stale
 hops semantic update sales --path Jupyter/analytics/dbt_v2     # a new root path or format compiles again
 ```
 
 - **When builds happen.** A clone, pull, checkout or reset through Hopsworks git (UI or REST) recompiles automatically.
-  Edits made in Jupyter, a terminal or the file browser are noticed by a staleness check that later queries run, at most every 30 seconds, and compile in the background; run `hops semantic compile` to see the result at once.
+  After an edit or an upload (Jupyter, a terminal, `hops files upload`, the file browser), run `hops semantic compile` next: it compiles at once and needs no wait before it. Queries also notice an edit through a staleness check (at most every 30 seconds) and compile it in the background.
 - **Invalid builds never serve.** Queries keep the last valid build and log that the answer is stale. Fix the issues listed by `compile --wait` and compile again.
 - **Deployment modes.** `FOLLOW` (default) serves every new valid build, for a developer's own clone. `PINNED` (`--mode PINNED`) serves one build until `hops semantic promote <name> <build id>`, for a production project.
-- `--path` is relative to the project root; `/hopsfs/...` paths from a terminal and absolute `/Projects/<project>/...` paths also work.
+- `--path` is relative to the project root; `/hopsfs/...` paths from a terminal and absolute `/Projects/<backing name>/...` paths also work.
 - **UI editor.** **Edit definitions** on the semantic project's page edits the YAML in the browser and validates the unsaved buffers as a compile would; Save does not compile. A save is refused (412) when the file changed since it was opened, so an agent editing the same files never silently loses a human's edit, or the other way round. The editor is read only for a git-backed project (edit in git and pull), one compiled from `semantic_manifest.json`, and members who cannot write the root path or are not Data Owner or Data Scientist.
 
 ## Discover
@@ -250,7 +252,7 @@ What GraphQL serves, how queries run, and the plain SQL tables BI tools read (ex
 
 ## Tags
 
-Semantic projects and metrics carry schematised tags (`hops semantic tag set|list|get|delete`, `add_tag`), and a metric's tags live in its YAML under `config.meta.hopsworks.tags`, checked on every compile: [references/tags.md](references/tags.md).
+Semantic projects and metrics carry schematised tags (`hops semantic tag set|list|info|delete`, `add_tag`), and a metric's tags live in its YAML under `config.meta.hopsworks.tags`, checked on every compile: [references/tags.md](references/tags.md).
 
 ## Dashboards
 

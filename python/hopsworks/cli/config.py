@@ -27,6 +27,7 @@ else:  # pragma: no cover - 3.10 path
     import tomli as tomllib
 
 import tomli_w
+from hopsworks.cli import auth
 
 
 _logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class HopsConfig:
     internal: bool = False
     hostname_verification: bool = False
     hostname_verification_explicit: bool = False
+    api_key_source: str | None = None
 
     def mode(self) -> str:
         """Describe which auth mode the CLI is operating in.
@@ -215,15 +217,19 @@ def load(
         project_id = os.environ.get("HOPSWORKS_PROJECT_ID")
         if project_id and project_id.isdigit():
             cfg.project_id = int(project_id)
-        return _apply_overrides(
+        ids_for = _identity(cfg)
+        apply_overrides(
             cfg, flag_host, flag_api_key, flag_project, flag_hostname_verification
         )
+        return _drop_foreign_ids(cfg, ids_for)
 
     _migrate_legacy_yaml()
     file_data = _read_toml(CONFIG_PATH).get(profile, {})
     if isinstance(file_data, dict):
         cfg.host = file_data.get("host") or None
         cfg.api_key = file_data.get("api_key") or None
+        if cfg.api_key:
+            cfg.api_key_source = f"{CONFIG_PATH} (profile {profile})"
         cfg.api_key_name = file_data.get("api_key_name") or None
         cfg.project = file_data.get("project") or None
         cfg.project_id = file_data.get("project_id")
@@ -237,32 +243,74 @@ def load(
     env_project = os.environ.get("HOPSWORKS_PROJECT") or os.environ.get("PROJECT_NAME")
     env_project_id = os.environ.get("HOPSWORKS_PROJECT_ID")
 
+    # The saved ids belong to the saved host and project.
+    ids_for = _identity(cfg)
+
     if env_host:
         cfg.host = env_host
     if env_api_key:
         cfg.api_key = env_api_key
+        cfg.api_key_source = "HOPSWORKS_API_KEY"
     if env_project:
+        if env_project != cfg.project:
+            cfg.project_id = None
         cfg.project = env_project
     if env_project_id and env_project_id.isdigit():
         cfg.project_id = int(env_project_id)
+        cfg.feature_store_id = None
+        # An exported id belongs to the host and project the environment names.
+        ids_for = _identity(cfg)
 
-    return _apply_overrides(
+    apply_overrides(
         cfg, flag_host, flag_api_key, flag_project, flag_hostname_verification
     )
+    return _drop_foreign_ids(cfg, ids_for)
 
 
-def _apply_overrides(
+def _identity(cfg: HopsConfig) -> tuple[str | None, str | None]:
+    """The host and project a project id is valid for, the host reduced to ``hostname:port``."""
+    host = cfg.host
+    if host:
+        try:
+            hostname, port = auth._host_port(host)
+            host = f"{hostname.lower()}:{port}"
+        except ValueError:  # a port that is not a number: compared as written
+            pass
+    return host, cfg.project
+
+
+def _drop_foreign_ids(
+    cfg: HopsConfig, ids_for: tuple[str | None, str | None]
+) -> HopsConfig:
+    """Forget the project and feature store ids when the host or project they were saved with changed.
+
+    A key that cannot read the project by name falls back to ``project_id``,
+    so an id kept across a project or host change would send every call,
+    deletes included, to the old project.
+    """
+    if _identity(cfg) != ids_for:
+        cfg.project_id = None
+        cfg.feature_store_id = None
+    return cfg
+
+
+def apply_overrides(
     cfg: HopsConfig,
     flag_host: str | None,
     flag_api_key: str | None,
     flag_project: str | None,
     flag_hostname_verification: bool | None = None,
 ) -> HopsConfig:
+    """Apply flag values over ``cfg``, which already holds the file and env values."""
     if flag_host:
         cfg.host = flag_host
     if flag_api_key:
         cfg.api_key = flag_api_key
+        cfg.api_key_source = "--api-key"
     if flag_project:
+        # The stored id belongs to the stored project, not to another name.
+        if flag_project != cfg.project:
+            cfg.project_id = None
         cfg.project = flag_project
     # Hostname verification precedence: CLI flag > HOPSWORKS_HOSTNAME_VERIFICATION
     # env var > saved file value > default (off).
@@ -310,6 +358,38 @@ def save(cfg: HopsConfig, profile: str = "default") -> None:
     tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
     # Open with O_CREAT|O_WRONLY|O_TRUNC and mode 0o600 so the secret is
     # never world-readable even between open() and chmod().
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        tomli_w.dump(existing, f)
+    os.replace(tmp, CONFIG_PATH)
+
+
+def forget_project(host: str | None, project: str, profile: str = "default") -> None:
+    """Drop the saved project selection when it is ``project`` on ``host``, after the user left it.
+
+    Only the saved file is read and written: a project picked by a flag or the environment for one command
+    leaves the saved selection, host and key as they are.
+
+    Args:
+        host: Host the project was left on.
+        project: Name of the project left.
+        profile: TOML table to update.
+    """
+    existing = _read_toml(CONFIG_PATH)
+    saved = existing.get(profile)
+    if not isinstance(saved, dict) or saved.get("project") != project:
+        return
+    from hopsworks.cli.auth import normalize_host  # noqa: PLC0415
+
+    if (
+        not host
+        or not saved.get("host")
+        or normalize_host(saved["host"]) != normalize_host(host)
+    ):
+        return
+    for key in ("project", "project_id", "feature_store_id"):
+        saved.pop(key, None)
+    tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         tomli_w.dump(existing, f)
