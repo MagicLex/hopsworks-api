@@ -1598,7 +1598,7 @@ def test_deploy_installs_again_when_the_environment_lost_a_recorded_library(
 ):
     root = _app_dir(tmp_path, requirements="polars==1.0\n# plots\nScikit_Learn>=1.5\n")
     envs = Environments(mock_project, "shop-app-env")
-    envs.envs["shop-app-env"].library_names = ["polars", "pandas"]
+    envs.envs["shop-app-env"].library_versions = {"polars": "1.0", "pandas": "2.2.3"}
     result, _, _ = _deploy(
         mock_project,
         root,
@@ -1991,6 +1991,76 @@ def test_prepare_env_without_requirements_clones_nothing(mock_project, tmp_path)
     assert "ended after" in result.output
     envs.api.create_environment.assert_not_called()
     dataset_api.upload.assert_not_called()
+
+
+class _BaseEnvironments(Environments):
+    """Environments whose clones list the base environment's libraries, as Hopsworks' clone does."""
+
+    def __init__(self, mock_project, base: dict[str, str]):
+        self.base = base
+        super().__init__(mock_project)
+
+    def add(self, name):
+        env = super().add(name)
+        env.library_versions = dict(self.base)
+        return env
+
+
+def test_prepare_env_installs_nothing_into_a_clone_that_meets_every_requirement(
+    mock_project, tmp_path
+):
+    root = _app_dir(
+        tmp_path,
+        requirements="FastAPI>=0.100\nuvicorn\npandas==2.3.3\n",
+    )
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = _BaseEnvironments(
+        mock_project, {"fastapi": "0.141.1", "uvicorn": "0.52.4", "pandas": "2.3.3"}
+    )
+    result, _, dataset_api = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    envs.api.create_environment.assert_called_once()
+    envs.envs["shop-app-env"].install_requirements.assert_not_called()
+    assert "Environment shop-app-env is up to date." in result.output
+    assert dataset_api.records == [
+        "shop-app-env\nFastAPI>=0.100\nuvicorn\npandas==2.3.3\n"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("requirements", "lacks"),
+    [
+        ("fastapi\npyfiglet==1.0.2\n", "pyfiglet"),
+        ("fastapi<0.100\n", "fastapi<0.100"),
+        ("fastapi[all]\n", "fastapi"),
+        ("-r more.txt\nfastapi\n", "-r more.txt"),
+        (
+            'fastapi\nuvicorn ; python_version < "3.11"\n',
+            'uvicorn; python_version < "3.11"',
+        ),
+    ],
+)
+def test_prepare_env_installs_into_a_clone_what_it_lacks(
+    mock_project, tmp_path, requirements, lacks
+):
+    root = _app_dir(tmp_path, requirements=requirements)
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = _BaseEnvironments(mock_project, {"fastapi": "0.141.1"})
+    result, _, _ = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    assert f"lacks {lacks}: installing" in result.output
+    envs.envs["shop-app-env"].install_requirements.assert_called_once()
+
+
+def test_prepare_env_installs_into_a_clone_whose_libraries_are_not_listed(
+    mock_project, tmp_path
+):
+    root = _app_dir(tmp_path, requirements="fastapi\n")
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    envs = Environments(mock_project)
+    result, _, _ = _prepare(mock_project, root)
+    assert result.exit_code == 0, result.output
+    envs.envs["shop-app-env"].install_requirements.assert_called_once()
 
 
 def test_prepare_env_clones_and_installs_and_the_deploy_skips_the_install(

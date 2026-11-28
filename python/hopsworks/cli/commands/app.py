@@ -1332,27 +1332,48 @@ def _write_installed(
             ) from exc
 
 
-def _missing_libraries(env: Any, requirements_text: str) -> list[str]:
-    """The packages `requirements_text` names that the environment does not list; empty when it lists none."""
-    import re
+def _unsatisfied(env: Any, requirements_text: str, strict: bool) -> list[str] | None:
+    """The requirements the environment's libraries do not meet, by name and version; None when it lists none.
 
-    def norm(name: str) -> str:
-        return re.sub(r"[-_.]+", "-", name).lower()
+    A line that names no package to compare (an option, a path, a URL) counts as unmet when `strict`, and is
+    skipped otherwise.
+    """
+    from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.utils import canonicalize_name
+    from packaging.version import InvalidVersion, Version
 
-    listed = env.library_names
+    listed = env.library_versions
     if not listed:
-        return []
-    have = {norm(n) for n in listed if n}
-    missing = []
+        return None
+    have = {canonicalize_name(n): v for n, v in listed.items() if n}
+    unmet = []
     for line in requirements_text.splitlines():
         line = line.split("#", 1)[0].strip()
-        # Options, paths and URLs name no package to look for.
-        if not line or line[0] in "-./" or "://" in line:
+        if not line:
             continue
-        name = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line)
-        if name and norm(name.group(0)) not in have:
-            missing.append(norm(name.group(0)))
-    return missing
+        try:
+            req = Requirement(line)
+        except InvalidRequirement:
+            if strict:
+                unmet.append(line)
+            continue
+        # A marker reads the env's Python, not this one: unmet when strict, else left as it was.
+        if req.marker is not None:
+            if strict:
+                unmet.append(str(req))
+            continue
+        name = canonicalize_name(req.name)
+        if name not in have or req.extras or req.url:
+            unmet.append(name)
+            continue
+        if req.specifier:
+            try:
+                ok = req.specifier.contains(Version(have[name] or ""), prereleases=True)
+            except InvalidVersion:
+                ok = False
+            if not ok:
+                unmet.append(str(req))
+    return unmet
 
 
 def _deploy_environment(
@@ -1365,10 +1386,11 @@ def _deploy_environment(
     app_name: str,
     what: str = _DEPLOY_REQUIREMENTS,
 ) -> str:
-    """Clone `env_name` from the base environment once; install on a new clone or a new `what`.
+    """Clone `env_name` from the base environment once; install what it lacks on a new clone or a new `what`.
 
     `requirements_text`, for a Python app, is checked against the libraries the
-    environment lists, so a library gone from it is installed again.
+    environment lists, by name and version: a clone or an environment that already
+    meets every line installs nothing, and a library gone from it is installed again.
 
     Returns the environment installed into: `copy`, cloned from `env_name`, when
     Hopsworks refuses to change `env_name` for this user.
@@ -1379,7 +1401,8 @@ def _deploy_environment(
         raise click.ClickException(
             f"Could not find environment '{env_name}': {exc}"
         ) from exc
-    if env is None:
+    created = env is None
+    if created:
         output.info(
             "Cloning %s to %s; this takes a few minutes.", _DEPLOY_BASE_ENV, env_name
         )
@@ -1390,21 +1413,23 @@ def _deploy_environment(
                 created_for_app=app_name,
                 await_creation=True,
             )
+            # The create call answers without the clone's libraries: read them to compare.
+            env = env_api.get_environment(env_name) or env
         except Exception as exc:  # noqa: BLE001
             raise click.ClickException(
                 f"Could not clone environment '{_DEPLOY_BASE_ENV}' to '{env_name}': {exc}"
             ) from exc
-    elif not install and not (
-        missing := _missing_libraries(env, requirements_text)
+    asked = install or created
+    unmet = (
+        _unsatisfied(env, requirements_text, strict=asked)
         if requirements_text is not None
-        else []
-    ):
+        else None
+    )
+    if unmet == [] or (unmet is None and not asked):
         output.info("Environment %s is up to date.", env_name)
         return env_name
-    elif not install:
-        output.info(
-            "Environment %s lacks %s: installing again.", env_name, ", ".join(missing)
-        )
+    if unmet:
+        output.info("Environment %s lacks %s: installing.", env_name, ", ".join(unmet))
     output.info("Installing %s into %s.", what, env_name)
     try:
         installer(env)
