@@ -438,7 +438,9 @@ def _await(
     if final.success is False:
         _failed(name, final, window, watch.last_reason)
     if final.success is None:
-        if final.state in _final_states():
+        from hopsworks_common.constants import JOBS  # noqa: PLC0415 - SDK loaded on use
+
+        if final.state in JOBS.FINAL_STATES:
             raise click.ClickException(
                 f"{name}{window}: execution #{final.id} {final.state}, but its final "
                 f"status is still {final.final_status} after {watch.elapsed():.0f} s."
@@ -455,12 +457,6 @@ _STARTED = ("RUNNING", "AGGREGATING_LOGS")
 _POLL_SECONDS = 3.0
 # A Spark execution's success comes from its final status, which YARN may write after its state.
 _SETTLE_SECONDS = 30.0
-
-
-def _final_states() -> set[str]:
-    from hopsworks_common.constants import JOBS  # noqa: PLC0415 - SDK loaded on use
-
-    return {*JOBS.SUCCESS_STATES, *JOBS.ERROR_STATES}
 
 
 def _execution_json(name: str, ident: int, kube: bool) -> dict:
@@ -495,11 +491,11 @@ def _follow(
     Returns the execution as the last poll read it. `watch` bounds the wait for RUNNING;
     `timeout` None is unbounded.
     """
+    from hopsworks_common.constants import JOBS  # noqa: PLC0415 - SDK loaded on use
     from hopsworks_common.execution import (  # noqa: PLC0415 - SDK loaded on use
         Execution,
     )
 
-    final = _final_states()
     started = False
     kube = True
     ended_at = None
@@ -514,7 +510,7 @@ def _follow(
             watch.forget_reason()
         # Spark and Ray set the final status before they aggregate the logs, and a Spark
         # execution's success reads the final status: only a final state ends the wait.
-        if state in final:
+        if state in JOBS.FINAL_STATES:
             if execution.success is not None:
                 return execution
             ended_at = watch.elapsed() if ended_at is None else ended_at
