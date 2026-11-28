@@ -82,7 +82,7 @@ system's `requirements.status` is already `met`, reply with one line that `/hops
 
 Read-only. Run what the user's words need: `hops fg list`, `hops fv list`, `hops datasource
 list`, `hops search <term>`, `hops fg info <name>`, `hops fg feature list <name>`,
-`hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT`. `hops sql` is Trino
+`hops fg preview <name> --limit 10`, `hops sql "<query>"` with a `LIMIT` (not for an external feature group: preview it). `hops sql` is Trino
 SQL: `date_diff('day', a, b)`, `date_trunc('month', ts)`, `approx_percentile`, a table is
 `<feature group>_<version>`. Summarise in a few lines and make the next-step offer (Rules) with
 `AskUserQuestion` (a data pipeline over it, a notebook over it, a dashboard or an ML system over
