@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import timezone
@@ -435,7 +436,7 @@ def _await(
             with contextlib.suppress(JobExecutionException):
                 final.await_termination(left)
     if final.success is False:
-        _failed(name, final, window)
+        _failed(name, final, window, watch.last_reason)
     if final.success is None:
         if final.state in _final_states():
             raise click.ClickException(
@@ -465,6 +466,9 @@ def _final_states() -> set[str]:
 def _execution_json(name: str, ident: int, kube: bool) -> dict:
     """The execution as the backend returns it; with `kube`, with its pod's KubeMonitorDTO when there is one."""
     from hopsworks_common import client  # noqa: PLC0415 - SDK loaded on use
+    from hopsworks_common.client.exceptions import (  # noqa: PLC0415 - SDK loaded on use
+        RestAPIError,
+    )
 
     _client = client._get_instance()
     path = ["project", _client._project_id, "jobs", name, "executions", ident]
@@ -472,12 +476,14 @@ def _execution_json(name: str, ident: int, kube: bool) -> dict:
         try:
             return (
                 _client._send_request(
-                    "GET", path, query_params={"expand": "kubeMonitor"}
+                    "GET", path, query_params={"expand": "kube_monitor"}
                 )
                 or {}
             )
-        except Exception:  # noqa: BLE001 - the backend answers 404 to the expansion once the pod is gone
-            pass
+        except RestAPIError as exc:
+            # A backend without the kube_monitor expansion answers 404.
+            if exc.response.status_code != 404:
+                raise
     return _client._send_request("GET", path) or {}
 
 
@@ -503,7 +509,9 @@ def _follow(
         state = execution.state or "?"
         kube = state in _STARTING
         watch.see(state, waits.kube_reason(body.get("kubeMonitor")) if kube else None)
-        started = started or state in _STARTED
+        if state in _STARTED:
+            # A reason from before the pod ran does not explain how it ended.
+            started, watch.last_reason = True, None
         # Spark and Ray set the final status before they aggregate the logs, and a Spark
         # execution's success reads the final status: only a final state ends the wait.
         if state in final:
@@ -530,9 +538,16 @@ def _ended_as(execution: Execution) -> str:
     return execution.state
 
 
-def _failed(name: str, execution: Execution, window: str = "") -> None:
-    """Print the last lines of a failed execution's stdout and stderr, then exit 1."""
+def _failed(
+    name: str, execution: Execution, window: str = "", kube_reason: str | None = None
+) -> None:
+    """Print the last lines of a failed execution's stdout and stderr, then exit 1.
+
+    The failure names how the pod's container ended when the backend wrote it in stderr.log,
+    else `kube_reason`, the last reason the pod gave while the wait followed it.
+    """
     ident = execution.id
+    reason = None
     tmp = tempfile.mkdtemp(prefix="hops-joblogs-")
     try:
         stdout_path, stderr_path = execution.download_logs(path=tmp)
@@ -544,14 +559,42 @@ def _failed(name: str, execution: Execution, window: str = "") -> None:
             if text.strip():
                 click.echo(f"=== {stream}, last {LOG_TAIL} lines ===", err=True)
                 click.echo(text.rstrip("\n"), err=True)
+        reason = _pod_exit(stderr_path)
     except Exception as exc:  # noqa: BLE001 - the failure is reported either way
         click.echo(f"(logs not readable: {exc})", err=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    reason = reason or kube_reason
+    because = f": {reason.rstrip('.')}" if reason else ""
     raise click.ClickException(
-        f"{name}{window}: execution #{ident} {_ended_as(execution)}. "
+        f"{name}{window}: execution #{ident} {_ended_as(execution)}{because}. "
         f"Full logs: hops job logs {name} --execution {ident} --stdout"
     )
+
+
+# The pod is gone once its execution ends, and the execution keeps no exit code. KubeJobsMonitor
+# writes how the container ended as the first line of stderr.log: after a termination whose pod
+# could not upload its own logs (an OOM kill), "Job failed with exit code: 137, Reason:
+# OOMKilled"; after a container-waiting timeout, "Job failed with: ErrImagePull - <message>".
+_POD_EXIT = re.compile(
+    r"Job failed with exit code: (?P<code>\d+)(?:, Reason: (?P<reason>[^,\n]+))?"
+    r"|Job failed with: (?P<waiting>[^\n]+)"
+)
+
+
+def _pod_exit(path: str | None) -> str | None:
+    """How the pod's container ended, as the backend wrote it in stderr.log, or None."""
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as fd:
+        match = _POD_EXIT.match(fd.readline())
+    if not match:
+        return None
+    if match["waiting"]:
+        reason, _, message = match["waiting"].partition(" - ")
+        return f"{reason}: {message}" if message else reason
+    code, reason = match["code"], match["reason"]
+    return f"{reason} (exit code {code})" if reason else f"exit code {code}"
 
 
 def _report_run(name: str, execution: Any, waited: bool, window: str = "") -> None:
@@ -1129,16 +1172,20 @@ def job_schedule_info(ctx: click.Context, name: str) -> None:
 
 @job_schedule_group.command("delete")
 @click.argument("name")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
-def job_unschedule(ctx: click.Context, name: str) -> None:
+def job_unschedule(ctx: click.Context, name: str, yes: bool) -> None:
     """Remove the schedule from a job.
 
     \f
     Args:
         ctx: Click context.
         name: Job name.
+        yes: Skip confirmation when True.
     """
     job = _get_job(ctx, name)
+    if not yes:
+        output.confirm(f"Remove the schedule of job '{name}'?")
     try:
         job.unschedule()
     except Exception as exc:  # noqa: BLE001
@@ -1162,8 +1209,8 @@ def job_delete(ctx: click.Context, name: str, yes: bool) -> None:
         yes: Skip confirmation when True.
     """
     job = _get_job(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete job '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete job '{name}'?")
     try:
         job.delete()
     except Exception as exc:  # noqa: BLE001

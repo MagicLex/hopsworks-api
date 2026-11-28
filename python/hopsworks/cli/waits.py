@@ -17,12 +17,13 @@ from hopsworks.cli import output
 
 _AGE_PART = re.compile(r"(\d+)([dhms])")
 _AGE_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+_TOKEN = re.compile(r"([?&]token=)[^&\s\"']+")
 
 
 def kube_reason(monitor: dict | None) -> str | None:
     """The most useful reason a pod gives in a KubeMonitorDTO, or None.
 
-    The newest Warning event first, then the message of a pod condition that is not met.
+    The newest Warning event first, then the last condition of a pod that is not ready.
     """
     events: list[dict] = []
     conditions: list[dict] = []
@@ -32,14 +33,23 @@ def kube_reason(monitor: dict | None) -> str | None:
         newest = min(
             enumerate(warnings), key=lambda pair: (_age(pair[1].get("age")), -pair[0])
         )[1]
-        message, reason = newest["message"], newest.get("reason")
+        message, reason = _untokened(newest["message"]), newest.get("reason")
         return f"{reason}: {message}" if reason and reason not in message else message
     for condition in conditions:
-        if str(condition.get("status")) == "False":
-            text = condition.get("message") or condition.get("reason")
-            if text:
-                return text
+        if condition.get("message"):
+            return _untokened(condition["message"])
     return None
+
+
+def _untokened(message: str) -> str:
+    # A readiness probe event quotes the probe URL, and Jupyter's carries the server's token.
+    return _TOKEN.sub(r"\1<hidden>", message)
+
+
+def _items(value: Any) -> list[dict]:
+    """The entries of a KubeEventDTO or KubePodDTO list: ``{"items": [...]}``."""
+    items = value.get("items") if isinstance(value, dict) else None
+    return [i for i in items or [] if isinstance(i, dict)]
 
 
 def _collect(node: Any, events: list[dict], conditions: list[dict]) -> None:
@@ -48,9 +58,12 @@ def _collect(node: Any, events: list[dict], conditions: list[dict]) -> None:
         for item in node:
             _collect(item, events, conditions)
     elif isinstance(node, dict):
-        events.extend(e for e in node.get("events") or [] if isinstance(e, dict))
-        for pod in node.get("pods") or []:
-            if isinstance(pod, dict) and isinstance(pod.get("lastCondition"), dict):
+        events.extend(_items(node.get("events")))
+        for pod in _items(node.get("pods")):
+            # The backend sends a pod condition without its status: a pod not ready names what holds it.
+            if pod.get("ready") is not True and isinstance(
+                pod.get("lastCondition"), dict
+            ):
                 conditions.append(pod["lastCondition"])
         for key, value in node.items():
             if key != "events":
@@ -75,6 +88,8 @@ class Watch:
         self.started = time.monotonic()
         self.state: str | None = None
         self.reason: str | None = None
+        # The last reason seen, kept once a final state comes with none.
+        self.last_reason: str | None = None
         self._printed: tuple[str | None, str | None] | None = None
 
     def elapsed(self) -> float:
@@ -85,6 +100,7 @@ class Watch:
 
     def see(self, state: str, reason: str | None = None) -> None:
         self.state, self.reason = state, reason
+        self.last_reason = reason or self.last_reason
         if self._printed == (state, reason):
             return
         self._printed = (state, reason)

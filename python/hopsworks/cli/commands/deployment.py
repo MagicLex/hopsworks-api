@@ -877,8 +877,8 @@ def deployment_delete(ctx: click.Context, name: str, yes: bool, force: bool) -> 
         force: Pass `force=True` to the SDK.
     """
     deployment = _get_deployment(ctx, name)
-    if not yes and not output.JSON_MODE:
-        click.confirm(f"Delete deployment '{name}'?", abort=True)
+    if not yes:
+        output.confirm(f"Delete deployment '{name}'?")
     try:
         deployment.delete(force=force)
     except Exception as exc:  # noqa: BLE001

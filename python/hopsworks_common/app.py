@@ -48,6 +48,17 @@ _FAILED_STATES = frozenset(
 )
 
 
+def absolute_url(app_url: str) -> str:
+    """The app URL the backend returns (a path under /hopsworks-api) on the client's host."""
+    app_url = app_url.lstrip("/")
+    if app_url.startswith(("http://", "https://")):
+        return app_url
+    base_url = client._get_instance()._base_url.rstrip("/")
+    if app_url.startswith("hopsworks-api/"):
+        return base_url + "/" + app_url
+    return base_url + "/hopsworks-api/" + app_url
+
+
 @public("hopsworks.app.App")
 class App:
     """Represents a Hopsworks Python App."""
@@ -206,14 +217,7 @@ class App:
             ```
         """
         if (self._serving or self._state == "IDLE") and self._app_url:
-            _client = client._get_instance()
-            base_url = _client._base_url.rstrip("/")
-            app_url = self._app_url.lstrip("/")
-            if app_url.startswith(("http://", "https://")):
-                return app_url
-            if app_url.startswith("hopsworks-api/"):
-                return base_url + "/" + app_url
-            return base_url + "/hopsworks-api/" + app_url
+            return absolute_url(self._app_url)
         return None
 
     @public

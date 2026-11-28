@@ -116,7 +116,7 @@ def test_insert_refuses_a_spine_group(mock_project):
     assert "spine group" in result.output
 
 
-def test_delete_prompt_says_the_external_table_stays(mock_project):
+def test_delete_prompt_says_the_external_table_stays(mock_project, tty):
     fs = mock_project.get_feature_store.return_value
     fs.get_feature_group.return_value = _external_fg()
     result = CliRunner().invoke(

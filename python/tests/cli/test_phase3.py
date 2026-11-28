@@ -441,7 +441,7 @@ def test_job_unschedule(mock_project):
     job = mock.MagicMock()
     api.get_job.return_value = job
     mock_project.get_job_api.return_value = api
-    result = CliRunner().invoke(cli, ["job", "schedule", "delete", "etl"])
+    result = CliRunner().invoke(cli, ["job", "schedule", "delete", "etl", "--yes"])
     assert result.exit_code == 0, result.output
     job.unschedule.assert_called_once()
 
