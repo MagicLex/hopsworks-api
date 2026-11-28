@@ -260,11 +260,16 @@ class JobApi:
         headers = {"content-type": "application/json"}
         method = "PUT" if schedule_config.get("id") else "POST"
 
-        return job_schedule.JobSchedule.from_response_json(
-            _client._send_request(
-                method, path_params, headers=headers, data=json.dumps(schedule_config)
-            )
+        stored = _client._send_request(
+            method, path_params, headers=headers, data=json.dumps(schedule_config)
         )
+        # The web updates the job row from the line instead of waiting for a reload.
+        events.note(
+            cron=stored.get("cronExpression"),
+            enabled=stored.get("enabled"),
+            next=stored.get("nextExecutionDateTime"),
+        )
+        return job_schedule.JobSchedule.from_response_json(stored)
 
     @events.tracking(
         "schedule", "delete", key=lambda self, name, *a, **k: {"name": name}
@@ -273,10 +278,12 @@ class JobApi:
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "jobs", name, "schedule", "v2"]
 
-        return _client._send_request(
+        deleted = _client._send_request(
             "DELETE",
             path_params,
         )
+        events.note(enabled=False)
+        return deleted
 
     @public
     @usage._method_logger
@@ -350,11 +357,16 @@ class JobApi:
         headers = {"content-type": "application/json"}
         method = "PUT" if schedule_config.get("id") else "POST"
 
-        return job_schedule.JobSchedule.from_response_json(
-            _client._send_request(
-                method, path_params, headers=headers, data=json.dumps(schedule_config)
-            )
+        stored = _client._send_request(
+            method, path_params, headers=headers, data=json.dumps(schedule_config)
         )
+        # The web updates the job row from the line instead of waiting for a reload.
+        events.note(
+            cron=stored.get("cronExpression"),
+            enabled=stored.get("enabled"),
+            next=stored.get("nextExecutionDateTime"),
+        )
+        return job_schedule.JobSchedule.from_response_json(stored)
 
     @public
     @usage._method_logger
@@ -362,10 +374,12 @@ class JobApi:
         _client = client._get_instance()
         path_params = ["project", _client._project_id, "jobs", name, "schedule", "v2"]
 
-        return _client._send_request(
+        deleted = _client._send_request(
             "DELETE",
             path_params,
         )
+        events.note(enabled=False)
+        return deleted
 
     def _add_tag(self, job: job.Job, name: str, value: Any) -> None:
         """Attach a name/value tag to a job.
