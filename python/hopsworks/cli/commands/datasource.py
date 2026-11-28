@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 @click.group("datasource")
 def datasource_group() -> None:
-    """Data source (storage connector) commands."""
+    """Data sources: connections to external storage."""
 
 
 @datasource_group.command("list")
@@ -43,6 +43,7 @@ def datasource_group() -> None:
 def connector_list(ctx: click.Context) -> None:
     """List all storage connectors in the active project.
 
+    \f
     Args:
         ctx: Click context.
     """
@@ -78,6 +79,7 @@ def _credentials_label(connector: dict[str, Any]) -> str:
 def connector_info(ctx: click.Context, name: str) -> None:
     """Show details for a single storage connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -86,7 +88,9 @@ def connector_info(ctx: click.Context, name: str) -> None:
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Connector '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
 
     sc = getattr(ds, "storage_connector", ds)
     if output.JSON_MODE:
@@ -258,7 +262,7 @@ def _secret_option(
 
 @datasource_group.group("create")
 def connector_create() -> None:
-    """Create a storage connector (subcommand per backend)."""
+    """Create a data source; one command per source type."""
 
 
 @connector_create.command("jdbc", help="Register a JDBC connector.")
@@ -278,6 +282,7 @@ def connector_create_jdbc(
 ) -> None:
     """Register a JDBC connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -336,6 +341,7 @@ def connector_create_s3(
 ) -> None:
     """Register an S3 connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -392,6 +398,7 @@ def connector_create_snowflake(
 ) -> None:
     """Register a Snowflake connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -1944,7 +1951,7 @@ for _name, _spec in _SPECS.items():
 
 @datasource_group.group("credentials")
 def connector_credentials() -> None:
-    """Your own credentials for a data source with provided credentials."""
+    """Your own credentials for a data source."""
 
 
 _CREDENTIAL_PAIRS = (
@@ -2053,7 +2060,9 @@ def _provided_connector(ctx: click.Context, name: str) -> Any:
     try:
         ds = fs.get_data_source(name)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Data source '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
     sc = getattr(ds, "storage_connector", ds)
     mode = getattr(sc, "credentials_mode", None)
     if mode == "SHARED":
@@ -2098,7 +2107,7 @@ def _upload_wallet(ctx: click.Context, sc: Any, local_zip: str) -> tuple[str, st
             shutil.copyfile(local_zip, staged)
             dataset_api.upload(staged, target_dir)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Wallet upload failed: {exc}") from exc
+        raise click.ClickException(f"Could not upload the wallet: {exc}") from exc
     relative = f"{target_dir}/{file_name}"
     output.info("Uploaded wallet to %s", relative)
     return f"/Projects/{project.name}/{relative}", relative
@@ -2118,7 +2127,9 @@ def _validate(sc: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
     try:
         result = sc._validate_credentials(**args)
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Validation failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not validate credentials for data source '{name}': {exc}"
+        ) from exc
     if not result.get("valid"):
         code = result.get("errorCode")
         detail = result.get("message") or "the data source rejected the credentials"
@@ -2147,12 +2158,15 @@ def _binding_rows(binding: dict[str, Any]) -> list[list[Any]]:
 @_credential_options
 @click.pass_context
 def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # noqa: D417
-    """Save your credentials for a data source to your account, once the data source accepts them.
+    """Save your credentials for a data source.
+
+    Save your credentials for a data source to your account, once the data source accepts them.
 
     Nothing is saved when the data source rejects them.
     An option not given keeps what is already bound, so `--password` alone rotates the password and keeps the username and wallet.
     Each credential option is given by value or by account entry name.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -2183,12 +2197,13 @@ def credentials_set(ctx: click.Context, name: str, **values: Any) -> None:  # no
 @_credential_options
 @click.pass_context
 def credentials_validate(ctx: click.Context, name: str, **values: Any) -> None:  # noqa: D417
-    """Test your credentials against a data source without saving them.
+    """Test credentials against a data source without saving.
 
     A wallet is uploaded under a new name for the test, which reads it from HopsFS,
     and removed again afterwards.
     Each credential option is given by value or by account entry name.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -2208,12 +2223,15 @@ def credentials_validate(ctx: click.Context, name: str, **values: Any) -> None: 
     output.success("✓ Data source %s accepted the credentials", name)
 
 
-@connector_credentials.command("show")
+@connector_credentials.command("info")
 @click.argument("name")
 @click.pass_context
 def credentials_show(ctx: click.Context, name: str) -> None:
-    """Show your binding for a data source: status and account entry names, never values.
+    """Show your credential binding, never the values.
 
+    Show your binding for a data source: status and account entry names, never values.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -2234,10 +2252,13 @@ def credentials_show(ctx: click.Context, name: str) -> None:
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
-    """Remove your binding for a data source, its wallet file and its default-named account entries.
+    """Remove your credentials for a data source.
+
+    Remove your binding for a data source, its wallet file and its default-named account entries.
 
     The default env var and secrets (DS_<NAME>_<feature store id>_USER, ds_<name>_<feature store id>_password and ds_<name>_<feature store id>_wallet_password) are deleted from your account; ones you named yourself stay.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -2263,6 +2284,7 @@ def credentials_delete(ctx: click.Context, name: str, yes: bool) -> None:
 def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
     """Delete a storage connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -2282,7 +2304,9 @@ def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
             ),
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Delete failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not delete data source '{name}': {exc}"
+        ) from exc
     output.success("✓ Deleted connector %s", name)
 
 
@@ -2292,6 +2316,7 @@ def connector_delete(ctx: click.Context, name: str, yes: bool) -> None:
 def connector_databases(ctx: click.Context, name: str) -> None:
     """List databases visible through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -2347,7 +2372,7 @@ def connector_databases(ctx: click.Context, name: str) -> None:
     "--job-name",
     help="Job name; defaults to <data source>_gmail_sync or _outlook_sync.",
 )
-@click.option("--environment", help="Python environment for the job.")
+@click.option("--env", "environment", help="Python environment for the job.")
 @click.option(
     "--start/--no-start", default=True, show_default=True, help="Start a run now."
 )
@@ -2366,8 +2391,11 @@ def connector_sync(
     environment: str | None,
     start: bool,
 ) -> None:
-    """Create or update a job that copies a Gmail or Outlook data source into a Delta feature group.
+    """Sync a Gmail or Outlook source into a feature group.
 
+    Creates or updates a job that copies the data source into a Delta feature group.
+
+    \f
     Args:
         ctx: Click context.
         name: Gmail or Outlook data source name.
@@ -2390,7 +2418,7 @@ def connector_sync(
         if isinstance(data_source.storage_connector, OutlookConnector):
             if query:
                 raise click.ClickException(
-                    "--query is Gmail only; select Outlook messages with --label folder ids"
+                    "Option --query is Gmail only; select Outlook messages with --label folder ids."
                 )
             selection = {"folders": list(labels)}
         else:
@@ -2424,8 +2452,11 @@ def connector_sync(
 @click.argument("name")
 @click.pass_context
 def connector_labels(ctx: click.Context, name: str) -> None:
-    """List the Gmail labels or Outlook folders of a data source's mailbox that a sync can select.
+    """List Gmail labels or Outlook folders of a data source.
 
+    These are the labels or folders of the mailbox that a sync can select.
+
+    \f
     Args:
         ctx: Click context.
         name: Gmail or Outlook data source name.
@@ -2453,6 +2484,7 @@ def connector_labels(ctx: click.Context, name: str) -> None:
 def connector_sync_jobs(ctx: click.Context, name: str) -> None:
     """List the sync jobs of a Gmail or Outlook data source.
 
+    \f
     Args:
         ctx: Click context.
         name: Gmail or Outlook data source name.
@@ -2493,6 +2525,7 @@ def connector_sync_jobs(ctx: click.Context, name: str) -> None:
 def connector_tables(ctx: click.Context, name: str, database: str | None) -> None:
     """List tables in a database reachable through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -2521,6 +2554,7 @@ def connector_tables(ctx: click.Context, name: str, database: str | None) -> Non
 def connector_preview(ctx: click.Context, name: str) -> None:
     """Fetch a small data preview through a connector.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -2530,7 +2564,9 @@ def connector_preview(ctx: click.Context, name: str) -> None:
         ds = fs.get_data_source(name)
         data = ds.get_data()
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Preview failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not preview data source '{name}': {exc}"
+        ) from exc
     if output.JSON_MODE:
         to_dict = getattr(data, "to_dict", None)
         output.print_json(to_dict() if callable(to_dict) else str(data))
@@ -2546,7 +2582,7 @@ def connector_preview(ctx: click.Context, name: str) -> None:
 def connector_infer_metadata(
     ctx: click.Context, name: str, table: str, database: str | None
 ) -> None:
-    """Use platform intelligence to infer feature metadata for a table.
+    """Infer feature metadata for a table.
 
     Calls the same LLM-backed endpoint as the "Infer metadata" button in the
     UI: suggests a renamed feature name, Hopsworks type, and description per
@@ -2554,6 +2590,7 @@ def connector_infer_metadata(
     external table as an external feature group, or before creating a new
     feature group from it.
 
+    \f
     Args:
         ctx: Click context.
         name: Connector name.
@@ -2581,7 +2618,9 @@ def connector_infer_metadata(
     except PlatformIntelligenceException as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Infer metadata failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not infer metadata of table '{table}': {exc}"
+        ) from exc
 
     if output.JSON_MODE:
         output.print_json(inferred.to_dict())
@@ -2827,7 +2866,9 @@ def _sharepoint(ctx: click.Context, name: str) -> Any:
     try:
         sc = fs.get_data_source(name).storage_connector
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Data source '{name}' not found: {exc}") from exc
+        raise click.ClickException(
+            f"Could not find data source '{name}': {exc}"
+        ) from exc
     if sc is None:
         raise click.ClickException(f"Data source '{name}' not found.")
     if getattr(sc, "type", None) != "SHAREPOINT":
@@ -2888,12 +2929,12 @@ def _call(what: str, fn: Callable[[], Any]) -> Any:
     except click.ClickException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"{what} failed: {exc}") from exc
+        raise click.ClickException(f"Could not {what}: {exc}") from exc
 
 
 @datasource_group.group("sharepoint")
 def sharepoint_group() -> None:
-    """Browse a SharePoint data source and copy or sync its folders into datasets."""
+    """Browse, copy and sync SharePoint folders into datasets."""
 
 
 @sharepoint_group.command("drives")
@@ -2902,12 +2943,13 @@ def sharepoint_group() -> None:
 def sharepoint_drives(ctx: click.Context, name: str) -> None:
     """List the document libraries of the site.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
     """
     sc = _sharepoint(ctx, name)
-    drives = _call("Listing libraries", sc.list_drives)
+    drives = _call("list libraries", sc.list_drives)
     output.print_table(
         ["ID", "NAME", "WEB URL"],
         [[d.get("id"), d.get("name"), d.get("web_url", "-")] for d in drives],
@@ -2924,6 +2966,7 @@ def sharepoint_drives(ctx: click.Context, name: str) -> None:
 def sharepoint_folders(ctx: click.Context, name: str, drive_id: str, path: str) -> None:
     """List the child folders of a folder in a document library.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -2931,7 +2974,7 @@ def sharepoint_folders(ctx: click.Context, name: str, drive_id: str, path: str) 
         path: Folder path inside the library.
     """
     sc = _sharepoint(ctx, name)
-    folders = _call("Listing folders", lambda: sc.list_folders(drive_id, path))
+    folders = _call("list folders", lambda: sc.list_folders(drive_id, path))
     output.print_table(["ID", "NAME"], [[f.get("id"), f.get("name")] for f in folders])
 
 
@@ -2960,8 +3003,11 @@ def sharepoint_copy(
     alert_receiver: str | None,
     index_files: bool,
 ) -> None:
-    """Copy a library folder into a new dataset once, now, without a schedule.
+    """Copy a library folder into a new dataset, once.
 
+    The copy runs now, without a schedule.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -2973,7 +3019,7 @@ def sharepoint_copy(
     """
     sc = _sharepoint(ctx, name)
     sync = _call(
-        "Copy",
+        "copy the folder",
         lambda: sc.copy_folder(
             drive_id=drive_id,
             folder_path=folder,
@@ -2991,8 +3037,11 @@ def sharepoint_copy(
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def sharepoint_reset_script(ctx: click.Context, name: str, yes: bool) -> None:
-    """Overwrite the data source's sync script with the platform template.
+    """Reset the sync script to the platform template.
 
+    Overwrites the data source's sync script.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3004,13 +3053,13 @@ def sharepoint_reset_script(ctx: click.Context, name: str, yes: bool) -> None:
             f"Overwrite {sc.script_path or 'the sync script'}, discarding its edits?",
             abort=True,
         )
-    _call("Reset", sc.reset_script)
+    _call("reset the sync script", sc.reset_script)
     output.success("✓ Reset %s", sc.script_path or "the sync script")
 
 
 @sharepoint_group.group("sync")
 def sharepoint_sync_group() -> None:
-    """Syncs that copy a library folder into a dataset, once or on a schedule."""
+    """Syncs of a library folder into a dataset."""
 
 
 @sharepoint_sync_group.command("create")
@@ -3084,8 +3133,11 @@ def sharepoint_sync_create(
     index_files: bool,
     index_feature_group: str | None,
 ) -> None:
-    """Create a scheduled sync of a library folder into a new dataset.
+    """Create a scheduled sync of a library folder.
 
+    The folder is copied into a new dataset.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3104,7 +3156,7 @@ def sharepoint_sync_create(
     """
     sc = _sharepoint(ctx, name)
     sync = _call(
-        "Create",
+        "create the sync",
         lambda: sc.create_sync(
             drive_id=drive_id,
             folder_path=folder,
@@ -3130,12 +3182,13 @@ def sharepoint_sync_create(
 def sharepoint_sync_list(ctx: click.Context, name: str) -> None:
     """List the syncs of a SharePoint data source.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
     """
     sc = _sharepoint(ctx, name)
-    syncs = _call("Listing syncs", sc.get_syncs)
+    syncs = _call("list syncs", sc.get_syncs)
     if output.JSON_MODE:
         output.print_json([s.to_dict() for s in syncs])
         return
@@ -3149,13 +3202,14 @@ def sharepoint_sync_list(ctx: click.Context, name: str) -> None:
 def sharepoint_sync_status(ctx: click.Context, name: str, sync_id: int) -> None:
     """Show the run state and counters of a sync.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
         sync_id: Sync id.
     """
     sync = _sync(ctx, name, sync_id)
-    status = _call("Status", sync.status)
+    status = _call("get the sync status", sync.status)
     if output.JSON_MODE:
         output.print_json(status)
         return
@@ -3174,7 +3228,7 @@ def _sync_action(command: str, help: str, act: Callable[[Any], Any], done: str) 
     @click.pass_context
     def run(ctx: click.Context, name: str, sync_id: int) -> None:
         sync = _sync(ctx, name, sync_id)
-        result = _call(command.capitalize(), lambda: act(sync))
+        result = _call(f"{command} the sync", lambda: act(sync))
         if output.JSON_MODE:
             output.print_json(_action_json(result))
             return
@@ -3232,6 +3286,7 @@ def sharepoint_sync_schedule(
 ) -> None:
     """Set or remove the schedule of a sync.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3242,7 +3297,7 @@ def sharepoint_sync_schedule(
     if bool(cron) == remove:
         raise click.UsageError("Pass exactly one of --cron and --none.", ctx)
     sync = _sync(ctx, name, sync_id)
-    _call("Schedule", lambda: sync.set_schedule(None if remove else cron))
+    _call("set the sync schedule", lambda: sync.set_schedule(None if remove else cron))
     _print_sync(sync)
 
 
@@ -3256,8 +3311,11 @@ def sharepoint_sync_schedule(
 def sharepoint_sync_set_folder(
     ctx: click.Context, name: str, sync_id: int, folder: str
 ) -> None:
-    """Point a sync at another folder of its library; the next run reconciles the dataset.
+    """Point a sync at another folder of its library.
 
+    The next run reconciles the dataset.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3265,7 +3323,7 @@ def sharepoint_sync_set_folder(
         folder: New folder path.
     """
     sync = _sync(ctx, name, sync_id)
-    _call("Set folder", lambda: sync.set_folder(folder))
+    _call("set the sync folder", lambda: sync.set_folder(folder))
     _print_sync(sync)
 
 
@@ -3290,8 +3348,11 @@ def sharepoint_sync_index(
     enabled: bool,
     feature_group: str | None,
 ) -> None:
-    """Turn indexing of a sync's files in a feature group on or off; the next run brings it up to date.
+    """Turn indexing of a sync's files on or off.
 
+    The files are indexed in a feature group; the next run brings it up to date.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3303,7 +3364,7 @@ def sharepoint_sync_index(
     fields: dict[str, Any] = {"index_files": enabled}
     if enabled and feature_group:
         fields["index_feature_group"] = feature_group
-    _call("Index", lambda: sync.update(**fields))
+    _call("index the sync", lambda: sync.update(**fields))
     _print_sync(sync)
 
 
@@ -3328,8 +3389,11 @@ def sharepoint_sync_delete(
     force: bool,
     yes: bool,
 ) -> None:
-    """Delete a sync and its job, and its dataset unless --keep-files.
+    """Delete a sync, its job and its dataset.
 
+    The dataset stays with --keep-files.
+
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3350,7 +3414,9 @@ def sharepoint_sync_delete(
             f"Delete sync {sync_id} {what} dataset '{sync.dataset_name}'{index}?",
             abort=True,
         )
-    deleted = _call("Delete", lambda: sync.delete(keep_files=keep_files, force=force))
+    deleted = _call(
+        "delete the sync", lambda: sync.delete(keep_files=keep_files, force=force)
+    )
     if output.JSON_MODE:
         output.print_json({"id": sync_id, "deleted": deleted})
         return
@@ -3377,6 +3443,7 @@ def sharepoint_sync_audit(
 ) -> None:
     """Show the paths a sync's runs changed on one day.
 
+    \f
     Args:
         ctx: Click context.
         name: Data source name.
@@ -3384,7 +3451,7 @@ def sharepoint_sync_audit(
         day: Day in UTC.
     """
     sync = _sync(ctx, name, sync_id)
-    rows = _call("Audit", lambda: sync.get_audit(day=day))
+    rows = _call("get the sync audit", lambda: sync.get_audit(day=day))
     output.print_table(
         ["DATE", "EXECUTION", "OP", "KIND", "PATH", "SRC_PATH"],
         [
@@ -3420,12 +3487,16 @@ def _test_connector(ctx: click.Context, body: dict[str, Any]) -> None:
             json_body=body,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Connection test failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not connect to data source '{body.get('name', '?')}': {exc}"
+        ) from exc
     result = result if isinstance(result, dict) else {}
     message = (result.get("connectionOutput") or "").strip()
     # The checkers report success as exit code 0, or 200 for HTTP sources.
     if result.get("statusCode") not in (0, 200):
-        raise click.ClickException(f"Connection test failed: {message or 'no output'}")
+        raise click.ClickException(
+            f"Could not connect to data source '{body.get('name', '?')}': {message or 'no output'}"
+        )
     output.success(
         "✓ Connection to %s works%s", body["name"], f": {message}" if message else ""
     )
@@ -3444,7 +3515,9 @@ def _create_connector(ctx: click.Context, body: dict[str, Any]) -> None:
             json_body=body,
         )
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Create failed: {exc}") from exc
+        raise click.ClickException(
+            f"Could not create data source '{body.get('name', '?')}': {exc}"
+        ) from exc
     # A cluster that predates S3-compatible storage drops the endpoint and creates an AWS data source.
     if body.get("endpoint") and not (stored or {}).get("endpoint"):
         raise click.ClickException(

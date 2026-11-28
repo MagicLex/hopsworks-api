@@ -29,6 +29,7 @@ Find a skill at `.claude/skills/<name>/` in the repository, else `~/.claude/skil
 
 ## Rules
 
+- **The project is the truth.** Before you resume, run `hops factory system plan <slug>`: a table or job it lists as missing was deleted after the phase that recorded it was `done`, so set that phase back to `pending` and resume from it. A phase is never redone for a table or job that exists and is current.
 - **Change requests.** The Factory and `hops factory run <factory> <slug> --change <id>` record a change to the system as a `changes` entry with `status: pending`, holding its `label`, `answers` and `instructions`. Before anything else, carry out each pending one, oldest first: follow its `instructions` with its `answers`, then set its `status: done` and `finished` (UTC), or `status: failed` with a `reason` you also report, and commit `[<slug>] <label>`. Delete a job or a feature group only with `hops factory system delete-assets <slug> --job <name> --table <name>:<version>`, before removing it from `system.yaml`: it refuses what the system reads, what another system names, and anything neither in this `system.yaml` nor carrying the slug.
 - **A cloned factory's additions.** `system.yaml`'s `factory` block names the factory that created the system. When it has `instructions`, a project factory cloned from a built-in one added them: follow them as well as this command, and treat `requirements.extra` as further requirements the user gave.
 - **system.yaml is the record.** Set `layer.status` to `building` when you start and `built` or `failed` when you end; set each phase's `status`, `started` and `finished` (UTC, from `date -u`) as it runs, and `progress.now` to one line on what you are doing. The Factory reads it every few seconds.
@@ -84,9 +85,9 @@ Fix and rerun until the checks pass; record the counts in `outputs`.
 
 ### schedule
 
-Schedule each job with catch-up (`hops job schedule <slug>-silver-<cadence> "<schedule.cadences.<cadence>.cron>" --start-time <end of the backfill> --catchup --max-catchup-runs <its max_catchup_runs>`), so the windows continue from the backfill and missed ones are replayed.
-With `quality.alert_on_failure`, create a failure alert on each job (`hops alert job create <slug>-silver-<cadence> --receiver <receiver> --status failed --severity critical`; `hops alert receiver list` for the receiver, asking which one when there are several, and recording it).
-Tag every silver and rejects feature group `analytics_table` with `{"layer": "silver", "lifecycle": "<layer.lifecycle>"}` (`hops fg add-tag <name> analytics_table --value '...'`).
+Schedule each job with catch-up (`hops job schedule set <slug>-silver-<cadence> "<schedule.cadences.<cadence>.cron>" --start-time <end of the backfill> --catchup --max-catchup-runs <its max_catchup_runs>`), so the windows continue from the backfill and missed ones are replayed.
+With `quality.alert_on_failure`, create a failure alert on each job (`hops job alert create <slug>-silver-<cadence> --receiver <receiver> --status failed --severity critical`; `hops alert receiver list` for the receiver, asking which one when there are several, and recording it).
+Tag every silver and rejects feature group `analytics_table` with `{"layer": "silver", "lifecycle": "<layer.lifecycle>"}` (`hops fg tag add <name> analytics_table --value '...'`).
 
 ### verify
 
