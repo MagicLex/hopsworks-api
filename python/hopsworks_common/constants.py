@@ -50,7 +50,16 @@ class JOBS:
         "FRAMEWORK_FAILURE",
         "APP_MASTER_START_FAILED",
         "INITIALIZATION_FAILED",
+        "QUEUE_TIMEOUT",
+        "SUBMISSION_FAILED",
     ]
+    # Failure states Hopsworks sets with no final status, which stays UNDEFINED (YarnJob).
+    FAILED_WITHOUT_FINAL_STATUS = ["INITIALIZATION_FAILED", "APP_MASTER_START_FAILED"]
+    # Job types whose logs are written before the execution's final state (KubeJobsMonitor).
+    # Known gaps: a container-waiting timeout writes its stderr line just after the state, and a
+    # user stop sets KILLED before the pod drains its logs. Spark and Ray set the final status
+    # before they aggregate, and multi-table ingestion merges its logs after the final state.
+    LOGS_BEFORE_FINAL_STATE = ("PYTHON", "DOCKER")
 
 
 class GIT:
