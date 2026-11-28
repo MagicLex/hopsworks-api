@@ -917,7 +917,7 @@ def _deploy_target(
         if chat:
             raise click.ClickException(
                 f"{_DEPLOY_PACKAGE} names a chat app, and '{name}' is not an agent's chat app. "
-                "Deploy it with --name of the chat app (`agent.chat_app()`), "
+                "Deploy it with `hops app deploy <chat app> <dir>`, the name `agent.chat_app()` returns, "
                 "or create one first with `agent.create_chat_app()`."
             )
         raise click.ClickException(
