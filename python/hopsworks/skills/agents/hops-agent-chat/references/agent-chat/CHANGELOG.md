@@ -16,6 +16,8 @@ A customized chat app runs only the files its deploy wrote.
 - A deployed `server.mjs` that fails to load, or a page that fails to build, ends the process
   non-zero with the error in the log. The default page is no longer served in its place.
 - A chat app uses the image's packages only: the template's docs drop `npm install`.
+- `@hono/node-server` 2.1.11 in `overrides`, past GHSA-qv5m-9pm6-hqp3 and GHSA-jpvv-r467-5p4w
+  (2.0.0 to 2.1.5).
 
 ## 1.2.1
 
