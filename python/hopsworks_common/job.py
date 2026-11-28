@@ -178,7 +178,7 @@ class Job:
     @public
     @usage._method_logger
     @events.tracking(
-        "execution", "create", long=True, key=lambda self, *a, **k: {"name": self.name}
+        "execution", "create", key=lambda self, *a, **k: {"name": self.name}
     )
     def run(
         self,
@@ -315,6 +315,16 @@ class Job:
             logical_date=logical_date,
             env_vars=env_vars,
             resources=resources,
+        )
+        # Started only once Hopsworks took the run: its line names the execution, which the web
+        # follows. A line written before the submission could only guess which run is this one.
+        events.note(execution=execution.id)
+        events.emit(
+            "execution",
+            "create",
+            "started",
+            name=self.name,
+            detail={"execution": execution.id},
         )
         if self._job_type == "PYTHON_APP":
             print("Python App started, waiting for it to become ready...")
