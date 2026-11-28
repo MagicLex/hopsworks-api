@@ -16,6 +16,7 @@
 
 from unittest import mock
 
+import pytest
 from hopsworks_common.execution import Execution
 from hsfs.core import execution
 
@@ -55,7 +56,7 @@ class TestExecution:
             job=mock.Mock(),
         )
 
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
     def test_app_url_when_running_with_prefixed_monitoring_path(self, mocker):
         mock_client = mocker.patch("hopsworks_common.client._get_instance")
@@ -67,7 +68,7 @@ class TestExecution:
             job=mock.Mock(),
         )
 
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
     def test_app_url_none_when_not_running(self, mocker):
         mocker.patch("hopsworks_common.client._get_instance")
@@ -106,7 +107,7 @@ class TestExecution:
             job=mock.Mock(),
         )
 
-        assert ex.app_url == "https://myhost:443/hopsworks-api/pythonapp/proj/my_app/"
+        assert ex.app_url == "https://myhost/hopsworks-api/pythonapp/proj/my_app/"
 
 
 class TestExecutionPerTable:
@@ -220,3 +221,16 @@ class TestExecutionPerTable:
         )
 
         assert ex.files_progress is None
+
+
+def test_success_of_an_execution_whose_job_has_no_type():
+    job = mock.Mock(job_type=None)
+    assert Execution(state="FAILED", final_status="FAILED", job=job).success is False
+    assert Execution(state="RUNNING", final_status="UNDEFINED", job=job).success is None
+
+
+@pytest.mark.parametrize("job_type", ["SPARK", "PYSPARK", "PYTHON"])
+@pytest.mark.parametrize("state", ["INITIALIZATION_FAILED", "APP_MASTER_START_FAILED"])
+def test_a_start_failure_without_a_final_status_is_a_failure(job_type, state):
+    job = mock.Mock(job_type=job_type)
+    assert Execution(state=state, final_status="UNDEFINED", job=job).success is False

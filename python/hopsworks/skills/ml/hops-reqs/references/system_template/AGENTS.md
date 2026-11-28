@@ -16,7 +16,7 @@ A change made outside the build, such as a fix you were asked for in a session o
 
 Never write a log file or a directory of logs into this directory or any other git work tree: logs are not checked in.
 
-- Jobs and deployments the factory runs log to stdout and stderr, which Hopsworks archives in the project's `Logs` dataset (`/Projects/<project>/Logs`); never redirect them into a file here.
+- Jobs and deployments the factory runs log to stdout and stderr, which Hopsworks archives in the project's `Logs` dataset (`/Projects/<backing name>/Logs`); never redirect them into a file here.
 - Programs you run in the terminal as part of the factory (a local test or benchmark, a `nohup` or `tee` of a long command) write their logs to `${HOPSFS_USER_HOME_DIR:-$HOME}/Logs/factory/<slug>/`; create it with `mkdir -p` first.
 - Read a job's logs with `hops job logs <job> --stdout --tail 200`, which leaves no files, or download them with `--dir ${HOPSFS_USER_HOME_DIR:-$HOME}/Logs/factory/<slug>`, never into the working directory; `hops deployment logs <name> --download` and `hops agent logs <name> --download` take the same `--dir`.
 - `execution.download_logs()` and `deployment.download_logs()` in Python write to the working directory unless given `path=`, so pass that directory or a temporary one.

@@ -14,6 +14,8 @@
 #   limitations under the License.
 #
 
+import pytest
+from hopsworks_common.client.exceptions import FeatureStoreException
 from hsfs import feature, feature_group
 from hsfs.core import feature_group_base_engine
 
@@ -199,3 +201,106 @@ class TestFeatureGroupBaseEngine:
         assert f in result
         assert f1 in result
         assert f2 in result
+
+    def test_verify_schema_compatibility_decimal_without_scale(self):
+        # Spark derives decimal(7,0) for a feature declared decimal(7)
+        fg_base_engine = feature_group_base_engine.FeatureGroupBaseEngine(
+            feature_store_id=99
+        )
+        declared = [
+            feature.Feature(name="d7", type="decimal(7)"),
+            feature.Feature(name="d", type="decimal"),
+            feature.Feature(name="d72", type="decimal(7,2)"),
+        ]
+        derived = [
+            feature.Feature(name="d7", type="decimal(7,0)"),
+            feature.Feature(name="d", type="decimal(10,0)"),
+            feature.Feature(name="d72", type="decimal(7,2)"),
+        ]
+
+        fg_base_engine._verify_schema_compatibility(declared, derived)
+
+    def test_verify_schema_compatibility_decimal_precision_differs(self):
+        fg_base_engine = feature_group_base_engine.FeatureGroupBaseEngine(
+            feature_store_id=99
+        )
+
+        with pytest.raises(FeatureStoreException) as exc:
+            fg_base_engine._verify_schema_compatibility(
+                [feature.Feature(name="d7", type="decimal(7)")],
+                [feature.Feature(name="d7", type="decimal(8,0)")],
+            )
+
+        assert "d7 (expected type: 'decimal(7)'" in str(exc.value)
+
+    def test_verify_schema_compatibility_numbers_widen(self):
+        fg_base_engine = feature_group_base_engine.FeatureGroupBaseEngine(
+            feature_store_id=99
+        )
+        declared = [
+            feature.Feature(name="id", type="bigint"),
+            feature.Feature(name="n", type="int"),
+            feature.Feature(name="b", type="bigint"),
+            feature.Feature(name="x", type="double"),
+        ]
+        derived = [
+            feature.Feature(name="id", type="int"),
+            feature.Feature(name="n", type="smallint"),
+            feature.Feature(name="b", type="tinyint"),
+            feature.Feature(name="x", type="float"),
+        ]
+
+        fg_base_engine._verify_schema_compatibility(
+            declared, derived, numbers_widen=True
+        )
+        # without the flag the types must match as before
+        with pytest.raises(FeatureStoreException) as exc:
+            fg_base_engine._verify_schema_compatibility(declared, derived)
+        assert "id (expected type: 'bigint', derived from input: 'int')" in str(
+            exc.value
+        )
+
+    @pytest.mark.parametrize(
+        "declared_type,df_type",
+        [
+            ("int", "bigint"),
+            ("float", "double"),
+            ("double", "bigint"),
+            ("bigint", "float"),
+        ],
+    )
+    def test_verify_schema_compatibility_numbers_never_narrow(
+        self, declared_type, df_type
+    ):
+        fg_base_engine = feature_group_base_engine.FeatureGroupBaseEngine(
+            feature_store_id=99
+        )
+
+        with pytest.raises(FeatureStoreException) as exc:
+            fg_base_engine._verify_schema_compatibility(
+                [feature.Feature(name="v", type=declared_type)],
+                [feature.Feature(name="v", type=df_type)],
+                numbers_widen=True,
+            )
+
+        assert f"v (expected type: '{declared_type}'" in str(exc.value)
+
+    def test_verify_schema_compatibility_timestamp_ntz(self):
+        # Spark derives timestamp_ntz for a TimestampNTZType column
+        fg_base_engine = feature_group_base_engine.FeatureGroupBaseEngine(
+            feature_store_id=99
+        )
+
+        fg_base_engine._verify_schema_compatibility(
+            [feature.Feature(name="ts", type="timestamp")],
+            [feature.Feature(name="ts", type="timestamp_ntz")],
+            timestamp_ntz_converts=True,
+        )
+        # only the Delta write converts; other formats refuse it as before
+        with pytest.raises(FeatureStoreException) as exc:
+            fg_base_engine._verify_schema_compatibility(
+                [feature.Feature(name="ts", type="timestamp")],
+                [feature.Feature(name="ts", type="timestamp_ntz")],
+            )
+
+        assert "ts (expected type: 'timestamp'" in str(exc.value)

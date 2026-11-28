@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 from hopsworks_apigen import public
-from hopsworks_common import client, decorators, semantic_layer, tag, usage
+from hopsworks_common import client, decorators, events, semantic_layer, tag, usage
 from hopsworks_common.client import auth
 from hopsworks_common.client.exceptions import RestAPIError, SemanticLayerException
 from hopsworks_common.core import job_api
@@ -112,10 +112,15 @@ class SemanticLayerApi:
         if project is not None:
             self._project_id = project.id
             self._project_name = project.name
+            self._project_backing_name = project.backing_name
         else:
             _client = client._get_instance()
             self._project_id = _client._project_id
             self._project_name = _client._project_name
+            # The HopsFS folder and the feature store database carry the backing name, not the display name.
+            self._project_backing_name = (
+                _client._project_backing_name or _client._project_name
+            )
         self._gateway_url: str | None = None
 
     # region Semantic projects
@@ -159,6 +164,9 @@ class SemanticLayerApi:
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "semantic", "create", key=lambda self, name, *a, **k: {"name": name}
+    )
     def create_project(
         self,
         name: str,
@@ -173,7 +181,7 @@ class SemanticLayerApi:
         Parameters:
             name: Name of the semantic project, unique in the Hopsworks project, lowercase letters, digits and underscores starting with a letter.
             root_path:
-                Directory of the definitions, relative to the project root, under `/hopsfs/` in a Hopsworks terminal, or an absolute `/Projects/<project>/...` path.
+                Directory of the definitions, relative to the project root, under `/hopsfs/` in a Hopsworks terminal, or an absolute `/Projects/<backing name>/...` path.
                 For a dbt project it is the directory holding `dbt_project.yml`.
             git_repository_id: Hopsworks git repository holding `root_path`, or `None` to detect it from the path.
             format: `DBT` for dbt project YAML, `NATIVE` for MetricFlow YAML, `MANIFEST_JSON` for a `semantic_manifest.json`, or `AUTO` to detect it from the files.
@@ -209,10 +217,15 @@ class SemanticLayerApi:
             headers={"content-type": _JSON},
             data=json.dumps(body),
         )
-        return semantic_layer.SemanticProject.from_response_json(response, self)
+        created = semantic_layer.SemanticProject.from_response_json(response, self)
+        events.note(id=created.id)
+        return created
 
     @public
     @usage._method_logger
+    @events.tracking(
+        "semantic", "delete", key=lambda self, name, *a, **k: {"name": name}
+    )
     def delete_project(self, name: str) -> None:
         """Delete a semantic project and its builds; the definitions in HopsFS are left in place.
 
@@ -230,6 +243,7 @@ class SemanticLayerApi:
                 error_code="SEMANTIC_LAYER_NOT_FOUND",
             )
         _client = client._get_instance()
+        events.note(id=sp.id)
         _client._send_request("DELETE", self._path(sp.id))
 
     # endregion
@@ -285,7 +299,7 @@ class SemanticLayerApi:
             hopsworks.client.exceptions.RestAPIError: If the backend fails to create or write the feature group, for example when an existing spine has other columns.
         """
         df = _time_spine_frame(start, end, granularity, custom_granularities or {})
-        fs = client._get_connection()._get_feature_store(self._project_name)
+        fs = client._get_connection()._get_feature_store(self._project_backing_name)
         fg = fs.get_or_create_feature_group(
             name=f"time_spine_{granularity}",
             version=1,
@@ -311,7 +325,7 @@ class SemanticLayerApi:
             root_path = root_path[len("/hopsfs/") :]
         if root_path.startswith("/"):
             return root_path
-        return f"/Projects/{self._project_name}/{root_path.strip('/')}"
+        return f"/Projects/{self._project_backing_name}/{root_path.strip('/')}"
 
     def _compile(
         self,
@@ -410,9 +424,13 @@ class SemanticLayerApi:
             data=json.dumps({"email": email}),
         )
 
+    @events.tracking(
+        "semantic", "update", key=lambda self, sp, *a, **k: {"name": sp.name}
+    )
     def _promote(
         self, sp: semantic_layer.SemanticProject, build_id: int
     ) -> dict[str, Any]:
+        events.note(id=sp.id, build=build_id)
         _client = client._get_instance()
         return _client._send_request(
             "POST", self._path(sp.id, "builds", build_id, "promote")
@@ -616,6 +634,9 @@ class SemanticLayerApi:
         headers = {"Accept": accept}
         if body is not None:
             headers["Content-Type"] = _JSON
+        if sp.current_build_id:
+            # The gateway caches a caller's build for up to a minute; naming the current one serves a promotion at once.
+            headers["X-Semantic-Build"] = str(sp.current_build_id)
         data = None if body is None else json.dumps(body)
 
         def send() -> requests.Response:
@@ -990,7 +1011,7 @@ def _write_export(
         raise SemanticLayerException(
             f"Export '{export.name}' has a lookback, which needs the saved query to group by metric_time."
         )
-    fs = client._get_connection()._get_feature_store(api._project_name)
+    fs = client._get_connection()._get_feature_store(api._project_backing_name)
     fg = fs.get_or_create_feature_group(
         name=export.feature_group,
         version=export.version or 1,

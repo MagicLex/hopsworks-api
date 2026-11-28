@@ -20,6 +20,31 @@ class AmbiguousVersionError(click.ClickException):
     """More than one version exists and the command needs `--version`."""
 
 
+# hopsworks-ee RESTCodes.DatasetErrorCode.PATH_NOT_FOUND: a missing HopsFS path is a 400.
+PATH_NOT_FOUND = 110018
+# RESTCodes.DatasetErrorCode.DATASET_NOT_FOUND: also what the dataset API answers for a
+# shared feature store's path, since a store share writes no dataset share.
+DATASET_NOT_FOUND = 110011
+
+
+def error_code(exc: BaseException | None) -> str:
+    """The Hopsworks error code of a REST error, or an empty string."""
+    return str(getattr(exc, "error_code", "") or "")
+
+
+def not_found(exc: BaseException) -> bool:
+    """The thing asked for does not exist.
+
+    A REST 404 or a missing HopsFS path; anything else is a failed read.
+    """
+    from hopsworks_common.client.exceptions import RestAPIError
+
+    if not isinstance(exc, RestAPIError):
+        return False
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 404 or str(getattr(exc, "error_code", "")) == str(PATH_NOT_FOUND)
+
+
 def _latest(items: list[Any] | None, kind: str, name: str, exact: bool) -> Any:
     if not items:
         return None
