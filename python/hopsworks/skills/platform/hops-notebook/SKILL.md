@@ -62,6 +62,8 @@ hops notebook start --shutdown-hours 8  # Hopsworks stops it 8 h after its start
 
 ## Rules
 - Run each cell before writing the next, so a failure is fixed where it happens.
+- A cell's output is what the user reads: fix the code behind a warning (a groupby over `pd.cut`
+  or `pd.qcut` bins takes `observed=True`), never hide it with a filter.
 - Never change a cell you did not write unless the user asks: the user may be editing the notebook
   in JupyterLab, and a save replaces the file.
 - Done when every `hops notebook run` exited 0: each prints `ran as In [n]` or the cell's error.
