@@ -1075,3 +1075,58 @@ def test_deploy_checks_a_route_through_the_proxy(mock_project, tmp_path):
     )
     assert get.call_args.args == (_URL + "api/top",)
     assert get.call_args.kwargs["cookies"] == {"proxy_session": "jwt"}
+
+
+def _check(mock_project, tmp_path, answers, path="api/top"):
+    root = _app_dir(tmp_path)
+    mock_project.get_app_api.return_value.create_app.return_value = _fake_app()
+    proxy_client = mock.MagicMock(_verify=False)
+    proxy_client._send_request.return_value = {"token": "jwt"}
+    with (
+        mock.patch("hopsworks_common.client._get_instance", return_value=proxy_client),
+        mock.patch("requests.get", side_effect=answers) as get,
+        mock.patch("time.sleep"),
+    ):
+        result, _, _ = _deploy(mock_project, root, "--check", path, polls=[_app(1)])
+    return result, get
+
+
+def _answer(status, content_type="application/json", text="{}"):
+    return mock.MagicMock(
+        ok=200 <= status < 300,
+        status_code=status,
+        text=text,
+        headers={"content-type": content_type},
+    )
+
+
+def test_deploy_check_waits_for_a_starting_deployment_behind_the_app(
+    mock_project, tmp_path
+):
+    result, get = _check(
+        mock_project,
+        tmp_path,
+        [_answer(502, "text/plain", "no healthy upstream"), _answer(200)],
+    )
+    assert result.exit_code == 0, result.output
+    assert get.call_count == 2
+
+
+def test_deploy_check_fails_with_the_last_answer_after_the_boot_window(
+    mock_project, tmp_path
+):
+    with mock.patch("hopsworks.cli.commands.app._CHECK_BOOT_SECONDS", 0):
+        result, get = _check(
+            mock_project, tmp_path, [_answer(503, "text/plain", "no healthy upstream")]
+        )
+    assert result.exit_code == 1
+    assert "api/top answered 503: no healthy upstream" in result.output
+    assert get.call_count == 1
+
+
+def test_deploy_check_fails_on_an_html_page_for_an_api_route(mock_project, tmp_path):
+    result, _ = _check(
+        mock_project, tmp_path, [_answer(200, "text/html; charset=utf-8", "<html>")]
+    )
+    assert result.exit_code == 1
+    assert "answered an HTML page" in result.output

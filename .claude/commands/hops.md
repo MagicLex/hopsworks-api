@@ -34,6 +34,18 @@ Already known, no need to look again:
   reading, and the next command never runs. Write long output to a file and read the file.
 - A turn may open with an inventory of the project (`[Hopsable: project ... ]`). Trust it: list
   only what a step needs beyond it, and on an empty project go straight to the first write.
+- A next step that holds cluster resources (a deployment, a schedule, an app) is never marked
+  "(Recommended)" unless the user asked for it, and never after a baseline model: the user picks it.
+- A rule that stops a step stops it. Never get around it with a copy or a rename of the user's
+  asset (a feature group, a feature view, a model) under a new name, and never re-run a sweep or a
+  training the user did not ask for. Say the blocker and the one path the playbook names.
+- A check runs from outside the program that wrote: the online store is
+  `hops fg preview <fg> --online --limit 1`, never an SDK call written into a job. A job whose own
+  check line failed after its rows were written is reported as failed with the real cause ("rows
+  written, check line wrong"), never re-run to hide it.
+- Every failure reaches the final message: a failed job, deployment or exit check is named with
+  its cause from the logs (`hops job history`, `hops deployment logs`, `hops app logs`). A failed
+  or flapping deployment is never presented as served.
 
 ## Dispatch on the first word
 
@@ -72,7 +84,7 @@ is the whole dispatch:
 | features | feature groups with rows, or a data source | feature group `<f>` with rows, job `<f>-features` | `hops fg preview <f> --limit 1` prints a row | **hops-features-builder** |
 | model | feature view `<v>`, or feature groups with rows and the label | model `<m>` registered on `<v>` | `hops model info <m>` shows `Feature view` `<v> v<n>`; a model the user names is made, whatever its view | **hops-model-builder** |
 | inference | model `<m>`, and the feature view the user names or the one its training dataset reads | feature group `<m>_predictions` with rows; job `<m>-score` only on a schedule | `hops fg list` shows a feature group whose name or description names `<m>`, and `hops fg preview <it> --limit 1` prints a row | **hops-infer-builder** |
-| deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, and `hops deployment predict <d>` for a known entity returns a prediction | **hops-deploy-builder** |
+| deployment | model `<m>:<v>` registered with `feature_view=` on `<v>`, with a training dataset version; every feature group `<v>` reads online | deployment `<d>` serving `<m>:<v>` with the default predictor, no script | `hops deployment info <d>` shows `RUNNING` and model version `<v>`, `hops deployment predict <d>` for a known entity returns a prediction, and `hops deployment info <d> --stable 60` passes | **hops-deploy-builder** |
 | dashboard | feature groups with rows | Superset dashboard `<title>` | `hops superset dashboard list` lists `<title>` | **hops-dashboard-builder** (Dashboard below) |
 | app | what it reads: feature groups, or a deployment for predictions (never the model file) | app `<a>` serving | `hops app info <a>` shows `State` `RUNNING` | **hops-app-builder** (App below) |
 | notebook | what it reads: feature groups or a feature view | notebook `<path>.ipynb` with its outputs | `hops notebook info <path>.ipynb` shows a `RUN` number on every code cell, and no cell raised | you, no builder (Notebook below) |
@@ -96,13 +108,15 @@ is the whole dispatch:
    dashboard or an app unless the user asked for one by name.
 6. **Then** offer the next step with `AskUserQuestion`, the one the request points to marked
    "(Recommended)": the next piece, a dashboard or an app over the result, or the whole ML system.
+   A deployment, a schedule or an app the request did not name is offered unmarked.
 
 Ask only what the request leaves open, in one `AskUserQuestion` call. Every prompt ends with
 `where: <Hopsworks terminal | external client>`.
 
 When **hops-deploy-builder** stops on an offline feature group, ask once whether to turn it
-online ("Copies its rows to the online store; the group stays as it is otherwise",
-recommended), run the `hops fg update ... --online` it named, then spawn it again.
+online ("Copies its rows to the online store; the group stays as it is otherwise"), with no
+option marked "(Recommended)": it changes the user's group, so the user picks it. On yes, run the
+`hops fg update ... --online` it named, then spawn it again. On no, stop: no copy of the group.
 
 For a model, read the label from the data rather than asking: the column the request names or
 implies, or the one outcome-like column of the view (`hops fv info`, `hops fg preview`). Say the
