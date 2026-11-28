@@ -281,6 +281,27 @@ def env_libraries(ctx: click.Context, env_name: str, diff: bool) -> None:
     )
 
 
+@env_group.command("info")
+@click.argument("name")
+@click.pass_context
+def env_info(ctx: click.Context, name: str) -> None:
+    """Show a Python environment and the libraries installed in it.
+
+    \f
+    Args:
+        ctx: Click context.
+        name: Environment name.
+    """
+    env = _api(ctx).get_environment(name)
+    if env is None:
+        raise click.ClickException(f"No environment {name!r}: `hops env list` shows them.")
+    libraries = env.library_versions or {}
+    if output.JSON_MODE:
+        output.print_json({**_row(env), "libraries": libraries})
+        return
+    output.print_table(["LIBRARY", "VERSION"], [[k, v or ""] for k, v in sorted(libraries.items())])
+
+
 @env_group.command("clone")
 @click.argument("new_name")
 @click.option(
