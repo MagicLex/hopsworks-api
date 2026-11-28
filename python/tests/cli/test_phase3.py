@@ -607,6 +607,35 @@ def test_files_mkdir_creates_missing_parents_top_down(mock_project):
     ]
 
 
+def test_files_mkdir_of_a_top_level_dataset_exits_0_with_its_path(mock_project):
+    # The backend answers a top-level dataset create with a dataset whose attributes are
+    # empty; DatasetApi.mkdir read attributes.path and raised KeyError after the create.
+    from hopsworks_common.core.dataset_api import DatasetApi
+
+    api = DatasetApi()
+    api.exists = mock.MagicMock(return_value=False)
+    created = []
+    sdk_mkdir = api.mkdir
+    api.mkdir = lambda path: created.append(sdk_mkdir(path))
+    mock_project.get_dataset_api.return_value = api
+    backend = mock.MagicMock(_project_id=119, _project_name="demo")
+    backend._send_request.return_value = {
+        "name": "my_dataset",
+        "datasetType": "DATASET",
+        "attributes": {},
+    }
+    with mock.patch(
+        "hopsworks_common.core.dataset_api.client._get_instance", return_value=backend
+    ):
+        result = CliRunner().invoke(cli, ["files", "mkdir", "my_dataset"])
+    assert result.exit_code == 0, result.output
+    assert "Created my_dataset" in result.output
+    assert created == ["/Projects/demo/my_dataset"]
+    call = backend._send_request.call_args
+    assert call.args[:2] == ("POST", ["project", 119, "dataset", "my_dataset"])
+    assert call.kwargs["query_params"]["action"] == "create"
+
+
 def _rest_api_error():
     response = mock.MagicMock(status_code=400)
     response.json.return_value = {"errorCode": 110047, "usrMsg": "already exists"}
