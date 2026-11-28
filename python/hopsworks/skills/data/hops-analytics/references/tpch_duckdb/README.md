@@ -37,7 +37,7 @@ to the American market.
 ```bash
 python -m pytest tests                    # in the dbt-pipeline environment, about 10 s
 hops files upload tpch_duckdb <system dir>
-P=hdfs:///Projects/<project>/<system dir>/tpch_duckdb
+P=hdfs:///Projects/<backing name>/<system dir>/tpch_duckdb
 hops job deploy <slug>-pipeline $P/tpch_pipeline.py --env dbt-pipeline --args "--system <slug>"
 ```
 

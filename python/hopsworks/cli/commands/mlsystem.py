@@ -36,7 +36,7 @@ def code_location(path: Path, project: str | None = None) -> str:
     """Where a system's code is, as the registry stores it.
 
     A directory under the Hopsworks terminal's HopsFS mount becomes its HopsFS path
-    (``/Projects/<project>/...``); any other directory becomes the URL of its Git
+    (``/Projects/<backing name>/...``); any other directory becomes the URL of its Git
     repository's ``origin``.
 
     Args:
@@ -203,7 +203,7 @@ def system_list(ctx: click.Context, factory: str | None) -> None:
 @click.option(
     "--location",
     help=(
-        "HopsFS folder with a copy of the code (/Projects/<project>/...), for a directory "
+        "HopsFS folder with a copy of the code (/Projects/<backing name>/...), for a directory "
         "outside the HopsFS mount with no Git origin."
     ),
 )

@@ -36,7 +36,7 @@ Estimate tokens as characters / 3, since YAML and CSV full of snake_case identif
 ## Measure
 
 ```bash
-hops semantic info sales      # root path /Projects/<project>/<dir>; a terminal or job mounts it at /hopsfs/<dir>
+hops semantic info sales      # root path /Projects/<backing name>/<dir>; a terminal or job mounts it at /hopsfs/<dir>
 D=/hopsfs/Resources/semantic/sales
 grep -rlE --include='*.yml' --include='*.yaml' '^(semantic_models|metrics|saved_queries):' "$D" \
   | xargs -r cat | wc -c                                             # the semantic YAML

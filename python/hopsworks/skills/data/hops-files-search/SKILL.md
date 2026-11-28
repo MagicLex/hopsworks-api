@@ -17,7 +17,7 @@ The index describes the copies in Hopsworks as of the last run, not the live sou
 
 - The index is version 1 of a feature group, `sharepoint_<dataset>` or `files_<dataset>` unless the sync or job named it.
   `hops datasource sharepoint sync list <data source>` and `hops datasource files-jobs <data source>` show it in the INDEX column; `-` means no index.
-- In a terminal the project's feature store is mounted read-only, and the index is the directory `/hopsfs/featurestore/<project>_featurestore.db/<name>_1` (`/hopsfs/__featurestore__/...` when the project has a dataset named `featurestore`).
+- In a terminal the project's feature store is mounted read-only, and the index is the directory `/hopsfs/featurestore/<store>.db/<name>_1`, `<store>` being the STORE column of `hops fg list` (the backing name plus `_featurestore`) (`/hopsfs/__featurestore__/...` when the project has a dataset named `featurestore`).
   Confirm it with `ls /hopsfs/featurestore/*_featurestore.db/` before querying; never guess the path.
 - Jupyter and job pods do not mount the feature store; there, read the feature group with the Python client instead (**hops-fg**).
 
@@ -60,7 +60,7 @@ A file that failed to copy has no row until a run copies it; the job's audit log
 | `site_id`, `drive_id` | the site and document library |
 | `file_name`, `file_type` | name, and extension in lowercase (`pdf`, `docx`, ...) |
 | `sharepoint_path`, `web_url` | path in the library, and a link to the file in SharePoint |
-| `hopsfs_path` | the copy in Hopsworks, `/Projects/<project>/<dataset>/...`; in a terminal it is `/hopsfs/<dataset>/...` |
+| `hopsfs_path` | the copy in Hopsworks, `/Projects/<backing name>/<dataset>/...`; in a terminal it is `/hopsfs/<dataset>/...` |
 | `mime_type`, `size_bytes` | content type and size |
 | `created_at`, `modified_at`, `created_by`, `modified_by` | SharePoint times (UTC) and display names of the author and last editor |
 | `content_hash` | SharePoint quickXorHash; equal hashes mean equal content |

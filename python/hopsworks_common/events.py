@@ -310,7 +310,7 @@ def _key(key: Callable, args: tuple, kwargs: dict) -> dict[str, Any]:
 
 
 def _relative(path: str | None) -> str | None:
-    """A path as the CLI prints it: relative to the project, without scheme or `/Projects/<project>/`."""
+    """A path as the CLI prints it: relative to the project, without scheme or `/Projects/<backing name>/`."""
     if not path:
         return path
     path = re.sub(r"/{2,}", "/", re.sub(r"^hopsfs://[^/]*", "", str(path)))

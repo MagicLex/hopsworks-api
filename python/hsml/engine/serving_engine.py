@@ -720,7 +720,7 @@ class ServingEngine:
         _, items = self._dataset_api._list_dataset_path(
             archives_path, inode.Inode, sort_by="NAME:desc"
         )
-        # Inode paths are absolute (/Projects/<project>/...), and download() interpolates the path
+        # Inode paths are absolute (/Projects/<backing name>/...), and download() interpolates the path
         # straight into the request, so passing them through yields a //Projects/... segment. The
         # archives are flat files directly under archives_path, so rebuilding project-relative paths
         # from the basename avoids having to strip a project prefix.
