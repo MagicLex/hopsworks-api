@@ -112,10 +112,15 @@ class SemanticLayerApi:
         if project is not None:
             self._project_id = project.id
             self._project_name = project.name
+            self._project_backing_name = project.backing_name
         else:
             _client = client._get_instance()
             self._project_id = _client._project_id
             self._project_name = _client._project_name
+            # The HopsFS folder and the feature store database carry the backing name, not the display name.
+            self._project_backing_name = (
+                _client._project_backing_name or _client._project_name
+            )
         self._gateway_url: str | None = None
 
     # region Semantic projects
@@ -285,7 +290,7 @@ class SemanticLayerApi:
             hopsworks.client.exceptions.RestAPIError: If the backend fails to create or write the feature group, for example when an existing spine has other columns.
         """
         df = _time_spine_frame(start, end, granularity, custom_granularities or {})
-        fs = client._get_connection()._get_feature_store(self._project_name)
+        fs = client._get_connection()._get_feature_store(self._project_backing_name)
         fg = fs.get_or_create_feature_group(
             name=f"time_spine_{granularity}",
             version=1,
@@ -311,7 +316,7 @@ class SemanticLayerApi:
             root_path = root_path[len("/hopsfs/") :]
         if root_path.startswith("/"):
             return root_path
-        return f"/Projects/{self._project_name}/{root_path.strip('/')}"
+        return f"/Projects/{self._project_backing_name}/{root_path.strip('/')}"
 
     def _compile(
         self,
@@ -990,7 +995,7 @@ def _write_export(
         raise SemanticLayerException(
             f"Export '{export.name}' has a lookback, which needs the saved query to group by metric_time."
         )
-    fs = client._get_connection()._get_feature_store(api._project_name)
+    fs = client._get_connection()._get_feature_store(api._project_backing_name)
     fg = fs.get_or_create_feature_group(
         name=export.feature_group,
         version=export.version or 1,

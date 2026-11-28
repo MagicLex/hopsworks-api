@@ -127,7 +127,7 @@ def test_a_path_is_written_relative_to_the_project(tmp_path, monkeypatch, mocker
     monkeypatch.setenv(events.ENV_VAR, str(target))
     mocker.patch(
         "hopsworks_common.client._get_instance"
-    ).return_value._project_name = "blah"
+    ).return_value._project_backing_name = "blah"
 
     events.emit("file", "create", "done", path="/Projects/blah/Users/u/x.ipynb")
     events.emit(

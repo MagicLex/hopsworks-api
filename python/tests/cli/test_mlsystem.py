@@ -674,6 +674,7 @@ def test_only_a_data_owner_may_delete_a_systems_assets(monkeypatch, role, allowe
     )
     project = mock.Mock(id=5)
     project.name = "churndemo"
+    project.backing_name = "churndemo"
     if allowed:
         teardown.require_data_owner(project)
     else:
@@ -764,6 +765,7 @@ def test_register_takes_a_hopsfs_copy_for_code_outside_the_mount_and_git(
     (tmp_path / "system.yaml").write_text("system: {slug: churn}\n")
     project = mock.Mock()
     project.name = "churndemo"
+    project.backing_name = "churndemo"
     monkeypatch.setattr(session, "get_project", lambda ctx: project)
     sent = mock.Mock(return_value={})
     monkeypatch.setattr(ml_system_api, "_register", sent)

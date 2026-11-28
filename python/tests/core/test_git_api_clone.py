@@ -29,6 +29,7 @@ def api(mocker):
     instance = MagicMock()
     instance._project_id = 119
     instance._project_name = "demo"
+    instance._project_backing_name = "demo"
     mocker.patch("hopsworks_common.client._get_instance", return_value=instance)
     mocker.patch(
         "hopsworks_common.core.git_api.util._get_hostname_replaced_url",

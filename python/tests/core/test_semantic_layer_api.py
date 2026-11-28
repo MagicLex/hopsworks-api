@@ -90,6 +90,7 @@ def http(mocker):
     instance = MagicMock()
     instance._project_id = 119
     instance._project_name = "demo"
+    instance._project_backing_name = "demo"
     instance._base_url = "https://hopsworks.example.com:443"
     instance._auth = auth.ApiKeyAuth("key.secret")
     instance._verify = "/tmp/ca_chain.pem"
@@ -311,6 +312,28 @@ class TestControlPlane:
         assert body["rootPath"] == "/Projects/demo/Jupyter/repo/dbt"
         assert body["gitRepositoryId"] == 3
         assert body["deploymentMode"] == "PINNED"
+
+    @pytest.mark.parametrize(
+        "root_path", ["/hopsfs/Jupyter/repo/dbt", "Jupyter/repo/dbt"]
+    )
+    def test_a_relative_root_path_is_under_the_backing_name(self, http, root_path):
+        http._project_backing_name = "k3x9backing"
+        http._send_request.return_value = SP_JSON
+
+        SemanticLayerApi().create_project("sales", root_path)
+
+        body = json.loads(http._send_request.call_args.kwargs["data"])
+        assert body["rootPath"] == "/Projects/k3x9backing/Jupyter/repo/dbt"
+
+    def test_a_project_handle_gives_its_backing_name(self, http):
+        http._send_request.return_value = SP_JSON
+        handle = SimpleNamespace(id=7, name="Demo shop", backing_name="k3x9backing")
+
+        SemanticLayerApi(handle).create_project("sales", "Jupyter/repo/dbt")
+
+        body = json.loads(http._send_request.call_args.kwargs["data"])
+        assert body["rootPath"] == "/Projects/k3x9backing/Jupyter/repo/dbt"
+        assert http._send_request.call_args.args[1][:2] == ["project", 7]
 
     def test_delete_resolves_the_name_to_the_id(self, http):
         SemanticLayerApi().delete_project("sales")
@@ -1432,6 +1455,15 @@ class TestTimeSpine:
             + [datetime.date(2026, 2, 1)] * 2,
             "fiscal_year": ["FY2026", "FY2026", "FY2027", "FY2027"],
         }
+
+    def test_the_spine_goes_to_the_feature_store_of_the_backing_name(
+        self, http, connection
+    ):
+        http._project_backing_name = "k3x9backing"
+
+        SemanticLayerApi().create_time_spine("2026-01-30", "2026-02-02")
+
+        connection._get_feature_store.assert_called_once_with("k3x9backing")
 
     def test_the_feature_group_and_its_key_are_named_after_the_grain(self, fs):
         SemanticLayerApi().create_time_spine(
